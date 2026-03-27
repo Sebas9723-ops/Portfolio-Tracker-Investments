@@ -8,7 +8,7 @@ from utils import get_prices, get_historical_data
 st.title("Portfolio Dashboard")
 
 # =========================
-# PRIVATE LOAD
+# PRIVATE
 # =========================
 private_available = False
 real_portfolio = {}
@@ -52,23 +52,24 @@ if mode == "Private":
 # =========================
 if mode == "Private" and authenticated:
     portfolio_data = real_portfolio
+    st.info("Private portfolio loaded")
 else:
     portfolio_data = public_portfolio
+    st.info("Public portfolio view")
 
 # =========================
-# 🔥 RESET TOTAL POR MODO
+# RESET STATE POR MODO
 # =========================
 if "mode_memory" not in st.session_state:
     st.session_state.mode_memory = mode
 
 if st.session_state.mode_memory != mode:
-    # reset completo
     st.session_state.clear()
     st.session_state.mode_memory = mode
     st.rerun()
 
 # =========================
-# 🔥 INIT STATE CORRECTO
+# INIT SHARES (SOLO DESDE PORTFOLIO)
 # =========================
 if "shares" not in st.session_state:
     st.session_state.shares = {
@@ -76,23 +77,29 @@ if "shares" not in st.session_state:
     }
 
 # =========================
-# INPUTS (SIN BUGS)
+# INPUTS
 # =========================
 st.sidebar.header("Portfolio Inputs")
 
+updated_shares = {}
+
 for ticker in portfolio_data:
-    st.session_state.shares[ticker] = st.sidebar.number_input(
+    val = st.sidebar.number_input(
         f"{ticker} shares",
         min_value=0.0,
         step=0.1,
-        value=float(st.session_state.shares.get(ticker, portfolio_data[ticker]["shares"])),
+        value=float(st.session_state.shares[ticker]),
         key=f"{mode}_{ticker}"
     )
+    updated_shares[ticker] = float(val)
+
+# 🔥 actualizar estado SOLO con tickers válidos
+st.session_state.shares = updated_shares
 
 # =========================
 # DATA
 # =========================
-tickers = list(st.session_state.shares.keys())
+tickers = list(portfolio_data.keys())
 
 prices = get_prices(tickers)
 historical = get_historical_data(tickers)
@@ -103,7 +110,7 @@ data = []
 total_value = 0
 
 for t in tickers:
-    shares = float(st.session_state.shares[t])
+    shares = st.session_state.shares[t]
 
     price = prices.get(t)
 
