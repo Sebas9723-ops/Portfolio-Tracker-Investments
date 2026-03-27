@@ -31,13 +31,18 @@ def info_html(text: str, help_text: str, size: str = "1rem", weight: str = "600"
 
 
 def info_section(title: str, help_text: str):
-    st.markdown(info_html(title, help_text, size="1.15rem", weight="700"), unsafe_allow_html=True)
+    st.markdown(
+        info_html(title, help_text, size="1.15rem", weight="700"),
+        unsafe_allow_html=True,
+    )
 
 
 def info_metric(container, label: str, value: str, help_text: str):
-    with container:
-        st.markdown(info_html(label, help_text, size="0.95rem", weight="600"), unsafe_allow_html=True)
-        st.metric(" ", value)
+    container.markdown(
+        info_html(label, help_text, size="0.95rem", weight="600"),
+        unsafe_allow_html=True,
+    )
+    container.metric(" ", value)
 
 
 # =========================
