@@ -19,16 +19,16 @@ try:
     p = st.secrets["private_portfolio"]
 
     real_portfolio = {
-        "SCHD": {"name": "Dividend ETF", "shares": p["SCHD"]},
-        "VOO": {"name": "S&P 500", "shares": p["VOO"]},
-        "VWCE.DE": {"name": "All World", "shares": p["VWCE_DE"]},
-        "IGLN.L": {"name": "Gold", "shares": p["IGLN_L"]},
-        "BND": {"name": "Bonds", "shares": p["BND"]},
+        "SCHD": {"name": "Dividend ETF", "shares": float(p["SCHD"])},
+        "VOO": {"name": "S&P 500", "shares": float(p["VOO"])},
+        "VWCE.DE": {"name": "All World", "shares": float(p["VWCE_DE"])},
+        "IGLN.L": {"name": "Gold", "shares": float(p["IGLN_L"])},
+        "BND": {"name": "Bonds", "shares": float(p["BND"])},
     }
 
     private_available = True
 
-except:
+except Exception as e:
     private_available = False
 
 # =========================
@@ -37,13 +37,13 @@ except:
 mode = st.sidebar.selectbox("View Mode", ["Public", "Private"])
 
 # =========================
-# PASSWORD CONTROL
+# PASSWORD
 # =========================
 authenticated = False
 
 if mode == "Private":
     if not private_available:
-        st.error("Private portfolio not available")
+        st.error("Private portfolio not available. Configure secrets.")
     else:
         password = st.sidebar.text_input("Password", type="password")
 
@@ -65,14 +65,13 @@ else:
     st.info("Public portfolio view")
 
 # =========================
-# SESSION STATE (FIXED)
+# SESSION STATE
 # =========================
 if "portfolio_state" not in st.session_state:
     st.session_state.portfolio_state = {
         t: portfolio_data[t]["shares"] for t in portfolio_data
     }
 
-# Reset if switching mode
 if "mode_state" not in st.session_state:
     st.session_state.mode_state = mode
 
@@ -83,7 +82,7 @@ if st.session_state.mode_state != mode:
     st.session_state.mode_state = mode
 
 # =========================
-# RESET BUTTON
+# RESET
 # =========================
 if st.sidebar.button("Reset Portfolio"):
     st.session_state.portfolio_state = {
@@ -127,10 +126,9 @@ if historical is None or historical.empty:
     st.stop()
 
 historical = historical.ffill().dropna()
-returns = historical.pct_change().dropna()
 
 # =========================
-# BUILD DF
+# BUILD DATAFRAME
 # =========================
 data = []
 total_value = 0
@@ -139,7 +137,14 @@ for t in updated:
     shares = updated[t]["shares"]
     price = prices.get(t)
 
-    value = shares * price if price else 0
+    # 🔥 FIX PRECIOS EN 0
+    if price is None or price == 0:
+        try:
+            price = historical[t].dropna().iloc[-1]
+        except:
+            price = 0
+
+    value = shares * price
     total_value += value
 
     data.append({
@@ -168,7 +173,7 @@ df["Deviation %"] = (df["Weight"] - df["Ticker"].map(target)) * 100
 st.subheader("Portfolio")
 st.dataframe(df)
 
-# 🔥 FIX: siempre mostrar valor
+# 🔥 SIEMPRE MOSTRAR
 st.metric("Total Value", f"${total_value:,.2f}")
 
 # =========================
