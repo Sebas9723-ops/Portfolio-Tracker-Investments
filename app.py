@@ -28,12 +28,22 @@ else:
     st.info("Public portfolio view.")
 
 # =========================
-# SESSION STATE INIT
+# SESSION STATE FIX
 # =========================
+if "current_mode" not in st.session_state:
+    st.session_state.current_mode = mode
+
 if "portfolio_state" not in st.session_state:
     st.session_state.portfolio_state = {
         ticker: portfolio_data[ticker]["shares"] for ticker in portfolio_data
     }
+
+# If mode changes → reload correct portfolio
+if st.session_state.current_mode != mode:
+    st.session_state.portfolio_state = {
+        ticker: portfolio_data[ticker]["shares"] for ticker in portfolio_data
+    }
+    st.session_state.current_mode = mode
 
 # =========================
 # RESET BUTTON
@@ -68,7 +78,7 @@ for ticker in portfolio_data:
     }
 
 # =========================
-# IMPORT DATA
+# DATA
 # =========================
 from utils import get_prices, get_historical_data
 
