@@ -4,19 +4,35 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
-from portfolio import portfolio
-from utils import get_prices, get_historical_data
+from portfolio import public_portfolio
+
+# Try to load private portfolio (only local)
+try:
+    from private_portfolio import real_portfolio
+    private_available = True
+except:
+    private_available = False
 
 st.title("Portfolio Dashboard")
 
-st.info("This dashboard allows dynamic portfolio simulation. Changes are not saved.")
+# =========================
+# MODE SELECTOR
+# =========================
+mode = st.sidebar.selectbox("View Mode", ["Public", "Private"])
+
+if mode == "Private" and private_available:
+    portfolio_data = real_portfolio
+    st.info("Private portfolio loaded.")
+else:
+    portfolio_data = public_portfolio
+    st.info("Public portfolio view.")
 
 # =========================
 # SESSION STATE INIT
 # =========================
 if "portfolio_state" not in st.session_state:
     st.session_state.portfolio_state = {
-        ticker: portfolio[ticker]["shares"] for ticker in portfolio
+        ticker: portfolio_data[ticker]["shares"] for ticker in portfolio_data
     }
 
 # =========================
@@ -24,7 +40,7 @@ if "portfolio_state" not in st.session_state:
 # =========================
 if st.sidebar.button("Reset to Original Portfolio"):
     st.session_state.portfolio_state = {
-        ticker: portfolio[ticker]["shares"] for ticker in portfolio
+        ticker: portfolio_data[ticker]["shares"] for ticker in portfolio_data
     }
     st.rerun()
 
@@ -35,11 +51,11 @@ st.sidebar.header("Portfolio Inputs")
 
 updated_portfolio = {}
 
-for ticker in portfolio:
+for ticker in portfolio_data:
     shares = st.sidebar.number_input(
         f"{ticker} shares",
         min_value=0.0,
-        step=1.0,
+        step=0.1,
         key=ticker,
         value=float(st.session_state.portfolio_state[ticker])
     )
@@ -47,13 +63,15 @@ for ticker in portfolio:
     st.session_state.portfolio_state[ticker] = shares
 
     updated_portfolio[ticker] = {
-        "name": portfolio[ticker]["name"],
+        "name": portfolio_data[ticker]["name"],
         "shares": shares
     }
 
 # =========================
-# DATA
+# IMPORT DATA
 # =========================
+from utils import get_prices, get_historical_data
+
 tickers = list(updated_portfolio.keys())
 
 prices = get_prices(tickers)
@@ -181,58 +199,50 @@ else:
     beta = alpha = tracking_error = information_ratio = 0
 
 # =========================
-# DISPLAY
+# DISPLAY TABLE
 # =========================
 st.subheader("Portfolio")
-st.dataframe(df[[
-    "Ticker", "Name", "Shares", "Value",
-    "Weight %", "Target %", "Deviation %"
-]])
 
-st.metric("Total Value", f"${total_value:,.2f}")
+if mode == "Public":
+    st.dataframe(df[[
+        "Ticker", "Name", "Weight %", "Target %", "Deviation %"
+    ]])
+else:
+    st.dataframe(df)
+
+st.metric("Total Value", f"${total_value:,.2f}" if mode == "Private" else "Hidden")
 
 # =========================
 # CHARTS
 # =========================
 st.subheader("Portfolio Allocation")
-st.plotly_chart(px.pie(df, names="Name", values="Value", hole=0.4))
+
+values = df["Value"] if mode == "Private" else df["Weight"]
+
+st.plotly_chart(px.pie(df, names="Name", values=values, hole=0.4))
 
 st.subheader("Target vs Actual Allocation")
 
 fig_target = go.Figure()
 
-fig_target.add_trace(go.Bar(
-    x=df["Ticker"],
-    y=df["Weight"],
-    name="Actual"
-))
-
-fig_target.add_trace(go.Bar(
-    x=df["Ticker"],
-    y=df["Target Weight"],
-    name="Target"
-))
+fig_target.add_trace(go.Bar(x=df["Ticker"], y=df["Weight"], name="Actual"))
+fig_target.add_trace(go.Bar(x=df["Ticker"], y=df["Target Weight"], name="Target"))
 
 fig_target.update_layout(barmode="group")
 
 st.plotly_chart(fig_target)
 
+# =========================
+# PERFORMANCE
+# =========================
 st.subheader("Performance vs Benchmark")
 
 fig = go.Figure()
 
-fig.add_trace(go.Scatter(
-    x=portfolio_cum.index,
-    y=portfolio_cum,
-    name="Portfolio"
-))
+fig.add_trace(go.Scatter(x=portfolio_cum.index, y=portfolio_cum, name="Portfolio"))
 
 if not sp500_cum.empty:
-    fig.add_trace(go.Scatter(
-        x=sp500_cum.index,
-        y=sp500_cum,
-        name="S&P 500"
-    ))
+    fig.add_trace(go.Scatter(x=sp500_cum.index, y=sp500_cum, name="S&P 500"))
 
 st.plotly_chart(fig)
 
