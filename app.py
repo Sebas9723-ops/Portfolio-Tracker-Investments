@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 from portfolio import portfolio
 from utils import get_prices, get_historical_data
 
-st.title("Portfolio Dashboard")
+st.title("Sebastian's Portfolio Dashboard")
 
 st.info("This dashboard allows dynamic portfolio simulation. Changes are not saved.")
 
