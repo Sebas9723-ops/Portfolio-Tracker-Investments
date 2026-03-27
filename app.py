@@ -352,11 +352,7 @@ except Exception:
 # =========================
 # MODE / AUTH
 # =========================
-mode = st.sidebar.selectbox(
-    "View Mode",
-    ["Public", "Private"],
-    help="Public loads the demo portfolio. Private loads your real portfolio from Streamlit secrets.",
-)
+mode = st.sidebar.selectbox("View Mode", ["Public", "Private"])
 authenticated = False
 
 if mode == "Private":
@@ -364,14 +360,9 @@ if mode == "Private":
         st.error("Private portfolio not available. Check Streamlit secrets.")
         st.stop()
 
-    password = st.sidebar.text_input(
-        "Password",
-        type="password",
-        help="Enter the password stored in Streamlit secrets to unlock the private portfolio.",
-    )
+    password = st.sidebar.text_input("Password", type="password")
 
     if not password:
-        st.info("Enter your password to access the private portfolio.")
         st.stop()
 
     if password != st.secrets["auth"]["password"]:
@@ -379,10 +370,6 @@ if mode == "Private":
         st.stop()
 
     authenticated = True
-    st.success("Access granted")
-    st.info("Private portfolio loaded")
-else:
-    st.info("Public portfolio view")
 
 
 # =========================
@@ -824,8 +811,9 @@ else:
         "Sharpe ratio of the minimum-volatility feasible portfolio.",
     )
 
-    action_col, _ = st.columns([1, 3])
-    with action_col:
+    action_col1, action_col2, _ = st.columns([1, 1, 2])
+
+    with action_col1:
         if st.button(
             "Estimate Max Sharpe Shares",
             help=(
@@ -835,13 +823,31 @@ else:
         ):
             st.session_state[f"show_max_sharpe_targets_{prefix}"] = True
 
+    with action_col2:
+        if st.button(
+            "Estimate Min Vol Shares",
+            help=(
+                "Estimate how many shares each ETF should have to match the minimum-volatility portfolio, "
+                "without modifying your current holdings."
+            ),
+        ):
+            st.session_state[f"show_min_vol_targets_{prefix}"] = True
+
     if st.session_state.get(f"show_max_sharpe_targets_{prefix}", False):
         info_section(
             "Recommended Shares for Max Sharpe",
             "Estimated share quantities required to reach the maximum-Sharpe allocation, based on current total portfolio value and current prices.",
         )
-        rec_df = build_recommended_shares_table(max_sharpe_row["Weights"], usable, df)
-        st.dataframe(rec_df, use_container_width=True)
+        rec_df_max = build_recommended_shares_table(max_sharpe_row["Weights"], usable, df)
+        st.dataframe(rec_df_max, use_container_width=True)
+
+    if st.session_state.get(f"show_min_vol_targets_{prefix}", False):
+        info_section(
+            "Recommended Shares for Minimum Volatility",
+            "Estimated share quantities required to reach the minimum-volatility allocation, based on current total portfolio value and current prices.",
+        )
+        rec_df_min = build_recommended_shares_table(min_vol_row["Weights"], usable, df)
+        st.dataframe(rec_df_min, use_container_width=True)
 
     info_section(
         "Optimization Weights",
