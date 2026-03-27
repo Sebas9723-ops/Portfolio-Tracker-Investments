@@ -1,27 +1,78 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
 from portfolio import portfolio
 from utils import get_prices, get_historical_data
 
-st.title("Sebastian's Portfolio Dashboard")
+st.title("Sebastian'sPortfolio Dashboard")
+
+st.info("This dashboard allows dynamic portfolio simulation. Changes are not saved.")
 
 # =========================
-# CURRENT PRICES
+# SESSION STATE INIT
 # =========================
-tickers = list(portfolio.keys())
+if "portfolio_state" not in st.session_state:
+    st.session_state.portfolio_state = {
+        ticker: portfolio[ticker]["shares"] for ticker in portfolio
+    }
+
+# =========================
+# RESET BUTTON
+# =========================
+if st.sidebar.button("Reset to Original Portfolio"):
+    st.session_state.portfolio_state = {
+        ticker: portfolio[ticker]["shares"] for ticker in portfolio
+    }
+
+# =========================
+# SIDEBAR INPUTS
+# =========================
+st.sidebar.header("Portfolio Inputs")
+
+updated_portfolio = {}
+
+for ticker in portfolio:
+    shares = st.sidebar.number_input(
+        f"{ticker} shares",
+        min_value=0.0,
+        value=float(st.session_state.portfolio_state[ticker]),
+        step=1.0,
+        key=f"{ticker}_input"
+    )
+
+    st.session_state.portfolio_state[ticker] = shares
+
+    updated_portfolio[ticker] = {
+        "name": portfolio[ticker]["name"],
+        "shares": shares
+    }
+
+# =========================
+# DATA
+# =========================
+tickers = list(updated_portfolio.keys())
+
 prices = get_prices(tickers)
+historical = get_historical_data(tickers)
+
+if historical is None or historical.empty:
+    st.error("Error loading historical data")
+    st.stop()
+
+historical = historical.ffill().dropna()
+returns = historical.pct_change().dropna()
 
 # =========================
-# BUILD PORTFOLIO
+# BUILD DATAFRAME
 # =========================
 data = []
 total_value = 0
 
-for ticker in portfolio:
-    shares = portfolio[ticker]["shares"]
+for ticker in updated_portfolio:
+    shares = updated_portfolio[ticker]["shares"]
     price = prices.get(ticker, None)
 
     if price is not None:
@@ -32,7 +83,7 @@ for ticker in portfolio:
 
     data.append({
         "Ticker": ticker,
-        "Name": portfolio[ticker]["name"],
+        "Name": updated_portfolio[ticker]["name"],
         "Shares": shares,
         "Price": round(price, 2) if price is not None else None,
         "Value": round(value, 2)
@@ -40,40 +91,17 @@ for ticker in portfolio:
 
 df = pd.DataFrame(data)
 
-# =========================
-# WEIGHTS
-# =========================
 if total_value > 0:
     df["Weight"] = df["Value"] / total_value
 else:
     df["Weight"] = 0
 
-# =========================
-# HISTORICAL DATA
-# =========================
-historical = get_historical_data(tickers)
-
-if historical is None or historical.empty:
-    st.error("No historical data available")
-    st.stop()
-
-historical = historical.dropna(axis=1, how="all")
-historical = historical.ffill().dropna()
+df["Weight %"] = (df["Weight"] * 100).round(2)
 
 # =========================
-# RETURNS
+# PORTFOLIO RETURNS
 # =========================
-returns = historical.pct_change().dropna()
-
-# Align tickers
-available_tickers = returns.columns
-df = df[df["Ticker"].isin(available_tickers)]
-
 weights = df["Weight"].values
-
-if len(weights) != len(returns.columns):
-    st.error("Mismatch between weights and returns")
-    st.stop()
 
 portfolio_returns = returns.dot(weights)
 portfolio_cum = (1 + portfolio_returns).cumprod()
@@ -83,162 +111,86 @@ portfolio_cum = (1 + portfolio_returns).cumprod()
 # =========================
 sp500_data = get_historical_data(["VOO"])
 
-if sp500_data is None or sp500_data.empty:
-    st.error("No benchmark data available")
-    st.stop()
-
-sp500 = sp500_data["VOO"].dropna()
-sp500_returns = sp500.pct_change().dropna()
-sp500_cum = (1 + sp500_returns).cumprod()
-
-# =========================
-# ALIGN DATA
-# =========================
-aligned = pd.concat([portfolio_returns, sp500_returns], axis=1).dropna()
-aligned.columns = ["Portfolio", "Market"]
-
-portfolio_returns = aligned["Portfolio"]
-sp500_returns = aligned["Market"]
-
-portfolio_cum = (1 + portfolio_returns).cumprod()
-sp500_cum = (1 + sp500_returns).cumprod()
+if sp500_data is not None and "VOO" in sp500_data:
+    sp500 = sp500_data["VOO"]
+    sp500_returns = sp500.pct_change().dropna()
+    sp500_cum = (1 + sp500_returns).cumprod()
+else:
+    sp500_returns = pd.Series(dtype=float)
+    sp500_cum = pd.Series(dtype=float)
 
 # =========================
 # METRICS
 # =========================
-total_return = portfolio_cum.iloc[-1] - 1
-volatility = portfolio_returns.std() * (252 ** 0.5)
+if not portfolio_returns.empty:
+    mean_return = portfolio_returns.mean() * 252
+    volatility = portfolio_returns.std() * np.sqrt(252)
+    sharpe = mean_return / volatility if volatility != 0 else 0
 
-if portfolio_returns.std() != 0:
-    sharpe_ratio = portfolio_returns.mean() / portfolio_returns.std() * (252 ** 0.5)
+    cumulative = portfolio_cum
+    peak = cumulative.cummax()
+    drawdown = (cumulative - peak) / peak
+    max_dd = drawdown.min()
+
+    var_95 = np.percentile(portfolio_returns, 5)
 else:
-    sharpe_ratio = 0
-
-rolling_max = portfolio_cum.cummax()
-drawdown = portfolio_cum / rolling_max - 1
-max_drawdown = drawdown.min()
-
-var_95 = portfolio_returns.quantile(0.05)
-expected_return = portfolio_returns.mean() * 252
+    mean_return = volatility = sharpe = max_dd = var_95 = 0
 
 # =========================
 # ALPHA & BETA
 # =========================
-cov_matrix = aligned.cov()
-beta = cov_matrix.loc["Portfolio", "Market"] / cov_matrix.loc["Market", "Market"]
+if not sp500_returns.empty:
+    aligned = pd.concat([portfolio_returns, sp500_returns], axis=1).dropna()
+    aligned.columns = ["Portfolio", "Market"]
 
-portfolio_mean = aligned["Portfolio"].mean() * 252
-market_mean = aligned["Market"].mean() * 252
-alpha = portfolio_mean - beta * market_mean
+    cov_matrix = aligned.cov()
+    beta = cov_matrix.loc["Portfolio", "Market"] / cov_matrix.loc["Market", "Market"]
 
-# =========================
-# ROLLING METRICS (NEW)
-# =========================
-rolling_beta = (
-    aligned["Portfolio"].rolling(60).cov(aligned["Market"]) /
-    aligned["Market"].rolling(60).var()
-)
+    portfolio_mean = aligned["Portfolio"].mean() * 252
+    market_mean = aligned["Market"].mean() * 252
 
-rolling_alpha = (
-    aligned["Portfolio"].rolling(60).mean() * 252 -
-    rolling_beta * (aligned["Market"].rolling(60).mean() * 252)
-)
-
-rolling_vol = portfolio_returns.rolling(30).std() * (252 ** 0.5)
+    alpha = portfolio_mean - beta * market_mean
+else:
+    beta = alpha = 0
 
 # =========================
-# CORRELATION
-# =========================
-correlation = aligned["Portfolio"].corr(aligned["Market"])
-
-# =========================
-# UI
+# DISPLAY
 # =========================
 st.subheader("Portfolio")
 st.dataframe(df)
 
 st.metric("Total Value", f"${total_value:,.2f}")
 
-# =========================
-# PERFORMANCE METRICS
-# =========================
-st.subheader("Performance Metrics")
-
-col1, col2, col3, col4 = st.columns(4)
-
-col1.metric("Return", f"{total_return*100:.2f}%")
-col2.metric("Volatility", f"{volatility*100:.2f}%")
-col3.metric("Sharpe Ratio", f"{sharpe_ratio:.2f}")
-col4.metric("Max Drawdown", f"{max_drawdown*100:.2f}%")
-
-col5, col6 = st.columns(2)
-
-col5.metric("VaR (95%)", f"{var_95*100:.2f}%")
-col6.metric("Expected Return", f"{expected_return*100:.2f}%")
-
-col7, col8 = st.columns(2)
-
-col7.metric("Beta", f"{beta:.2f}")
-col8.metric("Alpha", f"{alpha*100:.2f}%")
-
-st.metric("Correlation vs Market", f"{correlation:.2f}")
-
-# =========================
-# CHARTS
-# =========================
+# Charts
 st.subheader("Portfolio Allocation")
-st.plotly_chart(px.pie(df, names="Name", values="Value", hole=0.4))
+fig_pie = px.pie(df, names="Name", values="Value", hole=0.4)
+st.plotly_chart(fig_pie)
 
 st.subheader("Value by Asset")
-st.plotly_chart(px.bar(df, x="Ticker", y="Value", color="Name"))
+fig_bar = px.bar(df, x="Ticker", y="Value", color="Name")
+st.plotly_chart(fig_bar)
 
-# =========================
-# PERFORMANCE
-# =========================
-st.subheader("Performance vs S&P 500")
+# Performance chart
+st.subheader("Performance vs Benchmark")
 
 fig = go.Figure()
 fig.add_trace(go.Scatter(x=portfolio_cum.index, y=portfolio_cum, name="Portfolio"))
-fig.add_trace(go.Scatter(x=sp500_cum.index, y=sp500_cum, name="S&P 500"))
+
+if not sp500_cum.empty:
+    fig.add_trace(go.Scatter(x=sp500_cum.index, y=sp500_cum, name="S&P 500"))
 
 st.plotly_chart(fig)
 
-# =========================
-# DRAWDOWN (NEW)
-# =========================
-st.subheader("Drawdown")
+# Metrics
+st.subheader("Performance Metrics")
 
-fig_dd = go.Figure()
-fig_dd.add_trace(go.Scatter(x=drawdown.index, y=drawdown, name="Drawdown"))
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Return", f"{mean_return:.2%}")
+col2.metric("Volatility", f"{volatility:.2%}")
+col3.metric("Sharpe", f"{sharpe:.2f}")
+col4.metric("Max Drawdown", f"{max_dd:.2%}")
 
-st.plotly_chart(fig_dd)
-
-# =========================
-# ROLLING VOLATILITY
-# =========================
-st.subheader("Rolling Volatility (30D)")
-
-fig_vol = go.Figure()
-fig_vol.add_trace(go.Scatter(x=rolling_vol.index, y=rolling_vol, name="Volatility"))
-
-st.plotly_chart(fig_vol)
-
-# =========================
-# ROLLING BETA (NEW)
-# =========================
-st.subheader("Rolling Beta (60D)")
-
-fig_beta = go.Figure()
-fig_beta.add_trace(go.Scatter(x=rolling_beta.index, y=rolling_beta, name="Beta"))
-
-st.plotly_chart(fig_beta)
-
-# =========================
-# ROLLING ALPHA (NEW)
-# =========================
-st.subheader("Rolling Alpha (60D)")
-
-fig_alpha = go.Figure()
-fig_alpha.add_trace(go.Scatter(x=rolling_alpha.index, y=rolling_alpha, name="Alpha"))
-
-st.plotly_chart(fig_alpha)
+col5, col6, col7 = st.columns(3)
+col5.metric("VaR (95%)", f"{var_95:.2%}")
+col6.metric("Beta", f"{beta:.2f}")
+col7.metric("Alpha", f"{alpha:.2%}")
