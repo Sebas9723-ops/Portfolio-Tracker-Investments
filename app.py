@@ -1,3 +1,4 @@
+import html
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -12,8 +13,36 @@ st.set_page_config(page_title="Portfolio Dashboard", layout="wide")
 st.title("Portfolio Dashboard")
 
 RISK_FREE_RATE = 0.02
+N_SIMULATIONS = 8000
 
 
+# =========================
+# UI HELPERS
+# =========================
+def info_html(text: str, help_text: str, size: str = "1rem", weight: str = "600"):
+    safe_help = html.escape(help_text, quote=True)
+    safe_text = html.escape(text)
+    return (
+        f"<div style='font-size:{size}; font-weight:{weight}; margin-bottom:0.15rem;'>"
+        f"{safe_text} "
+        f"<span title='{safe_help}' style='cursor:help; color:#6b7280;'>ⓘ</span>"
+        f"</div>"
+    )
+
+
+def info_section(title: str, help_text: str):
+    st.markdown(info_html(title, help_text, size="1.15rem", weight="700"), unsafe_allow_html=True)
+
+
+def info_metric(container, label: str, value: str, help_text: str):
+    with container:
+        st.markdown(info_html(label, help_text, size="0.95rem", weight="600"), unsafe_allow_html=True)
+        st.metric(" ", value)
+
+
+# =========================
+# DATA LOADERS
+# =========================
 def load_private_portfolio():
     p = st.secrets["private_portfolio"]
     return {
@@ -49,7 +78,6 @@ def reset_mode_state(portfolio_data: dict, prefix: str):
 
 def build_current_portfolio(portfolio_data: dict, prefix: str, mode: str):
     updated = {}
-
     step_value = 1.0 if mode == "Public" else 0.0001
 
     for ticker, meta in portfolio_data.items():
@@ -62,8 +90,8 @@ def build_current_portfolio(portfolio_data: dict, prefix: str, mode: str):
             format="%.4f",
             key=widget_key,
             help=(
-                "Number of shares held for this asset. "
-                "Use the arrows for quick adjustments or type a value manually."
+                "Number of shares currently held for this asset. "
+                "Public mode changes with step 1. Private mode changes with step 0.0001."
             ),
         )
 
@@ -159,7 +187,6 @@ def build_portfolio_returns(df: pd.DataFrame, historical: pd.DataFrame):
         return pd.Series(dtype=float), returns
 
     weights = weights / weights.sum()
-
     portfolio_returns = returns.mul(weights, axis=1).sum(axis=1)
 
     return portfolio_returns, returns
@@ -173,7 +200,46 @@ def build_benchmark_returns():
     return bench["VOO"].pct_change().dropna()
 
 
-def simulate_efficient_frontier(asset_returns: pd.DataFrame, risk_free_rate: float = 0.02, n_portfolios: int = 5000):
+# =========================
+# OPTIMIZATION HELPERS
+# =========================
+def get_default_constraints(profile: str):
+    if profile == "Aggressive":
+        return {
+            "max_single_asset": 0.70,
+            "min_bonds": 0.00,
+            "min_gold": 0.00,
+        }
+    if profile == "Balanced":
+        return {
+            "max_single_asset": 0.45,
+            "min_bonds": 0.10,
+            "min_gold": 0.05,
+        }
+    return {
+        "max_single_asset": 0.35,
+        "min_bonds": 0.20,
+        "min_gold": 0.10,
+    }
+
+
+def classify_assets(asset_names):
+    bonds = {"BND", "AGG", "IEF", "TLT", "VGIT", "BNDX"}
+    gold = {"IGLN.L", "GLD", "IAU", "SGLN.L"}
+
+    bond_idx = [i for i, t in enumerate(asset_names) if t in bonds]
+    gold_idx = [i for i, t in enumerate(asset_names) if t in gold]
+
+    return bond_idx, gold_idx
+
+
+def simulate_constrained_efficient_frontier(
+    asset_returns: pd.DataFrame,
+    asset_names: list,
+    constraints: dict,
+    risk_free_rate: float = 0.02,
+    n_portfolios: int = 8000,
+):
     if asset_returns.empty or asset_returns.shape[1] < 2:
         return pd.DataFrame()
 
@@ -181,13 +247,40 @@ def simulate_efficient_frontier(asset_returns: pd.DataFrame, risk_free_rate: flo
     cov_matrix = asset_returns.cov() * 252
 
     n_assets = len(mean_returns)
+    max_single_asset = float(constraints["max_single_asset"])
+    min_bonds = float(constraints["min_bonds"])
+    min_gold = float(constraints["min_gold"])
+
+    if min_bonds + min_gold > 1:
+        return pd.DataFrame()
+
+    bond_idx, gold_idx = classify_assets(asset_names)
+
     rng = np.random.default_rng(42)
+    raw = rng.random((n_portfolios * 6, n_assets))
+    weights = raw / raw.sum(axis=1, keepdims=True)
 
-    weights = rng.random((n_portfolios, n_assets))
-    weights = weights / weights.sum(axis=1, keepdims=True)
+    mask = weights.max(axis=1) <= max_single_asset
 
-    port_returns = weights @ mean_returns.values
-    port_vols = np.sqrt(np.einsum("ij,jk,ik->i", weights, cov_matrix.values, weights))
+    if bond_idx:
+        mask &= weights[:, bond_idx].sum(axis=1) >= min_bonds
+    elif min_bonds > 0:
+        mask &= False
+
+    if gold_idx:
+        mask &= weights[:, gold_idx].sum(axis=1) >= min_gold
+    elif min_gold > 0:
+        mask &= False
+
+    feasible = weights[mask]
+
+    if feasible.shape[0] == 0:
+        return pd.DataFrame()
+
+    feasible = feasible[:n_portfolios]
+
+    port_returns = feasible @ mean_returns.values
+    port_vols = np.sqrt(np.einsum("ij,jk,ik->i", feasible, cov_matrix.values, feasible))
     sharpe = np.where(port_vols > 0, (port_returns - risk_free_rate) / port_vols, 0)
 
     frontier = pd.DataFrame({
@@ -195,8 +288,7 @@ def simulate_efficient_frontier(asset_returns: pd.DataFrame, risk_free_rate: flo
         "Volatility": port_vols,
         "Sharpe": sharpe,
     })
-
-    frontier["Weights"] = list(weights)
+    frontier["Weights"] = list(feasible)
 
     return frontier
 
@@ -209,24 +301,45 @@ def weights_table(weight_array, asset_names):
     return out.sort_values("Weight %", ascending=False).reset_index(drop=True)
 
 
-def apply_weights_as_shares(weight_array, asset_names, df_current, prefix):
+def build_recommended_shares_table(weight_array, asset_names, df_current):
     price_map = df_current.set_index("Ticker")["Price"].to_dict()
+    current_shares_map = df_current.set_index("Ticker")["Shares"].to_dict()
+    current_weight_map = df_current.set_index("Ticker")["Weight %"].to_dict()
+    current_value_map = df_current.set_index("Ticker")["Value"].to_dict()
+
     total_value = float(df_current["Value"].sum())
+    rows = []
 
-    if total_value <= 0:
-        return
-
-    for ticker, w in zip(asset_names, weight_array):
+    for ticker, weight in zip(asset_names, weight_array):
         price = float(price_map.get(ticker, 0.0))
-        if price > 0:
-            target_value = total_value * float(w)
-            target_shares = target_value / price
-            st.session_state[f"{prefix}_shares_{ticker}"] = round(target_shares, 4)
+        current_shares = float(current_shares_map.get(ticker, 0.0))
+        current_weight = float(current_weight_map.get(ticker, 0.0))
+        current_value = float(current_value_map.get(ticker, 0.0))
+
+        target_value = total_value * float(weight)
+        target_shares = target_value / price if price > 0 else 0.0
+        delta_shares = target_shares - current_shares
+
+        rows.append({
+            "Ticker": ticker,
+            "Current Shares": round(current_shares, 4),
+            "Recommended Shares": round(target_shares, 4),
+            "Shares Delta": round(delta_shares, 4),
+            "Current Value": round(current_value, 2),
+            "Target Value": round(target_value, 2),
+            "Current Weight %": round(current_weight, 2),
+            "Target Weight %": round(float(weight) * 100, 2),
+        })
+
+    rec = pd.DataFrame(rows)
+    rec["Abs Delta"] = rec["Shares Delta"].abs()
+    rec = rec.sort_values("Abs Delta", ascending=False).drop(columns=["Abs Delta"]).reset_index(drop=True)
+    return rec
 
 
-# -------------------------
-# Private portfolio
-# -------------------------
+# =========================
+# PRIVATE PORTFOLIO
+# =========================
 private_available = True
 private_portfolio = {}
 
@@ -235,16 +348,14 @@ try:
 except Exception:
     private_available = False
 
-# -------------------------
-# Mode / auth
-# -------------------------
+
+# =========================
+# MODE / AUTH
+# =========================
 mode = st.sidebar.selectbox(
     "View Mode",
     ["Public", "Private"],
-    help=(
-        "Public shows the demo portfolio. "
-        "Private loads your personal portfolio from Streamlit secrets."
-    ),
+    help="Public loads the demo portfolio. Private loads your real portfolio from Streamlit secrets.",
 )
 authenticated = False
 
@@ -256,7 +367,7 @@ if mode == "Private":
     password = st.sidebar.text_input(
         "Password",
         type="password",
-        help="Enter the private access password stored in Streamlit secrets.",
+        help="Enter the password stored in Streamlit secrets to unlock the private portfolio.",
     )
 
     if not password:
@@ -273,33 +384,98 @@ if mode == "Private":
 else:
     st.info("Public portfolio view")
 
-# -------------------------
-# Active portfolio
-# -------------------------
+
+# =========================
+# ACTIVE PORTFOLIO
+# =========================
 portfolio_data = get_active_portfolio(mode, authenticated, private_portfolio)
 prefix = get_mode_prefix(mode)
 
-# -------------------------
-# Widget state
-# -------------------------
+
+# =========================
+# WIDGET STATE
+# =========================
 init_mode_state(portfolio_data, prefix)
 
 if st.sidebar.button(
     "Reset Portfolio",
-    help="Restore the original share quantities defined for the current mode.",
+    help="Restore the original share quantities defined for the active mode.",
 ):
     reset_mode_state(portfolio_data, prefix)
     st.rerun()
 
 st.sidebar.header(
     "Portfolio Inputs",
-    help="Edit share quantities for the active portfolio view.",
+    help="Adjust share quantities for the active portfolio.",
 )
 updated_portfolio = build_current_portfolio(portfolio_data, prefix, mode)
 
-# -------------------------
-# Market data
-# -------------------------
+
+# =========================
+# INVESTOR PROFILE / CONSTRAINTS
+# =========================
+st.sidebar.header(
+    "Optimization Settings",
+    help="Controls used for the constrained efficient frontier simulation.",
+)
+
+profile = st.sidebar.selectbox(
+    "Investor Profile",
+    ["Aggressive", "Balanced", "Conservative"],
+    help="Select a default constraint set based on the investor risk profile.",
+)
+
+defaults = get_default_constraints(profile)
+
+with st.sidebar.expander("Custom Constraints", expanded=False):
+    max_single_asset = st.number_input(
+        "Max single-asset weight",
+        min_value=0.05,
+        max_value=1.00,
+        value=float(defaults["max_single_asset"]),
+        step=0.01,
+        format="%.2f",
+        help="Maximum allowed portfolio weight for any single asset.",
+    )
+    min_bonds = st.number_input(
+        "Minimum bonds allocation",
+        min_value=0.00,
+        max_value=1.00,
+        value=float(defaults["min_bonds"]),
+        step=0.01,
+        format="%.2f",
+        help="Minimum required total weight allocated to bond assets.",
+    )
+    min_gold = st.number_input(
+        "Minimum gold allocation",
+        min_value=0.00,
+        max_value=1.00,
+        value=float(defaults["min_gold"]),
+        step=0.01,
+        format="%.2f",
+        help="Minimum required total weight allocated to gold assets.",
+    )
+    custom_rf = st.number_input(
+        "Risk-free rate",
+        min_value=0.00,
+        max_value=0.20,
+        value=float(RISK_FREE_RATE),
+        step=0.005,
+        format="%.3f",
+        help="Annual risk-free rate used in Sharpe ratio and Capital Market Line calculations.",
+    )
+
+constraints = {
+    "max_single_asset": max_single_asset,
+    "min_bonds": min_bonds,
+    "min_gold": min_gold,
+}
+risk_free_rate = custom_rf
+
+
+# =========================
+# MARKET DATA
+# =========================
 tickers = list(updated_portfolio.keys())
 live_prices = get_prices(tickers)
 historical = get_historical_data(tickers, period="2y")
@@ -312,17 +488,15 @@ missing_hist = [ticker for ticker in tickers if ticker not in historical.columns
 if missing_hist:
     st.warning(f"No historical data for: {', '.join(missing_hist)}")
 
-# -------------------------
-# Portfolio table
-# -------------------------
+
+# =========================
+# PORTFOLIO TABLE
+# =========================
 df, total_value = build_portfolio_df(updated_portfolio, live_prices, historical)
 
-st.subheader(
+info_section(
     "Portfolio",
-    help=(
-        "Snapshot of positions, prices, market values, current weights, "
-        "target weights, and deviations."
-    ),
+    "Snapshot of current positions, prices, market values, current weights, target weights, and deviations.",
 )
 display_df = df[[
     "Ticker",
@@ -336,29 +510,29 @@ display_df = df[[
 ]].copy()
 
 st.dataframe(display_df, use_container_width=True)
-st.metric(
+info_metric(
+    st,
     "Total Value",
     f"${total_value:,.2f}",
-    help="Current market value of the portfolio based on the latest available prices.",
+    "Current market value of the portfolio using the latest available prices.",
 )
 
-# -------------------------
-# Allocation charts
-# -------------------------
-st.subheader(
+
+# =========================
+# ALLOCATION CHARTS
+# =========================
+info_section(
     "Portfolio Allocation",
-    help="Portfolio composition by market value.",
+    "Portfolio composition by market value. In practice this is the current capital allocation across assets.",
 )
 
 pie_values = df["Value"] if total_value > 0 else df["Weight"]
 fig_pie = px.pie(df, names="Name", values=pie_values, hole=0.4)
 st.plotly_chart(fig_pie, use_container_width=True)
 
-st.subheader(
+info_section(
     "Target vs Actual Allocation",
-    help=(
-        "Compares current portfolio weights with the original base weights for the active mode."
-    ),
+    "Compares current weights with the original base weights for the active mode.",
 )
 
 fig_bar = go.Figure()
@@ -367,9 +541,10 @@ fig_bar.add_bar(x=df["Ticker"], y=df["Target %"], name="Target %")
 fig_bar.update_layout(barmode="group")
 st.plotly_chart(fig_bar, use_container_width=True)
 
-# -------------------------
-# Performance metrics
-# -------------------------
+
+# =========================
+# PERFORMANCE
+# =========================
 portfolio_returns, asset_returns = build_portfolio_returns(df, historical)
 benchmark_returns = build_benchmark_returns()
 
@@ -391,7 +566,7 @@ if not portfolio_returns.empty:
     volatility = float(portfolio_returns.std() * np.sqrt(252))
 
     if volatility > 0:
-        sharpe = float((portfolio_returns.mean() * 252) / volatility)
+        sharpe = float((portfolio_returns.mean() * 252 - risk_free_rate) / volatility)
 
     rolling_max = portfolio_cum.cummax()
     drawdown = portfolio_cum / rolling_max - 1
@@ -420,59 +595,27 @@ if not portfolio_returns.empty and not benchmark_returns.empty:
         if tracking_error > 0:
             information_ratio = float((excess.mean() * 252) / tracking_error)
 
-st.subheader(
+info_section(
     "Performance Metrics",
-    help="Return and risk indicators derived from historical daily returns.",
+    "Return and risk indicators derived from historical daily returns.",
 )
 
 c1, c2, c3, c4 = st.columns(4)
-c1.metric(
-    "Return",
-    f"{total_return:.2%}",
-    help="Cumulative return of the portfolio over the available historical window.",
-)
-c2.metric(
-    "Volatility",
-    f"{volatility:.2%}",
-    help="Annualized standard deviation of portfolio returns.",
-)
-c3.metric(
-    "Sharpe Ratio",
-    f"{sharpe:.2f}",
-    help="Risk-adjusted return: excess return per unit of volatility.",
-)
-c4.metric(
-    "Max Drawdown",
-    f"{max_drawdown:.2%}",
-    help="Largest peak-to-trough decline over the historical period.",
-)
+info_metric(c1, "Return", f"{total_return:.2%}", "Cumulative portfolio return over the historical sample.")
+info_metric(c2, "Volatility", f"{volatility:.2%}", "Annualized standard deviation of portfolio returns.")
+info_metric(c3, "Sharpe Ratio", f"{sharpe:.2f}", "Risk-adjusted return using the selected risk-free rate.")
+info_metric(c4, "Max Drawdown", f"{max_drawdown:.2%}", "Largest peak-to-trough decline over the sample.")
 
 c5, c6, c7, c8 = st.columns(4)
-c5.metric(
-    "Alpha",
-    f"{alpha:.2%}",
-    help="Return unexplained by benchmark beta exposure.",
-)
-c6.metric(
-    "Beta",
-    f"{beta:.2f}",
-    help="Sensitivity of portfolio returns to benchmark returns.",
-)
-c7.metric(
-    "Tracking Error",
-    f"{tracking_error:.2%}",
-    help="Annualized volatility of active returns versus the benchmark.",
-)
-c8.metric(
-    "Information Ratio",
-    f"{information_ratio:.2f}",
-    help="Active return divided by tracking error.",
-)
+info_metric(c5, "Alpha", f"{alpha:.2%}", "Return unexplained by benchmark beta exposure.")
+info_metric(c6, "Beta", f"{beta:.2f}", "Sensitivity of portfolio returns to benchmark returns.")
+info_metric(c7, "Tracking Error", f"{tracking_error:.2%}", "Annualized volatility of active returns versus the benchmark.")
+info_metric(c8, "Information Ratio", f"{information_ratio:.2f}", "Active return divided by tracking error.")
 
 if not portfolio_cum.empty:
-    st.subheader(
+    info_section(
         "Performance vs Benchmark",
-        help="Cumulative growth of the portfolio compared with VOO.",
+        "Cumulative growth of the portfolio compared with the benchmark (VOO).",
     )
 
     fig_perf = go.Figure()
@@ -516,42 +659,33 @@ if not portfolio_cum.empty:
     st.plotly_chart(fig_perf, use_container_width=True)
 
     p1, p2, p3 = st.columns(3)
-    p1.metric(
-        "Portfolio Cumulative Return",
-        f"{portfolio_cum_return:.2%}",
-        help="End-to-end cumulative return of the portfolio.",
-    )
-
+    info_metric(p1, "Portfolio Cumulative Return", f"{portfolio_cum_return:.2%}", "End-to-end cumulative return of the portfolio.")
     if benchmark_cum_return is not None:
-        p2.metric(
-            "Benchmark Cumulative Return",
-            f"{benchmark_cum_return:.2%}",
-            help="End-to-end cumulative return of the benchmark.",
-        )
-        p3.metric(
-            "Excess Return vs Benchmark",
-            f"{excess_vs_benchmark:.2%}",
-            help="Portfolio cumulative return minus benchmark cumulative return.",
-        )
+        info_metric(p2, "Benchmark Cumulative Return", f"{benchmark_cum_return:.2%}", "End-to-end cumulative return of the benchmark.")
+        info_metric(p3, "Excess Return vs Benchmark", f"{excess_vs_benchmark:.2%}", "Portfolio cumulative return minus benchmark cumulative return.")
     else:
-        p2.metric("Benchmark Cumulative Return", "N/A")
-        p3.metric("Excess Return vs Benchmark", "N/A")
+        info_metric(p2, "Benchmark Cumulative Return", "N/A", "Benchmark data is not available.")
+        info_metric(p3, "Excess Return vs Benchmark", "N/A", "Benchmark data is not available.")
 
-# -------------------------
-# Efficient frontier
-# -------------------------
-st.subheader(
+
+# =========================
+# EFFICIENT FRONTIER
+# =========================
+info_section(
     "Efficient Frontier",
-    help=(
-        "Simulated portfolios showing the trade-off between expected return and volatility. "
-        "Also highlights the current portfolio, minimum-volatility portfolio, and maximum-Sharpe portfolio."
-    ),
+    "Simulated portfolios showing the trade-off between expected return and volatility under the selected constraints.",
 )
 
-frontier = simulate_efficient_frontier(asset_returns, risk_free_rate=RISK_FREE_RATE)
+frontier = simulate_constrained_efficient_frontier(
+    asset_returns=asset_returns,
+    asset_names=asset_returns.columns.tolist() if not asset_returns.empty else [],
+    constraints=constraints,
+    risk_free_rate=risk_free_rate,
+    n_portfolios=N_SIMULATIONS,
+)
 
 if frontier.empty:
-    st.info("Efficient frontier requires historical data for at least 2 assets.")
+    st.info("No feasible frontier was found. Try relaxing the constraints or checking historical data availability.")
 else:
     mean_returns = asset_returns.mean() * 252
     cov_matrix = asset_returns.cov() * 252
@@ -564,7 +698,7 @@ else:
 
     current_return = float(current_weights @ mean_returns.values)
     current_vol = float(np.sqrt(current_weights @ cov_matrix.values @ current_weights.T))
-    current_sharpe = float((current_return - RISK_FREE_RATE) / current_vol) if current_vol > 0 else 0.0
+    current_sharpe = float((current_return - risk_free_rate) / current_vol) if current_vol > 0 else 0.0
 
     max_sharpe_row = frontier.loc[frontier["Sharpe"].idxmax()]
     min_vol_row = frontier.loc[frontier["Volatility"].idxmin()]
@@ -577,7 +711,7 @@ else:
     ) * 1.1
 
     cml_x = np.linspace(0, max_x, 100)
-    cml_y = RISK_FREE_RATE + float(max_sharpe_row["Sharpe"]) * cml_x
+    cml_y = risk_free_rate + float(max_sharpe_row["Sharpe"]) * cml_x
 
     fig_frontier = go.Figure()
 
@@ -594,7 +728,7 @@ else:
                 colorbar=dict(title="Sharpe"),
             ),
             name="Simulated Portfolios",
-            hovertemplate="Volatility: %{x:.2%}<br>Return: %{y:.2%}<br>Sharpe: %{marker.color:.2f}<extra></extra>",
+            hovertemplate="Volatility: %{x:.2%}<br>Expected Return: %{y:.2%}<br>Sharpe: %{marker.color:.2f}<extra></extra>",
         )
     )
 
@@ -651,55 +785,67 @@ else:
     st.plotly_chart(fig_frontier, use_container_width=True)
 
     f1, f2, f3 = st.columns(3)
-    f1.metric(
+    info_metric(
+        f1,
         "Current Expected Return / Volatility",
         f"{current_return:.2%} / {current_vol:.2%}",
-        help="Expected annual return and annualized volatility of the current portfolio.",
+        "Expected annual return and annualized volatility of the current portfolio.",
     )
-    f2.metric(
+    info_metric(
+        f2,
         "Max Sharpe Return / Volatility",
         f"{max_sharpe_row['Return']:.2%} / {max_sharpe_row['Volatility']:.2%}",
-        help="Expected annual return and volatility of the highest-Sharpe simulated portfolio.",
+        "Expected annual return and volatility of the highest-Sharpe simulated portfolio.",
     )
-    f3.metric(
+    info_metric(
+        f3,
         "Min Vol Return / Volatility",
         f"{min_vol_row['Return']:.2%} / {min_vol_row['Volatility']:.2%}",
-        help="Expected annual return and volatility of the minimum-volatility simulated portfolio.",
+        "Expected annual return and volatility of the minimum-volatility portfolio.",
     )
 
     f4, f5, f6 = st.columns(3)
-    f4.metric(
+    info_metric(
+        f4,
         "Current Sharpe Ratio",
         f"{current_sharpe:.2f}",
-        help="Risk-adjusted return of the current portfolio using the assumed risk-free rate.",
+        "Risk-adjusted return of the current portfolio using the selected risk-free rate.",
     )
-    f5.metric(
+    info_metric(
+        f5,
         "Max Sharpe Ratio",
         f"{max_sharpe_row['Sharpe']:.2f}",
-        help="Highest risk-adjusted return among the simulated portfolios.",
+        "Highest Sharpe ratio among the feasible simulated portfolios.",
     )
-    f6.metric(
+    info_metric(
+        f6,
         "Min Vol Sharpe Ratio",
         f"{min_vol_row['Sharpe']:.2f}",
-        help="Sharpe ratio of the minimum-volatility portfolio.",
+        "Sharpe ratio of the minimum-volatility feasible portfolio.",
     )
 
-    apply_col, spacer = st.columns([1, 3])
-
-    with apply_col:
+    action_col, _ = st.columns([1, 3])
+    with action_col:
         if st.button(
-            "Apply Max Sharpe Weights",
+            "Estimate Max Sharpe Shares",
             help=(
-                "Replaces the current share quantities with shares implied by the "
-                "maximum-Sharpe simulated portfolio, using current portfolio market value."
+                "Estimate how many shares each ETF should have to match the maximum-Sharpe portfolio, "
+                "without modifying your current holdings."
             ),
         ):
-            apply_weights_as_shares(max_sharpe_row["Weights"], usable, df, prefix)
-            st.rerun()
+            st.session_state[f"show_max_sharpe_targets_{prefix}"] = True
 
-    st.subheader(
+    if st.session_state.get(f"show_max_sharpe_targets_{prefix}", False):
+        info_section(
+            "Recommended Shares for Max Sharpe",
+            "Estimated share quantities required to reach the maximum-Sharpe allocation, based on current total portfolio value and current prices.",
+        )
+        rec_df = build_recommended_shares_table(max_sharpe_row["Weights"], usable, df)
+        st.dataframe(rec_df, use_container_width=True)
+
+    info_section(
         "Optimization Weights",
-        help="Portfolio weights for the optimal simulated portfolios.",
+        "Weight breakdown for the optimal simulated portfolios.",
     )
 
     opt1, opt2 = st.columns(2)
