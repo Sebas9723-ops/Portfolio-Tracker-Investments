@@ -28,7 +28,7 @@ try:
 
     private_available = True
 
-except Exception as e:
+except:
     private_available = False
 
 # =========================
@@ -65,21 +65,22 @@ else:
     st.info("Public portfolio view")
 
 # =========================
-# SESSION STATE
+# SESSION STATE (FIX DEFINITIVO)
 # =========================
 if "portfolio_state" not in st.session_state:
-    st.session_state.portfolio_state = {
-        t: portfolio_data[t]["shares"] for t in portfolio_data
-    }
+    st.session_state.portfolio_state = {}
 
-if "mode_state" not in st.session_state:
-    st.session_state.mode_state = mode
+# Agregar tickers nuevos
+for ticker in portfolio_data:
+    if ticker not in st.session_state.portfolio_state:
+        st.session_state.portfolio_state[ticker] = portfolio_data[ticker]["shares"]
 
-if st.session_state.mode_state != mode:
-    st.session_state.portfolio_state = {
-        t: portfolio_data[t]["shares"] for t in portfolio_data
-    }
-    st.session_state.mode_state = mode
+# Eliminar tickers viejos
+tickers_actuales = set(portfolio_data.keys())
+tickers_guardados = set(st.session_state.portfolio_state.keys())
+
+for t in list(tickers_guardados - tickers_actuales):
+    del st.session_state.portfolio_state[t]
 
 # =========================
 # RESET
@@ -137,7 +138,7 @@ for t in updated:
     shares = updated[t]["shares"]
     price = prices.get(t)
 
-    # 🔥 FIX PRECIOS EN 0
+    # FIX precios en 0
     if price is None or price == 0:
         try:
             price = historical[t].dropna().iloc[-1]
@@ -173,7 +174,6 @@ df["Deviation %"] = (df["Weight"] - df["Ticker"].map(target)) * 100
 st.subheader("Portfolio")
 st.dataframe(df)
 
-# 🔥 SIEMPRE MOSTRAR
 st.metric("Total Value", f"${total_value:,.2f}")
 
 # =========================
