@@ -11,6 +11,8 @@ from utils import get_prices, get_historical_data
 st.set_page_config(page_title="Portfolio Dashboard", layout="wide")
 st.title("Portfolio Dashboard")
 
+RISK_FREE_RATE = 0.02
+
 
 def load_private_portfolio():
     p = st.secrets["private_portfolio"]
@@ -167,7 +169,7 @@ def build_benchmark_returns():
     return bench["VOO"].pct_change().dropna()
 
 
-def simulate_efficient_frontier(asset_returns: pd.DataFrame, n_portfolios: int = 4000):
+def simulate_efficient_frontier(asset_returns: pd.DataFrame, risk_free_rate: float = 0.02, n_portfolios: int = 5000):
     if asset_returns.empty or asset_returns.shape[1] < 2:
         return pd.DataFrame()
 
@@ -182,7 +184,7 @@ def simulate_efficient_frontier(asset_returns: pd.DataFrame, n_portfolios: int =
 
     port_returns = weights @ mean_returns.values
     port_vols = np.sqrt(np.einsum("ij,jk,ik->i", weights, cov_matrix.values, weights))
-    sharpe = np.where(port_vols > 0, port_returns / port_vols, 0)
+    sharpe = np.where(port_vols > 0, (port_returns - risk_free_rate) / port_vols, 0)
 
     frontier = pd.DataFrame({
         "Return": port_returns,
@@ -193,6 +195,14 @@ def simulate_efficient_frontier(asset_returns: pd.DataFrame, n_portfolios: int =
     frontier["Weights"] = list(weights)
 
     return frontier
+
+
+def weights_table(weight_array, asset_names):
+    out = pd.DataFrame({
+        "Ticker": asset_names,
+        "Weight %": np.round(np.array(weight_array) * 100, 2),
+    })
+    return out.sort_values("Weight %", ascending=False).reset_index(drop=True)
 
 
 # -------------------------
@@ -378,17 +388,19 @@ if not portfolio_cum.empty:
 
     portfolio_last_x = portfolio_cum.index[-1]
     portfolio_last_y = portfolio_cum.iloc[-1]
+    portfolio_cum_return = float(portfolio_last_y - 1)
+
     fig_perf.add_annotation(
         x=portfolio_last_x,
         y=portfolio_last_y,
-        text=f"Portfolio: {portfolio_last_y - 1:.2%}",
+        text=f"Portfolio: {portfolio_cum_return:.2%}",
         showarrow=True,
         arrowhead=2,
         ax=20,
         ay=-20,
     )
 
-    portfolio_benchmark_return = None
+    benchmark_cum_return = None
     excess_vs_benchmark = None
 
     if not benchmark_cum.empty:
@@ -396,27 +408,26 @@ if not portfolio_cum.empty:
 
         benchmark_last_x = benchmark_cum.index[-1]
         benchmark_last_y = benchmark_cum.iloc[-1]
+        benchmark_cum_return = float(benchmark_last_y - 1)
+        excess_vs_benchmark = float(portfolio_cum_return - benchmark_cum_return)
 
         fig_perf.add_annotation(
             x=benchmark_last_x,
             y=benchmark_last_y,
-            text=f"VOO: {benchmark_last_y - 1:.2%}",
+            text=f"VOO: {benchmark_cum_return:.2%}",
             showarrow=True,
             arrowhead=2,
             ax=20,
             ay=20,
         )
 
-        portfolio_benchmark_return = float(benchmark_last_y - 1)
-        excess_vs_benchmark = float((portfolio_last_y - 1) - portfolio_benchmark_return)
-
     st.plotly_chart(fig_perf, use_container_width=True)
 
     p1, p2, p3 = st.columns(3)
-    p1.metric("Portfolio Cumulative Return", f"{portfolio_last_y - 1:.2%}")
+    p1.metric("Portfolio Cumulative Return", f"{portfolio_cum_return:.2%}")
 
-    if portfolio_benchmark_return is not None:
-        p2.metric("Benchmark Cumulative Return", f"{portfolio_benchmark_return:.2%}")
+    if benchmark_cum_return is not None:
+        p2.metric("Benchmark Cumulative Return", f"{benchmark_cum_return:.2%}")
         p3.metric("Excess Return vs Benchmark", f"{excess_vs_benchmark:.2%}")
     else:
         p2.metric("Benchmark Cumulative Return", "N/A")
@@ -427,7 +438,7 @@ if not portfolio_cum.empty:
 # -------------------------
 st.subheader("Efficient Frontier")
 
-frontier = simulate_efficient_frontier(asset_returns)
+frontier = simulate_efficient_frontier(asset_returns, risk_free_rate=RISK_FREE_RATE)
 
 if frontier.empty:
     st.info("Efficient frontier requires historical data for at least 2 assets.")
@@ -443,10 +454,20 @@ else:
 
     current_return = float(current_weights @ mean_returns.values)
     current_vol = float(np.sqrt(current_weights @ cov_matrix.values @ current_weights.T))
-    current_sharpe = float(current_return / current_vol) if current_vol > 0 else 0.0
+    current_sharpe = float((current_return - RISK_FREE_RATE) / current_vol) if current_vol > 0 else 0.0
 
     max_sharpe_row = frontier.loc[frontier["Sharpe"].idxmax()]
     min_vol_row = frontier.loc[frontier["Volatility"].idxmin()]
+
+    max_x = max(
+        frontier["Volatility"].max(),
+        current_vol,
+        float(max_sharpe_row["Volatility"]),
+        float(min_vol_row["Volatility"]),
+    ) * 1.1
+
+    cml_x = np.linspace(0, max_x, 100)
+    cml_y = RISK_FREE_RATE + float(max_sharpe_row["Sharpe"]) * cml_x
 
     fig_frontier = go.Figure()
 
@@ -464,6 +485,15 @@ else:
             ),
             name="Simulated Portfolios",
             hovertemplate="Volatility: %{x:.2%}<br>Return: %{y:.2%}<br>Sharpe: %{marker.color:.2f}<extra></extra>",
+        )
+    )
+
+    fig_frontier.add_trace(
+        go.Scatter(
+            x=cml_x,
+            y=cml_y,
+            mode="lines",
+            name="Capital Market Line",
         )
     )
 
@@ -511,11 +541,29 @@ else:
     st.plotly_chart(fig_frontier, use_container_width=True)
 
     f1, f2, f3 = st.columns(3)
-    f1.metric("Current Portfolio Return / Vol", f"{current_return:.2%} / {current_vol:.2%}")
+    f1.metric("Current Return / Vol", f"{current_return:.2%} / {current_vol:.2%}")
     f2.metric("Max Sharpe Return / Vol", f"{max_sharpe_row['Return']:.2%} / {max_sharpe_row['Volatility']:.2%}")
     f3.metric("Min Vol Return / Vol", f"{min_vol_row['Return']:.2%} / {min_vol_row['Volatility']:.2%}")
 
     f4, f5, f6 = st.columns(3)
-    f4.metric("Current Portfolio Sharpe", f"{current_sharpe:.2f}")
+    f4.metric("Current Sharpe (rf-adjusted)", f"{current_sharpe:.2f}")
     f5.metric("Max Sharpe Ratio", f"{max_sharpe_row['Sharpe']:.2f}")
     f6.metric("Min Vol Sharpe", f"{min_vol_row['Sharpe']:.2f}")
+
+    st.subheader("Optimization Weights")
+
+    opt1, opt2 = st.columns(2)
+
+    with opt1:
+        st.write("Max Sharpe Portfolio")
+        st.dataframe(
+            weights_table(max_sharpe_row["Weights"], usable),
+            use_container_width=True
+        )
+
+    with opt2:
+        st.write("Minimum Volatility Portfolio")
+        st.dataframe(
+            weights_table(min_vol_row["Weights"], usable),
+            use_container_width=True
+        )
