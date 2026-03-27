@@ -3,24 +3,27 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-import json
-import os
 
 from portfolio import public_portfolio
 from utils import get_prices, get_historical_data
 
+st.title("Portfolio Dashboard")
+
 # =========================
 # LOAD PRIVATE FROM SECRETS
 # =========================
+private_available = False
+real_portfolio = {}
+
 try:
-    private_portfolio_secrets = st.secrets["private_portfolio"]
+    p = st.secrets["private_portfolio"]
 
     real_portfolio = {
-        "SCHD": {"name": "Dividend ETF", "shares": private_portfolio_secrets["SCHD"]},
-        "VOO": {"name": "S&P 500", "shares": private_portfolio_secrets["VOO"]},
-        "VWCE.DE": {"name": "All World", "shares": private_portfolio_secrets["VWCE_DE"]},
-        "IGLN.L": {"name": "Gold", "shares": private_portfolio_secrets["IGLN_L"]},
-        "BND": {"name": "Bonds", "shares": private_portfolio_secrets["BND"]},
+        "SCHD": {"name": "Dividend ETF", "shares": p["SCHD"]},
+        "VOO": {"name": "S&P 500", "shares": p["VOO"]},
+        "VWCE.DE": {"name": "All World", "shares": p["VWCE_DE"]},
+        "IGLN.L": {"name": "Gold", "shares": p["IGLN_L"]},
+        "BND": {"name": "Bonds", "shares": p["BND"]},
     }
 
     private_available = True
@@ -29,90 +32,63 @@ except:
     private_available = False
 
 # =========================
-# FILE FOR PRIVATE STATE
-# =========================
-STATE_FILE = "private_state.json"
-
-def load_private_state(default_portfolio):
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, "r") as f:
-            return json.load(f)
-    return {ticker: default_portfolio[ticker]["shares"] for ticker in default_portfolio}
-
-def save_private_state(state):
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f)
-
-st.title("Portfolio Dashboard")
-
-# =========================
 # MODE
 # =========================
 mode = st.sidebar.selectbox("View Mode", ["Public", "Private"])
 
 # =========================
-# PASSWORD
+# PASSWORD CONTROL
 # =========================
 authenticated = False
 
 if mode == "Private":
-    if private_available:
-        password = st.sidebar.text_input("Enter password", type="password")
-
-        if password == st.secrets["auth"]["password"]:
-            authenticated = True
-        else:
-            st.warning("Incorrect password")
-    else:
+    if not private_available:
         st.error("Private portfolio not available")
+    else:
+        password = st.sidebar.text_input("Password", type="password")
+
+        if password:
+            if password == st.secrets["auth"]["password"]:
+                authenticated = True
+                st.success("Access granted")
+            else:
+                st.error("Incorrect password")
 
 # =========================
 # SELECT PORTFOLIO
 # =========================
 if mode == "Private" and authenticated:
     portfolio_data = real_portfolio
-    st.info("Private portfolio loaded.")
+    st.info("Private portfolio loaded")
 else:
     portfolio_data = public_portfolio
-    if mode == "Private":
-        st.stop()
-    st.info("Public portfolio view.")
+    st.info("Public portfolio view")
 
 # =========================
-# SESSION STATE
+# SESSION STATE (FIXED)
 # =========================
-if "current_mode" not in st.session_state:
-    st.session_state.current_mode = mode
-
 if "portfolio_state" not in st.session_state:
-    if mode == "Private" and authenticated:
-        st.session_state.portfolio_state = load_private_state(portfolio_data)
-    else:
-        st.session_state.portfolio_state = {
-            ticker: portfolio_data[ticker]["shares"] for ticker in portfolio_data
-        }
-
-if st.session_state.current_mode != mode:
-    if mode == "Private" and authenticated:
-        st.session_state.portfolio_state = load_private_state(portfolio_data)
-    else:
-        st.session_state.portfolio_state = {
-            ticker: portfolio_data[ticker]["shares"] for ticker in portfolio_data
-        }
-
-    st.session_state.current_mode = mode
-
-# =========================
-# RESET
-# =========================
-if st.sidebar.button("Reset to Original Portfolio"):
     st.session_state.portfolio_state = {
-        ticker: portfolio_data[ticker]["shares"] for ticker in portfolio_data
+        t: portfolio_data[t]["shares"] for t in portfolio_data
     }
 
-    if mode == "Private" and authenticated:
-        save_private_state(st.session_state.portfolio_state)
+# Reset if switching mode
+if "mode_state" not in st.session_state:
+    st.session_state.mode_state = mode
 
+if st.session_state.mode_state != mode:
+    st.session_state.portfolio_state = {
+        t: portfolio_data[t]["shares"] for t in portfolio_data
+    }
+    st.session_state.mode_state = mode
+
+# =========================
+# RESET BUTTON
+# =========================
+if st.sidebar.button("Reset Portfolio"):
+    st.session_state.portfolio_state = {
+        t: portfolio_data[t]["shares"] for t in portfolio_data
+    }
     st.rerun()
 
 # =========================
@@ -120,32 +96,28 @@ if st.sidebar.button("Reset to Original Portfolio"):
 # =========================
 st.sidebar.header("Portfolio Inputs")
 
-updated_portfolio = {}
+updated = {}
 
 for ticker in portfolio_data:
     shares = st.sidebar.number_input(
         f"{ticker} shares",
         min_value=0.0,
         step=0.1,
-        key=ticker,
-        value=float(st.session_state.portfolio_state[ticker])
+        value=float(st.session_state.portfolio_state[ticker]),
+        key=ticker
     )
 
     st.session_state.portfolio_state[ticker] = shares
 
-    updated_portfolio[ticker] = {
+    updated[ticker] = {
         "name": portfolio_data[ticker]["name"],
         "shares": shares
     }
 
-# Save only in private
-if mode == "Private" and authenticated:
-    save_private_state(st.session_state.portfolio_state)
-
 # =========================
 # DATA
 # =========================
-tickers = list(updated_portfolio.keys())
+tickers = list(updated.keys())
 
 prices = get_prices(tickers)
 historical = get_historical_data(tickers)
@@ -163,16 +135,16 @@ returns = historical.pct_change().dropna()
 data = []
 total_value = 0
 
-for ticker in updated_portfolio:
-    shares = updated_portfolio[ticker]["shares"]
-    price = prices.get(ticker, None)
+for t in updated:
+    shares = updated[t]["shares"]
+    price = prices.get(t)
 
     value = shares * price if price else 0
     total_value += value
 
     data.append({
-        "Ticker": ticker,
-        "Name": updated_portfolio[ticker]["name"],
+        "Ticker": t,
+        "Name": updated[t]["name"],
         "Shares": shares,
         "Value": round(value, 2)
     })
@@ -185,13 +157,10 @@ df["Weight %"] = (df["Weight"] * 100).round(2)
 # =========================
 # TARGET
 # =========================
-target_weights = {t: 1 / len(df) for t in df["Ticker"]}
+target = {t: 1/len(df) for t in df["Ticker"]}
 
-df["Target Weight"] = df["Ticker"].map(target_weights)
-df["Target %"] = (df["Target Weight"] * 100).round(2)
-
-df["Deviation"] = df["Weight"] - df["Target Weight"]
-df["Deviation %"] = (df["Deviation"] * 100).round(2)
+df["Target %"] = df["Ticker"].map(lambda x: target[x]*100)
+df["Deviation %"] = (df["Weight"] - df["Ticker"].map(target)) * 100
 
 # =========================
 # DISPLAY
@@ -199,13 +168,14 @@ df["Deviation %"] = (df["Deviation"] * 100).round(2)
 st.subheader("Portfolio")
 st.dataframe(df)
 
-st.metric("Total Value", f"${total_value:,.2f}" if mode == "Private" else "Hidden")
+# 🔥 FIX: siempre mostrar valor
+st.metric("Total Value", f"${total_value:,.2f}")
 
 # =========================
-# PIE
+# CHART
 # =========================
-st.subheader("Portfolio Allocation")
+st.subheader("Allocation")
 
-values = df["Value"] if mode == "Private" else df["Weight"]
+values = df["Value"] if mode == "Private" and authenticated else df["Weight"]
 
 st.plotly_chart(px.pie(df, names="Name", values=values, hole=0.4))
