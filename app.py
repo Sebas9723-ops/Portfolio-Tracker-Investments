@@ -3,15 +3,32 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+import json
+import os
 
 from portfolio import public_portfolio
 
-# Try to load private portfolio (only local)
+# Try to load private portfolio
 try:
     from private_portfolio import real_portfolio
     private_available = True
 except:
     private_available = False
+
+# =========================
+# FILE FOR PRIVATE STATE
+# =========================
+STATE_FILE = "private_state.json"
+
+def load_private_state(default_portfolio):
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "r") as f:
+            return json.load(f)
+    return {ticker: default_portfolio[ticker]["shares"] for ticker in default_portfolio}
+
+def save_private_state(state):
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f)
 
 st.title("Portfolio Dashboard")
 
@@ -20,29 +37,57 @@ st.title("Portfolio Dashboard")
 # =========================
 mode = st.sidebar.selectbox("View Mode", ["Public", "Private"])
 
-if mode == "Private" and private_available:
+# =========================
+# PASSWORD PROTECTION
+# =========================
+authenticated = False
+
+if mode == "Private":
+    if private_available:
+        password = st.sidebar.text_input("Enter password", type="password")
+
+        if password == st.secrets["auth"]["password"]:
+            authenticated = True
+        else:
+            st.warning("Incorrect password")
+    else:
+        st.error("Private portfolio not available")
+
+# =========================
+# SELECT PORTFOLIO
+# =========================
+if mode == "Private" and authenticated:
     portfolio_data = real_portfolio
     st.info("Private portfolio loaded.")
 else:
     portfolio_data = public_portfolio
+    if mode == "Private":
+        st.stop()
     st.info("Public portfolio view.")
 
 # =========================
-# SESSION STATE FIX
+# SESSION STATE INIT / SYNC
 # =========================
 if "current_mode" not in st.session_state:
     st.session_state.current_mode = mode
 
 if "portfolio_state" not in st.session_state:
-    st.session_state.portfolio_state = {
-        ticker: portfolio_data[ticker]["shares"] for ticker in portfolio_data
-    }
+    if mode == "Private" and authenticated:
+        st.session_state.portfolio_state = load_private_state(portfolio_data)
+    else:
+        st.session_state.portfolio_state = {
+            ticker: portfolio_data[ticker]["shares"] for ticker in portfolio_data
+        }
 
-# If mode changes → reload correct portfolio
+# Reset when switching mode
 if st.session_state.current_mode != mode:
-    st.session_state.portfolio_state = {
-        ticker: portfolio_data[ticker]["shares"] for ticker in portfolio_data
-    }
+    if mode == "Private" and authenticated:
+        st.session_state.portfolio_state = load_private_state(portfolio_data)
+    else:
+        st.session_state.portfolio_state = {
+            ticker: portfolio_data[ticker]["shares"] for ticker in portfolio_data
+        }
+
     st.session_state.current_mode = mode
 
 # =========================
@@ -52,6 +97,10 @@ if st.sidebar.button("Reset to Original Portfolio"):
     st.session_state.portfolio_state = {
         ticker: portfolio_data[ticker]["shares"] for ticker in portfolio_data
     }
+
+    if mode == "Private" and authenticated:
+        save_private_state(st.session_state.portfolio_state)
+
     st.rerun()
 
 # =========================
@@ -76,6 +125,10 @@ for ticker in portfolio_data:
         "name": portfolio_data[ticker]["name"],
         "shares": shares
     }
+
+# Save ONLY in private mode
+if mode == "Private" and authenticated:
+    save_private_state(st.session_state.portfolio_state)
 
 # =========================
 # DATA
@@ -140,7 +193,7 @@ df["Deviation"] = df["Weight"] - df["Target Weight"]
 df["Deviation %"] = (df["Deviation"] * 100).round(2)
 
 # =========================
-# PORTFOLIO RETURNS
+# RETURNS
 # =========================
 weights = df["Weight"].values
 
@@ -178,38 +231,7 @@ else:
     mean_return = volatility = sharpe = max_dd = var_95 = 0
 
 # =========================
-# RELATIVE METRICS
-# =========================
-if not sp500_returns.empty:
-    aligned = pd.concat([portfolio_returns, sp500_returns], axis=1).dropna()
-    aligned.columns = ["Portfolio", "Market"]
-
-    portfolio_returns = aligned["Portfolio"]
-    sp500_returns = aligned["Market"]
-
-    portfolio_cum = (1 + portfolio_returns).cumprod()
-    sp500_cum = (1 + sp500_returns).cumprod()
-
-    cov_matrix = aligned.cov()
-    beta = cov_matrix.loc["Portfolio", "Market"] / cov_matrix.loc["Market", "Market"]
-
-    portfolio_mean = aligned["Portfolio"].mean() * 252
-    market_mean = aligned["Market"].mean() * 252
-
-    alpha = portfolio_mean - beta * market_mean
-
-    excess_returns = portfolio_returns - sp500_returns
-    tracking_error = excess_returns.std() * np.sqrt(252)
-
-    if tracking_error != 0:
-        information_ratio = excess_returns.mean() * 252 / tracking_error
-    else:
-        information_ratio = 0
-else:
-    beta = alpha = tracking_error = information_ratio = 0
-
-# =========================
-# DISPLAY TABLE
+# DISPLAY
 # =========================
 st.subheader("Portfolio")
 
@@ -234,42 +256,9 @@ st.plotly_chart(px.pie(df, names="Name", values=values, hole=0.4))
 st.subheader("Target vs Actual Allocation")
 
 fig_target = go.Figure()
-
 fig_target.add_trace(go.Bar(x=df["Ticker"], y=df["Weight"], name="Actual"))
 fig_target.add_trace(go.Bar(x=df["Ticker"], y=df["Target Weight"], name="Target"))
 
 fig_target.update_layout(barmode="group")
 
 st.plotly_chart(fig_target)
-
-# =========================
-# PERFORMANCE
-# =========================
-st.subheader("Performance vs Benchmark")
-
-fig = go.Figure()
-
-fig.add_trace(go.Scatter(x=portfolio_cum.index, y=portfolio_cum, name="Portfolio"))
-
-if not sp500_cum.empty:
-    fig.add_trace(go.Scatter(x=sp500_cum.index, y=sp500_cum, name="S&P 500"))
-
-st.plotly_chart(fig)
-
-# =========================
-# METRICS DISPLAY
-# =========================
-st.subheader("Performance Metrics")
-
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Return", f"{mean_return:.2%}")
-col2.metric("Volatility", f"{volatility:.2%}")
-col3.metric("Sharpe", f"{sharpe:.2f}")
-col4.metric("Max Drawdown", f"{max_dd:.2%}")
-
-col5, col6, col7, col8, col9 = st.columns(5)
-col5.metric("VaR (95%)", f"{var_95:.2%}")
-col6.metric("Beta", f"{beta:.2f}")
-col7.metric("Alpha", f"{alpha:.2%}")
-col8.metric("Tracking Error", f"{tracking_error:.2%}")
-col9.metric("Information Ratio", f"{information_ratio:.2f}")
