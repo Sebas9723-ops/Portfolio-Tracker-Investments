@@ -10,36 +10,228 @@ from utils import get_prices, get_historical_data
 
 
 st.set_page_config(page_title="Portfolio Dashboard", layout="wide")
-st.title("Portfolio Dashboard")
 
 RISK_FREE_RATE = 0.02
 N_SIMULATIONS = 8000
 
 
 # =========================
+# BLOOMBERG-STYLE THEME
+# =========================
+def apply_bloomberg_style():
+    st.markdown(
+        """
+        <style>
+        html, body, [class*="css"]  {
+            font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace !important;
+        }
+
+        .stApp {
+            background-color: #0b0f14;
+            color: #e6e6e6;
+        }
+
+        [data-testid="stSidebar"] {
+            background: #0f141b;
+            border-right: 1px solid #2a313c;
+        }
+
+        [data-testid="stHeader"] {
+            background: #0b0f14;
+        }
+
+        h1, h2, h3, h4 {
+            color: #f3a712 !important;
+            letter-spacing: 0.5px;
+        }
+
+        .bb-title {
+            font-size: 2.2rem;
+            font-weight: 800;
+            color: #f3a712;
+            letter-spacing: 1px;
+            padding: 0.2rem 0 0.8rem 0;
+            border-bottom: 2px solid #f3a712;
+            margin-bottom: 1rem;
+            text-transform: uppercase;
+        }
+
+        .bb-section {
+            background: linear-gradient(180deg, #111821 0%, #0d131a 100%);
+            border: 1px solid #2b3340;
+            border-left: 4px solid #f3a712;
+            border-radius: 6px;
+            padding: 0.85rem 1rem 0.9rem 1rem;
+            margin: 0.65rem 0 1rem 0;
+            box-shadow: 0 0 0 1px rgba(243,167,18,0.05) inset;
+        }
+
+        .bb-section-title {
+            font-size: 1rem;
+            font-weight: 800;
+            color: #f3a712;
+            text-transform: uppercase;
+            margin-bottom: 0.4rem;
+            letter-spacing: 0.5px;
+        }
+
+        .bb-section-subtitle {
+            font-size: 0.78rem;
+            color: #aab4c0;
+            line-height: 1.4;
+            margin-bottom: 0.1rem;
+        }
+
+        .bb-info {
+            color: #7fb3ff;
+            cursor: help;
+            font-weight: 700;
+            margin-left: 0.2rem;
+        }
+
+        [data-testid="stMetric"] {
+            background: #121922;
+            border: 1px solid #2e3744;
+            border-top: 2px solid #f3a712;
+            border-radius: 6px;
+            padding: 0.7rem 0.8rem 0.5rem 0.8rem;
+        }
+
+        [data-testid="stMetricLabel"] {
+            color: #9fb0c3 !important;
+            text-transform: uppercase;
+            font-size: 0.75rem !important;
+            letter-spacing: 0.6px;
+        }
+
+        [data-testid="stMetricValue"] {
+            color: #f8f8f8 !important;
+            font-size: 1.45rem !important;
+            font-weight: 800 !important;
+        }
+
+        .stButton > button {
+            background: #151d27;
+            color: #f3a712;
+            border: 1px solid #f3a712;
+            border-radius: 4px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+        }
+
+        .stButton > button:hover {
+            background: #f3a712;
+            color: #0b0f14;
+            border-color: #f3a712;
+        }
+
+        .stSelectbox label, .stNumberInput label, .stTextInput label, .stMarkdown, .stCaption {
+            color: #cbd5df !important;
+        }
+
+        .stTextInput > div > div > input,
+        .stNumberInput input,
+        .stSelectbox div[data-baseweb="select"] > div {
+            background-color: #0f141b !important;
+            color: #f2f2f2 !important;
+            border: 1px solid #394250 !important;
+            border-radius: 4px !important;
+        }
+
+        .stExpander {
+            border: 1px solid #2d3642 !important;
+            border-radius: 6px !important;
+            background: #0f141b !important;
+        }
+
+        div[data-testid="stDataFrame"] {
+            border: 1px solid #2d3642;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        div[data-testid="stDataFrame"] * {
+            color: #e5e7eb !important;
+        }
+
+        div[data-testid="stDataFrame"] [role="columnheader"] {
+            background-color: #18212c !important;
+            color: #f3a712 !important;
+            font-weight: 800 !important;
+            text-transform: uppercase;
+        }
+
+        div[data-testid="stDataFrame"] [role="gridcell"] {
+            background-color: #0f141b !important;
+        }
+
+        .stAlert {
+            border-radius: 6px !important;
+            border: 1px solid #2b3340 !important;
+        }
+
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 6px;
+        }
+
+        .stTabs [data-baseweb="tab"] {
+            background: #111821;
+            border: 1px solid #2b3340;
+            border-radius: 4px 4px 0 0;
+            color: #d1d5db;
+            font-weight: 700;
+        }
+
+        .stTabs [aria-selected="true"] {
+            color: #f3a712 !important;
+            border-color: #f3a712 !important;
+        }
+
+        .bb-topline {
+            color: #7fb3ff;
+            font-size: 0.82rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 0.4rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+apply_bloomberg_style()
+st.markdown('<div class="bb-title">Portfolio Dashboard</div>', unsafe_allow_html=True)
+
+
+# =========================
 # UI HELPERS
 # =========================
-def info_html(text: str, help_text: str, size: str = "1rem", weight: str = "600"):
+def info_html(text: str, help_text: str, size: str = "1rem", weight: str = "700"):
     safe_help = html.escape(help_text, quote=True)
     safe_text = html.escape(text)
     return (
-        f"<div style='font-size:{size}; font-weight:{weight}; margin-bottom:0.15rem;'>"
-        f"{safe_text} "
-        f"<span title='{safe_help}' style='cursor:help; color:#6b7280;'>ⓘ</span>"
-        f"</div>"
+        f"<span style='font-size:{size}; font-weight:{weight}; color:#f3a712; text-transform:uppercase; letter-spacing:0.5px;'>"
+        f"{safe_text}</span>"
+        f"<span class='bb-info' title='{safe_help}'>ⓘ</span>"
     )
 
 
 def info_section(title: str, help_text: str):
     st.markdown(
-        info_html(title, help_text, size="1.15rem", weight="700"),
+        f"""
+        <div class="bb-section">
+            <div class="bb-section-title">{info_html(title, help_text)}</div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
 
 
 def info_metric(container, label: str, value: str, help_text: str):
     container.markdown(
-        info_html(label, help_text, size="0.95rem", weight="600"),
+        info_html(label, help_text, size="0.84rem", weight="800"),
         unsafe_allow_html=True,
     )
     container.metric(" ", value)
@@ -205,27 +397,12 @@ def build_benchmark_returns():
     return bench["VOO"].pct_change().dropna()
 
 
-# =========================
-# OPTIMIZATION HELPERS
-# =========================
 def get_default_constraints(profile: str):
     if profile == "Aggressive":
-        return {
-            "max_single_asset": 0.70,
-            "min_bonds": 0.00,
-            "min_gold": 0.00,
-        }
+        return {"max_single_asset": 0.70, "min_bonds": 0.00, "min_gold": 0.00}
     if profile == "Balanced":
-        return {
-            "max_single_asset": 0.45,
-            "min_bonds": 0.10,
-            "min_gold": 0.05,
-        }
-    return {
-        "max_single_asset": 0.35,
-        "min_bonds": 0.20,
-        "min_gold": 0.10,
-    }
+        return {"max_single_asset": 0.45, "min_bonds": 0.10, "min_gold": 0.05}
+    return {"max_single_asset": 0.35, "min_bonds": 0.20, "min_gold": 0.10}
 
 
 def classify_assets(asset_names):
@@ -389,27 +566,14 @@ prefix = get_mode_prefix(mode)
 # =========================
 init_mode_state(portfolio_data, prefix)
 
-if st.sidebar.button(
-    "Reset Portfolio",
-    help="Restore the original share quantities defined for the active mode.",
-):
+if st.sidebar.button("Reset Portfolio", help="Restore the original share quantities defined for the active mode."):
     reset_mode_state(portfolio_data, prefix)
     st.rerun()
 
-st.sidebar.header(
-    "Portfolio Inputs",
-    help="Adjust share quantities for the active portfolio.",
-)
+st.sidebar.header("Portfolio Inputs", help="Adjust share quantities for the active portfolio.")
 updated_portfolio = build_current_portfolio(portfolio_data, prefix, mode)
 
-
-# =========================
-# INVESTOR PROFILE / CONSTRAINTS
-# =========================
-st.sidebar.header(
-    "Optimization Settings",
-    help="Controls used for the constrained efficient frontier simulation.",
-)
+st.sidebar.header("Optimization Settings", help="Controls used for the constrained efficient frontier simulation.")
 
 profile = st.sidebar.selectbox(
     "Investor Profile",
@@ -486,10 +650,9 @@ if missing_hist:
 # =========================
 df, total_value = build_portfolio_df(updated_portfolio, live_prices, historical)
 
-info_section(
-    "Portfolio",
-    "Snapshot of current positions, prices, market values, current weights, target weights, and deviations.",
-)
+st.markdown('<div class="bb-topline">PX_LAST · WGT · RISK · OPTIMIZATION</div>', unsafe_allow_html=True)
+
+info_section("Portfolio", "Snapshot of current positions, prices, market values, current weights, target weights, and deviations.")
 display_df = df[[
     "Ticker",
     "Name",
@@ -502,35 +665,34 @@ display_df = df[[
 ]].copy()
 
 st.dataframe(display_df, use_container_width=True)
-info_metric(
-    st,
-    "Total Value",
-    f"${total_value:,.2f}",
-    "Current market value of the portfolio using the latest available prices.",
-)
+info_metric(st, "Total Value", f"${total_value:,.2f}", "Current market value of the portfolio using the latest available prices.")
 
 
 # =========================
 # ALLOCATION CHARTS
 # =========================
-info_section(
-    "Portfolio Allocation",
-    "Portfolio composition by market value. In practice this is the current capital allocation across assets.",
-)
+info_section("Portfolio Allocation", "Portfolio composition by market value. In practice this is the current capital allocation across assets.")
 
 pie_values = df["Value"] if total_value > 0 else df["Weight"]
 fig_pie = px.pie(df, names="Name", values=pie_values, hole=0.4)
+fig_pie.update_layout(
+    paper_bgcolor="#0b0f14",
+    plot_bgcolor="#0b0f14",
+    font=dict(color="#e6e6e6"),
+)
 st.plotly_chart(fig_pie, use_container_width=True)
 
-info_section(
-    "Target vs Actual Allocation",
-    "Compares current weights with the original base weights for the active mode.",
-)
+info_section("Target vs Actual Allocation", "Compares current weights with the original base weights for the active mode.")
 
 fig_bar = go.Figure()
 fig_bar.add_bar(x=df["Ticker"], y=df["Weight %"], name="Actual %")
 fig_bar.add_bar(x=df["Ticker"], y=df["Target %"], name="Target %")
-fig_bar.update_layout(barmode="group")
+fig_bar.update_layout(
+    barmode="group",
+    paper_bgcolor="#0b0f14",
+    plot_bgcolor="#0b0f14",
+    font=dict(color="#e6e6e6"),
+)
 st.plotly_chart(fig_bar, use_container_width=True)
 
 
@@ -587,10 +749,7 @@ if not portfolio_returns.empty and not benchmark_returns.empty:
         if tracking_error > 0:
             information_ratio = float((excess.mean() * 252) / tracking_error)
 
-info_section(
-    "Performance Metrics",
-    "Return and risk indicators derived from historical daily returns.",
-)
+info_section("Performance Metrics", "Return and risk indicators derived from historical daily returns.")
 
 c1, c2, c3, c4 = st.columns(4)
 info_metric(c1, "Return", f"{total_return:.2%}", "Cumulative portfolio return over the historical sample.")
@@ -605,10 +764,7 @@ info_metric(c7, "Tracking Error", f"{tracking_error:.2%}", "Annualized volatilit
 info_metric(c8, "Information Ratio", f"{information_ratio:.2f}", "Active return divided by tracking error.")
 
 if not portfolio_cum.empty:
-    info_section(
-        "Performance vs Benchmark",
-        "Cumulative growth of the portfolio compared with the benchmark (VOO).",
-    )
+    info_section("Performance vs Benchmark", "Cumulative growth of the portfolio compared with the benchmark (VOO).")
 
     fig_perf = go.Figure()
     fig_perf.add_scatter(x=portfolio_cum.index, y=portfolio_cum, name="Portfolio")
@@ -648,6 +804,11 @@ if not portfolio_cum.empty:
             ay=20,
         )
 
+    fig_perf.update_layout(
+        paper_bgcolor="#0b0f14",
+        plot_bgcolor="#0b0f14",
+        font=dict(color="#e6e6e6"),
+    )
     st.plotly_chart(fig_perf, use_container_width=True)
 
     p1, p2, p3 = st.columns(3)
@@ -663,10 +824,7 @@ if not portfolio_cum.empty:
 # =========================
 # EFFICIENT FRONTIER
 # =========================
-info_section(
-    "Efficient Frontier",
-    "Simulated portfolios showing the trade-off between expected return and volatility under the selected constraints.",
-)
+info_section("Efficient Frontier", "Simulated portfolios showing the trade-off between expected return and volatility under the selected constraints.")
 
 frontier = simulate_constrained_efficient_frontier(
     asset_returns=asset_returns,
@@ -772,105 +930,51 @@ else:
     fig_frontier.update_layout(
         xaxis_title="Volatility",
         yaxis_title="Expected Return",
+        paper_bgcolor="#0b0f14",
+        plot_bgcolor="#0b0f14",
+        font=dict(color="#e6e6e6"),
     )
 
     st.plotly_chart(fig_frontier, use_container_width=True)
 
     f1, f2, f3 = st.columns(3)
-    info_metric(
-        f1,
-        "Current Expected Return / Volatility",
-        f"{current_return:.2%} / {current_vol:.2%}",
-        "Expected annual return and annualized volatility of the current portfolio.",
-    )
-    info_metric(
-        f2,
-        "Max Sharpe Return / Volatility",
-        f"{max_sharpe_row['Return']:.2%} / {max_sharpe_row['Volatility']:.2%}",
-        "Expected annual return and volatility of the highest-Sharpe simulated portfolio.",
-    )
-    info_metric(
-        f3,
-        "Min Vol Return / Volatility",
-        f"{min_vol_row['Return']:.2%} / {min_vol_row['Volatility']:.2%}",
-        "Expected annual return and volatility of the minimum-volatility portfolio.",
-    )
+    info_metric(f1, "Current Expected Return / Volatility", f"{current_return:.2%} / {current_vol:.2%}", "Expected annual return and annualized volatility of the current portfolio.")
+    info_metric(f2, "Max Sharpe Return / Volatility", f"{max_sharpe_row['Return']:.2%} / {max_sharpe_row['Volatility']:.2%}", "Expected annual return and volatility of the highest-Sharpe simulated portfolio.")
+    info_metric(f3, "Min Vol Return / Volatility", f"{min_vol_row['Return']:.2%} / {min_vol_row['Volatility']:.2%}", "Expected annual return and volatility of the minimum-volatility portfolio.")
 
     f4, f5, f6 = st.columns(3)
-    info_metric(
-        f4,
-        "Current Sharpe Ratio",
-        f"{current_sharpe:.2f}",
-        "Risk-adjusted return of the current portfolio using the selected risk-free rate.",
-    )
-    info_metric(
-        f5,
-        "Max Sharpe Ratio",
-        f"{max_sharpe_row['Sharpe']:.2f}",
-        "Highest Sharpe ratio among the feasible simulated portfolios.",
-    )
-    info_metric(
-        f6,
-        "Min Vol Sharpe Ratio",
-        f"{min_vol_row['Sharpe']:.2f}",
-        "Sharpe ratio of the minimum-volatility feasible portfolio.",
-    )
+    info_metric(f4, "Current Sharpe Ratio", f"{current_sharpe:.2f}", "Risk-adjusted return of the current portfolio using the selected risk-free rate.")
+    info_metric(f5, "Max Sharpe Ratio", f"{max_sharpe_row['Sharpe']:.2f}", "Highest Sharpe ratio among the feasible simulated portfolios.")
+    info_metric(f6, "Min Vol Sharpe Ratio", f"{min_vol_row['Sharpe']:.2f}", "Sharpe ratio of the minimum-volatility feasible portfolio.")
 
     action_col1, action_col2, _ = st.columns([1, 1, 2])
 
     with action_col1:
-        if st.button(
-            "Estimate Max Sharpe Shares",
-            help=(
-                "Estimate how many shares each ETF should have to match the maximum-Sharpe portfolio, "
-                "without modifying your current holdings."
-            ),
-        ):
+        if st.button("Estimate Max Sharpe Shares", help="Estimate how many shares each ETF should have to match the maximum-Sharpe portfolio, without modifying your current holdings."):
             st.session_state[f"show_max_sharpe_targets_{prefix}"] = True
 
     with action_col2:
-        if st.button(
-            "Estimate Min Vol Shares",
-            help=(
-                "Estimate how many shares each ETF should have to match the minimum-volatility portfolio, "
-                "without modifying your current holdings."
-            ),
-        ):
+        if st.button("Estimate Min Vol Shares", help="Estimate how many shares each ETF should have to match the minimum-volatility portfolio, without modifying your current holdings."):
             st.session_state[f"show_min_vol_targets_{prefix}"] = True
 
     if st.session_state.get(f"show_max_sharpe_targets_{prefix}", False):
-        info_section(
-            "Recommended Shares for Max Sharpe",
-            "Estimated share quantities required to reach the maximum-Sharpe allocation, based on current total portfolio value and current prices.",
-        )
+        info_section("Recommended Shares for Max Sharpe", "Estimated share quantities required to reach the maximum-Sharpe allocation, based on current total portfolio value and current prices.")
         rec_df_max = build_recommended_shares_table(max_sharpe_row["Weights"], usable, df)
         st.dataframe(rec_df_max, use_container_width=True)
 
     if st.session_state.get(f"show_min_vol_targets_{prefix}", False):
-        info_section(
-            "Recommended Shares for Minimum Volatility",
-            "Estimated share quantities required to reach the minimum-volatility allocation, based on current total portfolio value and current prices.",
-        )
+        info_section("Recommended Shares for Minimum Volatility", "Estimated share quantities required to reach the minimum-volatility allocation, based on current total portfolio value and current prices.")
         rec_df_min = build_recommended_shares_table(min_vol_row["Weights"], usable, df)
         st.dataframe(rec_df_min, use_container_width=True)
 
-    info_section(
-        "Optimization Weights",
-        "Weight breakdown for the optimal simulated portfolios.",
-    )
+    info_section("Optimization Weights", "Weight breakdown for the optimal simulated portfolios.")
 
     opt1, opt2 = st.columns(2)
 
     with opt1:
         st.write("Max Sharpe Portfolio")
-        st.dataframe(
-            weights_table(max_sharpe_row["Weights"], usable),
-            use_container_width=True
-        )
+        st.dataframe(weights_table(max_sharpe_row["Weights"], usable), use_container_width=True)
 
     with opt2:
         st.write("Minimum Volatility Portfolio")
-        st.dataframe(
-            weights_table(min_vol_row["Weights"], usable),
-            use_container_width=True
-        )
+        st.dataframe(weights_table(min_vol_row["Weights"], usable), use_container_width=True)
