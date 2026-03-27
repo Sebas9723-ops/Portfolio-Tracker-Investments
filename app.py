@@ -301,7 +301,6 @@ fig_bar = go.Figure()
 fig_bar.add_bar(x=df["Ticker"], y=df["Weight %"], name="Actual %")
 fig_bar.add_bar(x=df["Ticker"], y=df["Target %"], name="Target %")
 fig_bar.update_layout(barmode="group")
-
 st.plotly_chart(fig_bar, use_container_width=True)
 
 # -------------------------
@@ -377,10 +376,51 @@ if not portfolio_cum.empty:
     fig_perf = go.Figure()
     fig_perf.add_scatter(x=portfolio_cum.index, y=portfolio_cum, name="Portfolio")
 
+    portfolio_last_x = portfolio_cum.index[-1]
+    portfolio_last_y = portfolio_cum.iloc[-1]
+    fig_perf.add_annotation(
+        x=portfolio_last_x,
+        y=portfolio_last_y,
+        text=f"Portfolio: {portfolio_last_y - 1:.2%}",
+        showarrow=True,
+        arrowhead=2,
+        ax=20,
+        ay=-20,
+    )
+
+    portfolio_benchmark_return = None
+    excess_vs_benchmark = None
+
     if not benchmark_cum.empty:
         fig_perf.add_scatter(x=benchmark_cum.index, y=benchmark_cum, name="VOO")
 
+        benchmark_last_x = benchmark_cum.index[-1]
+        benchmark_last_y = benchmark_cum.iloc[-1]
+
+        fig_perf.add_annotation(
+            x=benchmark_last_x,
+            y=benchmark_last_y,
+            text=f"VOO: {benchmark_last_y - 1:.2%}",
+            showarrow=True,
+            arrowhead=2,
+            ax=20,
+            ay=20,
+        )
+
+        portfolio_benchmark_return = float(benchmark_last_y - 1)
+        excess_vs_benchmark = float((portfolio_last_y - 1) - portfolio_benchmark_return)
+
     st.plotly_chart(fig_perf, use_container_width=True)
+
+    p1, p2, p3 = st.columns(3)
+    p1.metric("Portfolio Cumulative Return", f"{portfolio_last_y - 1:.2%}")
+
+    if portfolio_benchmark_return is not None:
+        p2.metric("Benchmark Cumulative Return", f"{portfolio_benchmark_return:.2%}")
+        p3.metric("Excess Return vs Benchmark", f"{excess_vs_benchmark:.2%}")
+    else:
+        p2.metric("Benchmark Cumulative Return", "N/A")
+        p3.metric("Excess Return vs Benchmark", "N/A")
 
 # -------------------------
 # Efficient frontier
@@ -403,6 +443,7 @@ else:
 
     current_return = float(current_weights @ mean_returns.values)
     current_vol = float(np.sqrt(current_weights @ cov_matrix.values @ current_weights.T))
+    current_sharpe = float(current_return / current_vol) if current_vol > 0 else 0.0
 
     max_sharpe_row = frontier.loc[frontier["Sharpe"].idxmax()]
     min_vol_row = frontier.loc[frontier["Volatility"].idxmin()]
@@ -422,7 +463,7 @@ else:
                 colorbar=dict(title="Sharpe"),
             ),
             name="Simulated Portfolios",
-            hovertemplate="Volatility: %{x:.2%}<br>Return: %{y:.2%}<extra></extra>",
+            hovertemplate="Volatility: %{x:.2%}<br>Return: %{y:.2%}<br>Sharpe: %{marker.color:.2f}<extra></extra>",
         )
     )
 
@@ -430,7 +471,9 @@ else:
         go.Scatter(
             x=[current_vol],
             y=[current_return],
-            mode="markers",
+            mode="markers+text",
+            text=["Current"],
+            textposition="top center",
             marker=dict(size=12, symbol="x"),
             name="Current Portfolio",
         )
@@ -440,7 +483,9 @@ else:
         go.Scatter(
             x=[max_sharpe_row["Volatility"]],
             y=[max_sharpe_row["Return"]],
-            mode="markers",
+            mode="markers+text",
+            text=["Max Sharpe"],
+            textposition="top center",
             marker=dict(size=12, symbol="diamond"),
             name="Max Sharpe",
         )
@@ -450,7 +495,9 @@ else:
         go.Scatter(
             x=[min_vol_row["Volatility"]],
             y=[min_vol_row["Return"]],
-            mode="markers",
+            mode="markers+text",
+            text=["Min Vol"],
+            textposition="bottom center",
             marker=dict(size=12, symbol="circle"),
             name="Min Volatility",
         )
@@ -462,3 +509,13 @@ else:
     )
 
     st.plotly_chart(fig_frontier, use_container_width=True)
+
+    f1, f2, f3 = st.columns(3)
+    f1.metric("Current Portfolio Return / Vol", f"{current_return:.2%} / {current_vol:.2%}")
+    f2.metric("Max Sharpe Return / Vol", f"{max_sharpe_row['Return']:.2%} / {max_sharpe_row['Volatility']:.2%}")
+    f3.metric("Min Vol Return / Vol", f"{min_vol_row['Return']:.2%} / {min_vol_row['Volatility']:.2%}")
+
+    f4, f5, f6 = st.columns(3)
+    f4.metric("Current Portfolio Sharpe", f"{current_sharpe:.2f}")
+    f5.metric("Max Sharpe Ratio", f"{max_sharpe_row['Sharpe']:.2f}")
+    f6.metric("Min Vol Sharpe", f"{min_vol_row['Sharpe']:.2f}")
