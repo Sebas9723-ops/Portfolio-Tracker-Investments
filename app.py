@@ -64,36 +64,26 @@ else:
     st.info("Public portfolio view")
 
 # =========================
-# SESSION STATE (FIX TOTAL)
+# 🔥 FIX DEFINITIVO (RESET TOTAL)
+# =========================
+if "last_mode_for_inputs" not in st.session_state:
+    st.session_state.last_mode_for_inputs = mode
+
+if st.session_state.last_mode_for_inputs != mode:
+    st.session_state.clear()  # 🔥 limpia TODO el estado
+    st.session_state.last_mode_for_inputs = mode
+    st.rerun()
+
+# =========================
+# SESSION STATE LIMPIO
 # =========================
 if "portfolio_state" not in st.session_state:
-    st.session_state.portfolio_state = {}
-
-# Añadir tickers nuevos
-for ticker in portfolio_data:
-    if ticker not in st.session_state.portfolio_state:
-        st.session_state.portfolio_state[ticker] = portfolio_data[ticker]["shares"]
-
-# Eliminar tickers viejos
-tickers_actuales = set(portfolio_data.keys())
-tickers_guardados = set(st.session_state.portfolio_state.keys())
-
-for t in list(tickers_guardados - tickers_actuales):
-    del st.session_state.portfolio_state[t]
-
-# 🔥 LIMPIAR KEYS DE INPUTS AL CAMBIAR MODO
-if "last_mode" not in st.session_state:
-    st.session_state.last_mode = mode
-
-if st.session_state.last_mode != mode:
-    for key in list(st.session_state.keys()):
-        if key.startswith("Public_") or key.startswith("Private_"):
-            del st.session_state[key]
-
-    st.session_state.last_mode = mode
+    st.session_state.portfolio_state = {
+        t: portfolio_data[t]["shares"] for t in portfolio_data
+    }
 
 # =========================
-# RESET
+# RESET BUTTON
 # =========================
 if st.sidebar.button("Reset Portfolio"):
     st.session_state.portfolio_state = {
@@ -114,7 +104,7 @@ for ticker in portfolio_data:
         min_value=0.0,
         step=0.1,
         value=float(st.session_state.portfolio_state[ticker]),
-        key=f"{mode}_{ticker}"  # 🔥 FIX CLAVE
+        key=f"{mode}_{ticker}"  # 🔥 separación total
     )
 
     st.session_state.portfolio_state[ticker] = shares
@@ -148,7 +138,7 @@ for t in updated:
     shares = updated[t]["shares"]
     price = prices.get(t)
 
-    # FIX precios faltantes
+    # 🔥 FIX PRECIOS EN 0
     if price is None or price == 0:
         try:
             price = historical[t].dropna().iloc[-1]
