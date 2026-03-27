@@ -75,13 +75,6 @@ def apply_bloomberg_style():
             letter-spacing: 0.5px;
         }
 
-        .bb-section-subtitle {
-            font-size: 0.78rem;
-            color: #aab4c0;
-            line-height: 1.4;
-            margin-bottom: 0.1rem;
-        }
-
         .bb-info {
             color: #7fb3ff;
             cursor: help;
@@ -397,6 +390,9 @@ def build_benchmark_returns():
     return bench["VOO"].pct_change().dropna()
 
 
+# =========================
+# OPTIMIZATION HELPERS
+# =========================
 def get_default_constraints(profile: str):
     if profile == "Aggressive":
         return {"max_single_asset": 0.70, "min_bonds": 0.00, "min_gold": 0.00}
@@ -413,6 +409,16 @@ def classify_assets(asset_names):
     gold_idx = [i for i, t in enumerate(asset_names) if t in gold]
 
     return bond_idx, gold_idx
+
+
+def bucket_for_ticker(ticker: str):
+    bonds = {"BND", "AGG", "IEF", "TLT", "VGIT", "BNDX"}
+    gold = {"IGLN.L", "GLD", "IAU", "SGLN.L"}
+    if ticker in bonds:
+        return "Bonds"
+    if ticker in gold:
+        return "Gold"
+    return "Equities"
 
 
 def simulate_constrained_efficient_frontier(
@@ -517,6 +523,121 @@ def build_recommended_shares_table(weight_array, asset_names, df_current):
     rec["Abs Delta"] = rec["Shares Delta"].abs()
     rec = rec.sort_values("Abs Delta", ascending=False).drop(columns=["Abs Delta"]).reset_index(drop=True)
     return rec
+
+
+def build_rebalancing_table(df_current: pd.DataFrame, target_weight_map: dict):
+    total_value = float(df_current["Value"].sum())
+    rows = []
+
+    for _, row in df_current.iterrows():
+        ticker = row["Ticker"]
+        price = float(row["Price"])
+        current_shares = float(row["Shares"])
+        current_value = float(row["Value"])
+        current_weight = float(row["Weight"])
+
+        target_weight = float(target_weight_map.get(ticker, 0.0))
+        target_value = total_value * target_weight
+        target_shares = target_value / price if price > 0 else 0.0
+
+        shares_delta = target_shares - current_shares
+        value_delta = target_value - current_value
+
+        if abs(value_delta) < 1:
+            action = "Hold"
+        elif value_delta > 0:
+            action = "Buy"
+        else:
+            action = "Sell"
+
+        rows.append({
+            "Ticker": ticker,
+            "Current Shares": round(current_shares, 4),
+            "Target Shares": round(target_shares, 4),
+            "Shares Delta": round(shares_delta, 4),
+            "Current Value": round(current_value, 2),
+            "Target Value": round(target_value, 2),
+            "Value Delta": round(value_delta, 2),
+            "Current Weight %": round(current_weight * 100, 2),
+            "Target Weight %": round(target_weight * 100, 2),
+            "Action": action,
+        })
+
+    out = pd.DataFrame(rows)
+    out["Abs Value Delta"] = out["Value Delta"].abs()
+    out = out.sort_values("Abs Value Delta", ascending=False).drop(columns=["Abs Value Delta"]).reset_index(drop=True)
+    return out
+
+
+def build_stress_test_table(df_current: pd.DataFrame, shocks: dict):
+    rows = []
+    current_total = float(df_current["Value"].sum())
+    stressed_total = 0.0
+
+    for _, row in df_current.iterrows():
+        ticker = row["Ticker"]
+        bucket = bucket_for_ticker(ticker)
+        shock = float(shocks.get(bucket, 0.0))
+
+        current_price = float(row["Price"])
+        current_value = float(row["Value"])
+        shares = float(row["Shares"])
+
+        stressed_price = current_price * (1 + shock)
+        stressed_value = shares * stressed_price
+        stressed_total += stressed_value
+
+        rows.append({
+            "Ticker": ticker,
+            "Bucket": bucket,
+            "Shock %": round(shock * 100, 2),
+            "Current Price": round(current_price, 2),
+            "Stressed Price": round(stressed_price, 2),
+            "Current Value": round(current_value, 2),
+            "Stressed Value": round(stressed_value, 2),
+            "P/L": round(stressed_value - current_value, 2),
+        })
+
+    out = pd.DataFrame(rows)
+    if stressed_total > 0:
+        out["Stressed Weight %"] = (out["Stressed Value"] / stressed_total * 100).round(2)
+    else:
+        out["Stressed Weight %"] = 0.0
+
+    return out, current_total, stressed_total
+
+
+def compute_rolling_metrics(portfolio_returns: pd.Series, benchmark_returns: pd.Series, risk_free_rate: float, window: int):
+    if portfolio_returns.empty:
+        return pd.DataFrame()
+
+    df_roll = pd.DataFrame(index=portfolio_returns.index)
+    rolling_vol = portfolio_returns.rolling(window).std() * np.sqrt(252)
+    rolling_return = portfolio_returns.rolling(window).mean() * 252
+    rolling_sharpe = (rolling_return - risk_free_rate) / rolling_vol.replace(0, np.nan)
+
+    cum = (1 + portfolio_returns).cumprod()
+    rolling_peak = cum.rolling(window).max()
+    rolling_drawdown = cum / rolling_peak - 1
+
+    df_roll["Rolling Volatility"] = rolling_vol
+    df_roll["Rolling Sharpe"] = rolling_sharpe
+    df_roll["Rolling Drawdown"] = rolling_drawdown
+
+    if not benchmark_returns.empty:
+        aligned = pd.concat(
+            [portfolio_returns.rename("Portfolio"), benchmark_returns.rename("Benchmark")],
+            axis=1
+        ).dropna()
+
+        if not aligned.empty:
+            rolling_cov = aligned["Portfolio"].rolling(window).cov(aligned["Benchmark"])
+            rolling_var = aligned["Benchmark"].rolling(window).var()
+            rolling_beta = rolling_cov / rolling_var.replace(0, np.nan)
+
+            df_roll = df_roll.join(rolling_beta.rename("Rolling Beta"), how="left")
+
+    return df_roll.dropna(how="all")
 
 
 # =========================
@@ -627,6 +748,49 @@ constraints = {
     "min_gold": min_gold,
 }
 risk_free_rate = custom_rf
+
+st.sidebar.header("Stress Testing", help="Apply category shocks to estimate stressed portfolio value.")
+equity_shock = st.sidebar.number_input(
+    "Equities Shock",
+    min_value=-1.00,
+    max_value=1.00,
+    value=-0.10,
+    step=0.01,
+    format="%.2f",
+    help="Shock applied to assets classified as equities.",
+)
+bonds_shock = st.sidebar.number_input(
+    "Bonds Shock",
+    min_value=-1.00,
+    max_value=1.00,
+    value=-0.03,
+    step=0.01,
+    format="%.2f",
+    help="Shock applied to assets classified as bonds.",
+)
+gold_shock = st.sidebar.number_input(
+    "Gold Shock",
+    min_value=-1.00,
+    max_value=1.00,
+    value=0.05,
+    step=0.01,
+    format="%.2f",
+    help="Shock applied to assets classified as gold.",
+)
+rolling_window = st.sidebar.slider(
+    "Rolling Window (days)",
+    min_value=21,
+    max_value=252,
+    value=63,
+    step=21,
+    help="Window used to compute rolling volatility, Sharpe, beta, and drawdown.",
+)
+
+stress_shocks = {
+    "Equities": equity_shock,
+    "Bonds": bonds_shock,
+    "Gold": gold_shock,
+}
 
 
 # =========================
@@ -834,6 +998,10 @@ frontier = simulate_constrained_efficient_frontier(
     n_portfolios=N_SIMULATIONS,
 )
 
+max_sharpe_row = None
+min_vol_row = None
+usable = []
+
 if frontier.empty:
     st.info("No feasible frontier was found. Try relaxing the constraints or checking historical data availability.")
 else:
@@ -978,3 +1146,124 @@ else:
     with opt2:
         st.write("Minimum Volatility Portfolio")
         st.dataframe(weights_table(min_vol_row["Weights"], usable), use_container_width=True)
+
+
+# =========================
+# PHASE 1 - REBALANCING ENGINE
+# =========================
+info_section(
+    "Rebalancing Engine",
+    "Trade list showing the required buy and sell adjustments to move from the current allocation to a selected target allocation."
+)
+
+target_options = ["Base Target"]
+if max_sharpe_row is not None:
+    target_options.append("Max Sharpe")
+if min_vol_row is not None:
+    target_options.append("Minimum Volatility")
+
+rebal_target = st.selectbox(
+    "Rebalancing Target",
+    target_options,
+    help="Choose the target allocation used to generate the rebalancing trade list."
+)
+
+if rebal_target == "Base Target":
+    target_weight_map = df.set_index("Ticker")["Target Weight"].to_dict()
+elif rebal_target == "Max Sharpe" and max_sharpe_row is not None:
+    target_weight_map = dict(zip(usable, max_sharpe_row["Weights"]))
+else:
+    target_weight_map = dict(zip(usable, min_vol_row["Weights"]))
+
+rebal_df = build_rebalancing_table(df, target_weight_map)
+
+buy_value = rebal_df.loc[rebal_df["Action"] == "Buy", "Value Delta"].sum()
+sell_value = -rebal_df.loc[rebal_df["Action"] == "Sell", "Value Delta"].sum()
+net_cash = sell_value - buy_value
+
+r1, r2, r3 = st.columns(3)
+info_metric(r1, "Total Buy Value", f"${buy_value:,.2f}", "Total capital required for buy trades.")
+info_metric(r2, "Total Sell Value", f"${sell_value:,.2f}", "Total capital released from sell trades.")
+info_metric(r3, "Net Cash Impact", f"${net_cash:,.2f}", "Positive means net cash released. Negative means extra cash required.")
+
+st.dataframe(rebal_df, use_container_width=True)
+
+
+# =========================
+# PHASE 1 - STRESS TESTING
+# =========================
+info_section(
+    "Scenario / Stress Testing",
+    "Applies category-level shocks to estimate how the portfolio would behave under adverse or favorable market scenarios."
+)
+
+stress_df, current_total_value, stressed_total_value = build_stress_test_table(df, stress_shocks)
+stress_pnl = stressed_total_value - current_total_value
+stress_return = (stressed_total_value / current_total_value - 1) if current_total_value > 0 else 0.0
+
+s1, s2, s3 = st.columns(3)
+info_metric(s1, "Current Portfolio Value", f"${current_total_value:,.2f}", "Current market value before stress shocks.")
+info_metric(s2, "Stressed Portfolio Value", f"${stressed_total_value:,.2f}", "Portfolio value after applying the stress scenario.")
+info_metric(s3, "Scenario P/L", f"${stress_pnl:,.2f} ({stress_return:.2%})", "Profit or loss implied by the scenario.")
+
+fig_stress = go.Figure()
+fig_stress.add_bar(x=stress_df["Ticker"], y=stress_df["Current Value"], name="Current Value")
+fig_stress.add_bar(x=stress_df["Ticker"], y=stress_df["Stressed Value"], name="Stressed Value")
+fig_stress.update_layout(
+    barmode="group",
+    paper_bgcolor="#0b0f14",
+    plot_bgcolor="#0b0f14",
+    font=dict(color="#e6e6e6"),
+)
+st.plotly_chart(fig_stress, use_container_width=True)
+
+st.dataframe(stress_df, use_container_width=True)
+
+
+# =========================
+# PHASE 1 - ROLLING METRICS
+# =========================
+info_section(
+    "Rolling Metrics",
+    "Time-varying view of portfolio risk and risk-adjusted performance using a rolling historical window."
+)
+
+rolling_df = compute_rolling_metrics(portfolio_returns, benchmark_returns, risk_free_rate, rolling_window)
+
+if rolling_df.empty:
+    st.info("Rolling metrics are not available for the current data window.")
+else:
+    rolling_metric = st.selectbox(
+        "Rolling Metric",
+        ["Rolling Volatility", "Rolling Sharpe", "Rolling Beta", "Rolling Drawdown"],
+        help="Select the rolling indicator to display."
+    )
+
+    available_metric = rolling_metric
+    if available_metric not in rolling_df.columns:
+        available_metric = rolling_df.columns[0]
+
+    fig_roll = go.Figure()
+    fig_roll.add_scatter(
+        x=rolling_df.index,
+        y=rolling_df[available_metric],
+        name=available_metric,
+    )
+    fig_roll.update_layout(
+        paper_bgcolor="#0b0f14",
+        plot_bgcolor="#0b0f14",
+        font=dict(color="#e6e6e6"),
+        xaxis_title="Date",
+        yaxis_title=available_metric,
+    )
+    st.plotly_chart(fig_roll, use_container_width=True)
+
+    last_val = rolling_df[available_metric].dropna()
+    if not last_val.empty:
+        last_value = last_val.iloc[-1]
+        info_metric(
+            st,
+            f"Latest {available_metric}",
+            f"{last_value:.2%}" if "Sharpe" not in available_metric and "Beta" not in available_metric else f"{last_value:.2f}",
+            f"Most recent value of {available_metric.lower()} using a {rolling_window}-day rolling window."
+        )
