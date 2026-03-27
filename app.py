@@ -11,7 +11,7 @@ from utils import get_prices, get_historical_data
 
 st.set_page_config(page_title="Portfolio Dashboard", layout="wide")
 
-RISK_FREE_RATE = 0.02
+DEFAULT_RISK_FREE_RATE = 0.02
 N_SIMULATIONS = 8000
 
 
@@ -164,23 +164,6 @@ def apply_bloomberg_style():
             border: 1px solid #2b3340 !important;
         }
 
-        .stTabs [data-baseweb="tab-list"] {
-            gap: 6px;
-        }
-
-        .stTabs [data-baseweb="tab"] {
-            background: #111821;
-            border: 1px solid #2b3340;
-            border-radius: 4px 4px 0 0;
-            color: #d1d5db;
-            font-weight: 700;
-        }
-
-        .stTabs [aria-selected="true"] {
-            color: #f3a712 !important;
-            border-color: #f3a712 !important;
-        }
-
         .bb-topline {
             color: #7fb3ff;
             font-size: 0.82rem;
@@ -231,7 +214,7 @@ def info_metric(container, label: str, value: str, help_text: str):
 
 
 # =========================
-# DATA LOADERS
+# PRIVATE PORTFOLIO
 # =========================
 def load_private_portfolio():
     p = st.secrets["private_portfolio"]
@@ -294,15 +277,107 @@ def build_current_portfolio(portfolio_data: dict, prefix: str, mode: str):
     return updated
 
 
-def get_safe_price(ticker: str, live_prices: dict, historical: pd.DataFrame):
+# =========================
+# CURRENCY / FX HELPERS
+# =========================
+def asset_currency(ticker: str) -> str:
+    if ticker.endswith(".DE") or ticker.endswith(".AS"):
+        return "EUR"
+    if ticker.endswith(".L"):
+        return "GBP"
+    return "USD"
+
+
+def asset_market_group(ticker: str) -> str:
+    if ticker.endswith(".L"):
+        return "UK"
+    if "." in ticker:
+        return "Europe"
+    return "US"
+
+
+def get_fx_ticker(from_ccy: str, to_ccy: str):
+    if from_ccy == to_ccy:
+        return None
+    return f"{from_ccy}{to_ccy}=X"
+
+
+def build_fx_data(tickers: list, base_currency: str, period: str = "2y"):
+    currencies = sorted({asset_currency(t) for t in tickers if asset_currency(t) != base_currency})
+    fx_tickers = [get_fx_ticker(ccy, base_currency) for ccy in currencies]
+    fx_tickers = [t for t in fx_tickers if t is not None]
+
+    fx_prices = get_prices(fx_tickers) if fx_tickers else {}
+    fx_hist = get_historical_data(fx_tickers, period=period) if fx_tickers else pd.DataFrame()
+
+    return fx_prices, fx_hist, fx_tickers
+
+
+def get_fx_rate_current(from_ccy: str, to_ccy: str, fx_prices: dict, fx_hist: pd.DataFrame):
+    if from_ccy == to_ccy:
+        return 1.0
+
+    fx_ticker = get_fx_ticker(from_ccy, to_ccy)
+    rate = fx_prices.get(fx_ticker)
+
+    if isinstance(rate, (int, float)) and pd.notna(rate) and rate > 0:
+        return float(rate)
+
+    try:
+        if fx_ticker in fx_hist.columns:
+            last_rate = pd.to_numeric(fx_hist[fx_ticker], errors="coerce").dropna().iloc[-1]
+            return float(last_rate)
+    except Exception:
+        pass
+
+    return np.nan
+
+
+def convert_historical_to_base(asset_hist_native: pd.DataFrame, tickers: list, base_currency: str, fx_hist: pd.DataFrame):
+    converted = {}
+    missing_fx = []
+
+    for ticker in tickers:
+        if ticker not in asset_hist_native.columns:
+            continue
+
+        native_series = pd.to_numeric(asset_hist_native[ticker], errors="coerce").dropna()
+        from_ccy = asset_currency(ticker)
+
+        if from_ccy == base_currency:
+            converted[ticker] = native_series.rename(ticker)
+            continue
+
+        fx_ticker = get_fx_ticker(from_ccy, base_currency)
+        if fx_ticker not in fx_hist.columns:
+            missing_fx.append(fx_ticker)
+            continue
+
+        fx_series = pd.to_numeric(fx_hist[fx_ticker], errors="coerce").dropna()
+        aligned = pd.concat([native_series.rename("asset"), fx_series.rename("fx")], axis=1).dropna()
+
+        if not aligned.empty:
+            converted[ticker] = (aligned["asset"] * aligned["fx"]).rename(ticker)
+
+    if not converted:
+        return pd.DataFrame(), sorted(set(missing_fx))
+
+    out = pd.concat(converted.values(), axis=1)
+    out.columns = list(converted.keys())
+    out = out.sort_index().ffill().dropna(how="all")
+
+    return out, sorted(set(missing_fx))
+
+
+def get_safe_native_price(ticker: str, live_prices: dict, asset_hist_native: pd.DataFrame):
     live_price = live_prices.get(ticker)
 
     if isinstance(live_price, (int, float)) and pd.notna(live_price) and live_price > 0:
         return float(live_price)
 
     try:
-        if ticker in historical.columns:
-            last_hist = pd.to_numeric(historical[ticker], errors="coerce").dropna().iloc[-1]
+        if ticker in asset_hist_native.columns:
+            last_hist = pd.to_numeric(asset_hist_native[ticker], errors="coerce").dropna().iloc[-1]
             return float(last_hist)
     except Exception:
         pass
@@ -310,13 +385,30 @@ def get_safe_price(ticker: str, live_prices: dict, historical: pd.DataFrame):
     return 0.0
 
 
-def build_portfolio_df(updated_portfolio: dict, live_prices: dict, historical: pd.DataFrame):
+# =========================
+# PORTFOLIO DATAFRAME
+# =========================
+def build_portfolio_df(
+    updated_portfolio: dict,
+    live_prices_native: dict,
+    asset_hist_native: pd.DataFrame,
+    fx_prices: dict,
+    fx_hist: pd.DataFrame,
+    base_currency: str,
+):
     rows = []
     total_value = 0.0
     base_total_value = 0.0
 
     for ticker, meta in updated_portfolio.items():
-        price = get_safe_price(ticker, live_prices, historical)
+        native_currency = asset_currency(ticker)
+        native_price = get_safe_native_price(ticker, live_prices_native, asset_hist_native)
+        fx_rate = get_fx_rate_current(native_currency, base_currency, fx_prices, fx_hist)
+
+        if pd.isna(fx_rate):
+            fx_rate = 0.0
+
+        price = native_price * fx_rate
 
         shares = float(meta["shares"])
         base_shares = float(meta["base_shares"])
@@ -331,7 +423,11 @@ def build_portfolio_df(updated_portfolio: dict, live_prices: dict, historical: p
             {
                 "Ticker": ticker,
                 "Name": meta["name"],
+                "Market": asset_market_group(ticker),
+                "Native Currency": native_currency,
                 "Shares": round(shares, 4),
+                "Native Price": round(native_price, 2),
+                "FX Rate": round(fx_rate, 6),
                 "Price": round(price, 2),
                 "Value": round(value, 2),
                 "Base Shares": round(base_shares, 4),
@@ -358,13 +454,13 @@ def build_portfolio_df(updated_portfolio: dict, live_prices: dict, historical: p
     return df, total_value
 
 
-def build_portfolio_returns(df: pd.DataFrame, historical: pd.DataFrame):
-    usable = [ticker for ticker in df["Ticker"] if ticker in historical.columns]
+def build_portfolio_returns(df: pd.DataFrame, historical_base: pd.DataFrame):
+    usable = [ticker for ticker in df["Ticker"] if ticker in historical_base.columns]
 
     if not usable:
         return pd.Series(dtype=float), pd.DataFrame()
 
-    hist = historical[usable].copy().dropna(how="all")
+    hist = historical_base[usable].copy().dropna(how="all")
     returns = hist.pct_change().dropna()
 
     if returns.empty:
@@ -382,12 +478,33 @@ def build_portfolio_returns(df: pd.DataFrame, historical: pd.DataFrame):
     return portfolio_returns, returns
 
 
-def build_benchmark_returns():
-    bench = get_historical_data(["VOO"], period="2y")
-    if bench.empty or "VOO" not in bench.columns:
+def build_benchmark_returns(base_currency: str):
+    bench_native = get_historical_data(["VOO"], period="2y")
+    if bench_native.empty or "VOO" not in bench_native.columns:
         return pd.Series(dtype=float)
 
-    return bench["VOO"].pct_change().dropna()
+    if base_currency == "USD":
+        return bench_native["VOO"].pct_change().dropna()
+
+    fx_hist = get_historical_data([get_fx_ticker("USD", base_currency)], period="2y")
+    fx_ticker = get_fx_ticker("USD", base_currency)
+
+    if fx_hist.empty or fx_ticker not in fx_hist.columns:
+        return pd.Series(dtype=float)
+
+    aligned = pd.concat(
+        [
+            pd.to_numeric(bench_native["VOO"], errors="coerce").rename("VOO"),
+            pd.to_numeric(fx_hist[fx_ticker], errors="coerce").rename("FX"),
+        ],
+        axis=1,
+    ).dropna()
+
+    if aligned.empty:
+        return pd.Series(dtype=float)
+
+    bench_base = aligned["VOO"] * aligned["FX"]
+    return bench_base.pct_change().dropna()
 
 
 # =========================
@@ -525,7 +642,69 @@ def build_recommended_shares_table(weight_array, asset_names, df_current):
     return rec
 
 
-def build_rebalancing_table(df_current: pd.DataFrame, target_weight_map: dict):
+# =========================
+# TRANSACTION COST ENGINE
+# =========================
+def estimate_transaction_cost(
+    ticker: str,
+    trade_value: float,
+    base_currency: str,
+    native_currency: str,
+    model: str,
+    params: dict,
+):
+    if trade_value <= 0:
+        return {
+            "Commission": 0.0,
+            "Slippage": 0.0,
+            "FX Cost": 0.0,
+            "Total Cost": 0.0,
+        }
+
+    market = asset_market_group(ticker)
+
+    if model == "Simple Bps":
+        commission = 0.0
+        slippage = trade_value * params["simple_bps"] / 10000
+        fx_cost = trade_value * params["fx_bps"] / 10000 if native_currency != base_currency else 0.0
+
+    elif model == "Manual Override":
+        commission = params["manual_fixed_fee"]
+        slippage = trade_value * params["manual_bps"] / 10000
+        fx_cost = trade_value * params["fx_bps"] / 10000 if native_currency != base_currency else 0.0
+
+    else:
+        if market == "US":
+            commission_bps = params["us_commission_bps"]
+            min_fee = params["us_min_fee"]
+        elif market == "UK":
+            commission_bps = params["uk_commission_bps"]
+            min_fee = params["uk_min_fee"]
+        else:
+            commission_bps = params["eu_commission_bps"]
+            min_fee = params["eu_min_fee"]
+
+        commission = max(trade_value * commission_bps / 10000, min_fee)
+        slippage = trade_value * params["slippage_bps"] / 10000
+        fx_cost = trade_value * params["fx_bps"] / 10000 if native_currency != base_currency else 0.0
+
+    total_cost = commission + slippage + fx_cost
+
+    return {
+        "Commission": commission,
+        "Slippage": slippage,
+        "FX Cost": fx_cost,
+        "Total Cost": total_cost,
+    }
+
+
+def build_rebalancing_table(
+    df_current: pd.DataFrame,
+    target_weight_map: dict,
+    base_currency: str,
+    tc_model: str,
+    tc_params: dict,
+):
     total_value = float(df_current["Value"].sum())
     rows = []
 
@@ -535,6 +714,8 @@ def build_rebalancing_table(df_current: pd.DataFrame, target_weight_map: dict):
         current_shares = float(row["Shares"])
         current_value = float(row["Value"])
         current_weight = float(row["Weight"])
+        native_currency = row["Native Currency"]
+        market = row["Market"]
 
         target_weight = float(target_weight_map.get(ticker, 0.0))
         target_value = total_value * target_weight
@@ -542,6 +723,7 @@ def build_rebalancing_table(df_current: pd.DataFrame, target_weight_map: dict):
 
         shares_delta = target_shares - current_shares
         value_delta = target_value - current_value
+        trade_value = abs(value_delta)
 
         if abs(value_delta) < 1:
             action = "Hold"
@@ -550,8 +732,26 @@ def build_rebalancing_table(df_current: pd.DataFrame, target_weight_map: dict):
         else:
             action = "Sell"
 
+        costs = estimate_transaction_cost(
+            ticker=ticker,
+            trade_value=trade_value,
+            base_currency=base_currency,
+            native_currency=native_currency,
+            model=tc_model,
+            params=tc_params,
+        )
+
+        if action == "Buy":
+            net_cash_flow = -(trade_value + costs["Total Cost"])
+        elif action == "Sell":
+            net_cash_flow = trade_value - costs["Total Cost"]
+        else:
+            net_cash_flow = 0.0
+
         rows.append({
             "Ticker": ticker,
+            "Market": market,
+            "Native Currency": native_currency,
             "Current Shares": round(current_shares, 4),
             "Target Shares": round(target_shares, 4),
             "Shares Delta": round(shares_delta, 4),
@@ -560,6 +760,8 @@ def build_rebalancing_table(df_current: pd.DataFrame, target_weight_map: dict):
             "Value Delta": round(value_delta, 2),
             "Current Weight %": round(current_weight * 100, 2),
             "Target Weight %": round(target_weight * 100, 2),
+            "Estimated Cost": round(costs["Total Cost"], 2),
+            "Net Cash Flow": round(net_cash_flow, 2),
             "Action": action,
         })
 
@@ -569,6 +771,9 @@ def build_rebalancing_table(df_current: pd.DataFrame, target_weight_map: dict):
     return out
 
 
+# =========================
+# STRESS TEST / ROLLING
+# =========================
 def build_stress_test_table(df_current: pd.DataFrame, shocks: dict):
     rows = []
     current_total = float(df_current["Value"].sum())
@@ -634,14 +839,13 @@ def compute_rolling_metrics(portfolio_returns: pd.Series, benchmark_returns: pd.
             rolling_cov = aligned["Portfolio"].rolling(window).cov(aligned["Benchmark"])
             rolling_var = aligned["Benchmark"].rolling(window).var()
             rolling_beta = rolling_cov / rolling_var.replace(0, np.nan)
-
             df_roll = df_roll.join(rolling_beta.rename("Rolling Beta"), how="left")
 
     return df_roll.dropna(how="all")
 
 
 # =========================
-# PRIVATE PORTFOLIO
+# PRIVATE PORTFOLIO / AUTH
 # =========================
 private_available = True
 private_portfolio = {}
@@ -651,10 +855,6 @@ try:
 except Exception:
     private_available = False
 
-
-# =========================
-# MODE / AUTH
-# =========================
 mode = st.sidebar.selectbox("View Mode", ["Public", "Private"])
 authenticated = False
 
@@ -676,115 +876,99 @@ if mode == "Private":
 
 
 # =========================
-# ACTIVE PORTFOLIO
+# ACTIVE PORTFOLIO / SIDEBAR
 # =========================
 portfolio_data = get_active_portfolio(mode, authenticated, private_portfolio)
 prefix = get_mode_prefix(mode)
 
+base_currency = st.sidebar.selectbox(
+    "Base Currency",
+    ["USD", "EUR", "GBP"],
+    index=0,
+    help="Reference currency used to convert all positions, weights, returns, and rebalancing calculations.",
+)
 
-# =========================
-# WIDGET STATE
-# =========================
 init_mode_state(portfolio_data, prefix)
 
 if st.sidebar.button("Reset Portfolio", help="Restore the original share quantities defined for the active mode."):
     reset_mode_state(portfolio_data, prefix)
     st.rerun()
 
-st.sidebar.header("Portfolio Inputs", help="Adjust share quantities for the active portfolio.")
+st.sidebar.header("Portfolio Inputs")
 updated_portfolio = build_current_portfolio(portfolio_data, prefix, mode)
 
-st.sidebar.header("Optimization Settings", help="Controls used for the constrained efficient frontier simulation.")
+st.sidebar.header("Optimization Settings")
 
-profile = st.sidebar.selectbox(
-    "Investor Profile",
-    ["Aggressive", "Balanced", "Conservative"],
-    help="Select a default constraint set based on the investor risk profile.",
-)
-
+profile = st.sidebar.selectbox("Investor Profile", ["Aggressive", "Balanced", "Conservative"])
 defaults = get_default_constraints(profile)
 
 with st.sidebar.expander("Custom Constraints", expanded=False):
-    max_single_asset = st.number_input(
-        "Max single-asset weight",
-        min_value=0.05,
-        max_value=1.00,
-        value=float(defaults["max_single_asset"]),
-        step=0.01,
-        format="%.2f",
-        help="Maximum allowed portfolio weight for any single asset.",
-    )
-    min_bonds = st.number_input(
-        "Minimum bonds allocation",
-        min_value=0.00,
-        max_value=1.00,
-        value=float(defaults["min_bonds"]),
-        step=0.01,
-        format="%.2f",
-        help="Minimum required total weight allocated to bond assets.",
-    )
-    min_gold = st.number_input(
-        "Minimum gold allocation",
-        min_value=0.00,
-        max_value=1.00,
-        value=float(defaults["min_gold"]),
-        step=0.01,
-        format="%.2f",
-        help="Minimum required total weight allocated to gold assets.",
-    )
-    custom_rf = st.number_input(
-        "Risk-free rate",
-        min_value=0.00,
-        max_value=0.20,
-        value=float(RISK_FREE_RATE),
-        step=0.005,
-        format="%.3f",
-        help="Annual risk-free rate used in Sharpe ratio and Capital Market Line calculations.",
-    )
+    max_single_asset = st.number_input("Max single-asset weight", 0.05, 1.00, float(defaults["max_single_asset"]), 0.01, format="%.2f")
+    min_bonds = st.number_input("Minimum bonds allocation", 0.00, 1.00, float(defaults["min_bonds"]), 0.01, format="%.2f")
+    min_gold = st.number_input("Minimum gold allocation", 0.00, 1.00, float(defaults["min_gold"]), 0.01, format="%.2f")
+    risk_free_rate = st.number_input("Risk-free rate", 0.00, 0.20, float(DEFAULT_RISK_FREE_RATE), 0.005, format="%.3f")
 
 constraints = {
     "max_single_asset": max_single_asset,
     "min_bonds": min_bonds,
     "min_gold": min_gold,
 }
-risk_free_rate = custom_rf
 
-st.sidebar.header("Stress Testing", help="Apply category shocks to estimate stressed portfolio value.")
-equity_shock = st.sidebar.number_input(
-    "Equities Shock",
-    min_value=-1.00,
-    max_value=1.00,
-    value=-0.10,
-    step=0.01,
-    format="%.2f",
-    help="Shock applied to assets classified as equities.",
+st.sidebar.header("Transaction Cost Model")
+
+tc_model = st.sidebar.selectbox(
+    "Model",
+    ["Broker Profile", "Simple Bps", "Manual Override"],
+    help="Automated cost estimation model used in the rebalancing engine.",
 )
-bonds_shock = st.sidebar.number_input(
-    "Bonds Shock",
-    min_value=-1.00,
-    max_value=1.00,
-    value=-0.03,
-    step=0.01,
-    format="%.2f",
-    help="Shock applied to assets classified as bonds.",
-)
-gold_shock = st.sidebar.number_input(
-    "Gold Shock",
-    min_value=-1.00,
-    max_value=1.00,
-    value=0.05,
-    step=0.01,
-    format="%.2f",
-    help="Shock applied to assets classified as gold.",
-)
-rolling_window = st.sidebar.slider(
-    "Rolling Window (days)",
-    min_value=21,
-    max_value=252,
-    value=63,
-    step=21,
-    help="Window used to compute rolling volatility, Sharpe, beta, and drawdown.",
-)
+
+with st.sidebar.expander("Transaction Cost Parameters", expanded=False):
+    if tc_model == "Broker Profile":
+        us_commission_bps = st.number_input("US commission (bps)", 0.0, 100.0, 3.0, 0.5)
+        us_min_fee = st.number_input(f"US minimum fee ({base_currency})", 0.0, 50.0, 1.0, 0.5)
+        eu_commission_bps = st.number_input("Europe commission (bps)", 0.0, 100.0, 5.0, 0.5)
+        eu_min_fee = st.number_input(f"Europe minimum fee ({base_currency})", 0.0, 50.0, 1.5, 0.5)
+        uk_commission_bps = st.number_input("UK commission (bps)", 0.0, 100.0, 5.0, 0.5)
+        uk_min_fee = st.number_input(f"UK minimum fee ({base_currency})", 0.0, 50.0, 1.5, 0.5)
+        slippage_bps = st.number_input("Slippage (bps)", 0.0, 100.0, 5.0, 0.5)
+        fx_bps = st.number_input("FX conversion cost (bps)", 0.0, 100.0, 10.0, 0.5)
+
+        tc_params = {
+            "us_commission_bps": us_commission_bps,
+            "us_min_fee": us_min_fee,
+            "eu_commission_bps": eu_commission_bps,
+            "eu_min_fee": eu_min_fee,
+            "uk_commission_bps": uk_commission_bps,
+            "uk_min_fee": uk_min_fee,
+            "slippage_bps": slippage_bps,
+            "fx_bps": fx_bps,
+        }
+
+    elif tc_model == "Simple Bps":
+        simple_bps = st.number_input("All-in trading cost (bps)", 0.0, 100.0, 10.0, 0.5)
+        fx_bps = st.number_input("FX conversion cost (bps)", 0.0, 100.0, 10.0, 0.5)
+
+        tc_params = {
+            "simple_bps": simple_bps,
+            "fx_bps": fx_bps,
+        }
+
+    else:
+        manual_bps = st.number_input("Variable cost (bps)", 0.0, 100.0, 8.0, 0.5)
+        manual_fixed_fee = st.number_input(f"Fixed fee per trade ({base_currency})", 0.0, 100.0, 1.0, 0.5)
+        fx_bps = st.number_input("FX conversion cost (bps)", 0.0, 100.0, 10.0, 0.5)
+
+        tc_params = {
+            "manual_bps": manual_bps,
+            "manual_fixed_fee": manual_fixed_fee,
+            "fx_bps": fx_bps,
+        }
+
+st.sidebar.header("Stress Testing")
+equity_shock = st.sidebar.number_input("Equities Shock", -1.00, 1.00, -0.10, 0.01, format="%.2f")
+bonds_shock = st.sidebar.number_input("Bonds Shock", -1.00, 1.00, -0.03, 0.01, format="%.2f")
+gold_shock = st.sidebar.number_input("Gold Shock", -1.00, 1.00, 0.05, 0.01, format="%.2f")
+rolling_window = st.sidebar.slider("Rolling Window (days)", 21, 252, 63, 21)
 
 stress_shocks = {
     "Equities": equity_shock,
@@ -794,33 +978,55 @@ stress_shocks = {
 
 
 # =========================
-# MARKET DATA
+# MARKET DATA + FX
 # =========================
 tickers = list(updated_portfolio.keys())
-live_prices = get_prices(tickers)
-historical = get_historical_data(tickers, period="2y")
+live_prices_native = get_prices(tickers)
+asset_hist_native = get_historical_data(tickers, period="2y")
 
-if historical.empty:
+if asset_hist_native.empty:
     st.error("Could not load historical data.")
     st.stop()
 
-missing_hist = [ticker for ticker in tickers if ticker not in historical.columns]
+fx_prices, fx_hist, fx_tickers = build_fx_data(tickers, base_currency, period="2y")
+historical_base, missing_fx = convert_historical_to_base(asset_hist_native, tickers, base_currency, fx_hist)
+
+if historical_base.empty:
+    st.error("Could not build base-currency historical series.")
+    st.stop()
+
+missing_hist = [ticker for ticker in tickers if ticker not in historical_base.columns]
 if missing_hist:
-    st.warning(f"No historical data for: {', '.join(missing_hist)}")
+    st.warning(f"No converted historical data for: {', '.join(missing_hist)}")
+
+if missing_fx:
+    st.warning(f"Missing FX history for: {', '.join(missing_fx)}")
 
 
 # =========================
 # PORTFOLIO TABLE
 # =========================
-df, total_value = build_portfolio_df(updated_portfolio, live_prices, historical)
+df, total_value = build_portfolio_df(
+    updated_portfolio=updated_portfolio,
+    live_prices_native=live_prices_native,
+    asset_hist_native=asset_hist_native,
+    fx_prices=fx_prices,
+    fx_hist=fx_hist,
+    base_currency=base_currency,
+)
 
-st.markdown('<div class="bb-topline">PX_LAST · WGT · RISK · OPTIMIZATION</div>', unsafe_allow_html=True)
+st.markdown('<div class="bb-topline">PX_LAST · FX · WGT · RISK · OPTIMIZATION · COSTS</div>', unsafe_allow_html=True)
 
-info_section("Portfolio", "Snapshot of current positions, prices, market values, current weights, target weights, and deviations.")
+info_section("Portfolio", f"Snapshot of current positions in {base_currency}, including FX conversion, current weights, target weights, and deviations.")
+
 display_df = df[[
     "Ticker",
     "Name",
+    "Market",
+    "Native Currency",
     "Shares",
+    "Native Price",
+    "FX Rate",
     "Price",
     "Value",
     "Weight %",
@@ -829,13 +1035,13 @@ display_df = df[[
 ]].copy()
 
 st.dataframe(display_df, use_container_width=True)
-info_metric(st, "Total Value", f"${total_value:,.2f}", "Current market value of the portfolio using the latest available prices.")
+info_metric(st, f"Total Value ({base_currency})", f"{base_currency} {total_value:,.2f}", f"Current market value of the portfolio converted into {base_currency}.")
 
 
 # =========================
-# ALLOCATION CHARTS
+# ALLOCATION
 # =========================
-info_section("Portfolio Allocation", "Portfolio composition by market value. In practice this is the current capital allocation across assets.")
+info_section("Portfolio Allocation", f"Portfolio composition by market value in {base_currency}.")
 
 pie_values = df["Value"] if total_value > 0 else df["Weight"]
 fig_pie = px.pie(df, names="Name", values=pie_values, hole=0.4)
@@ -863,8 +1069,8 @@ st.plotly_chart(fig_bar, use_container_width=True)
 # =========================
 # PERFORMANCE
 # =========================
-portfolio_returns, asset_returns = build_portfolio_returns(df, historical)
-benchmark_returns = build_benchmark_returns()
+portfolio_returns, asset_returns = build_portfolio_returns(df, historical_base)
+benchmark_returns = build_benchmark_returns(base_currency)
 
 total_return = 0.0
 volatility = 0.0
@@ -913,7 +1119,7 @@ if not portfolio_returns.empty and not benchmark_returns.empty:
         if tracking_error > 0:
             information_ratio = float((excess.mean() * 252) / tracking_error)
 
-info_section("Performance Metrics", "Return and risk indicators derived from historical daily returns.")
+info_section("Performance Metrics", f"Return and risk indicators in base currency ({base_currency}) derived from historical daily returns.")
 
 c1, c2, c3, c4 = st.columns(4)
 info_metric(c1, "Return", f"{total_return:.2%}", "Cumulative portfolio return over the historical sample.")
@@ -927,8 +1133,12 @@ info_metric(c6, "Beta", f"{beta:.2f}", "Sensitivity of portfolio returns to benc
 info_metric(c7, "Tracking Error", f"{tracking_error:.2%}", "Annualized volatility of active returns versus the benchmark.")
 info_metric(c8, "Information Ratio", f"{information_ratio:.2f}", "Active return divided by tracking error.")
 
+
+# =========================
+# PERFORMANCE VS BENCHMARK
+# =========================
 if not portfolio_cum.empty:
-    info_section("Performance vs Benchmark", "Cumulative growth of the portfolio compared with the benchmark (VOO).")
+    info_section("Performance vs Benchmark", "Cumulative growth of the portfolio compared with the benchmark (VOO), both expressed in the selected base currency.")
 
     fig_perf = go.Figure()
     fig_perf.add_scatter(x=portfolio_cum.index, y=portfolio_cum, name="Portfolio")
@@ -1136,7 +1346,6 @@ else:
         st.dataframe(rec_df_min, use_container_width=True)
 
     info_section("Optimization Weights", "Weight breakdown for the optimal simulated portfolios.")
-
     opt1, opt2 = st.columns(2)
 
     with opt1:
@@ -1149,11 +1358,11 @@ else:
 
 
 # =========================
-# PHASE 1 - REBALANCING ENGINE
+# REBALANCING ENGINE + COSTS
 # =========================
 info_section(
     "Rebalancing Engine",
-    "Trade list showing the required buy and sell adjustments to move from the current allocation to a selected target allocation."
+    "Trade list showing the required buy and sell adjustments to move from the current allocation to a selected target allocation, including estimated transaction costs."
 )
 
 target_options = ["Base Target"]
@@ -1165,7 +1374,7 @@ if min_vol_row is not None:
 rebal_target = st.selectbox(
     "Rebalancing Target",
     target_options,
-    help="Choose the target allocation used to generate the rebalancing trade list."
+    help="Choose the target allocation used to generate the trade list."
 )
 
 if rebal_target == "Base Target":
@@ -1175,22 +1384,30 @@ elif rebal_target == "Max Sharpe" and max_sharpe_row is not None:
 else:
     target_weight_map = dict(zip(usable, min_vol_row["Weights"]))
 
-rebal_df = build_rebalancing_table(df, target_weight_map)
+rebal_df = build_rebalancing_table(
+    df_current=df,
+    target_weight_map=target_weight_map,
+    base_currency=base_currency,
+    tc_model=tc_model,
+    tc_params=tc_params,
+)
 
 buy_value = rebal_df.loc[rebal_df["Action"] == "Buy", "Value Delta"].sum()
 sell_value = -rebal_df.loc[rebal_df["Action"] == "Sell", "Value Delta"].sum()
-net_cash = sell_value - buy_value
+total_estimated_cost = rebal_df["Estimated Cost"].sum()
+net_cash_after_costs = rebal_df["Net Cash Flow"].sum()
 
-r1, r2, r3 = st.columns(3)
-info_metric(r1, "Total Buy Value", f"${buy_value:,.2f}", "Total capital required for buy trades.")
-info_metric(r2, "Total Sell Value", f"${sell_value:,.2f}", "Total capital released from sell trades.")
-info_metric(r3, "Net Cash Impact", f"${net_cash:,.2f}", "Positive means net cash released. Negative means extra cash required.")
+r1, r2, r3, r4 = st.columns(4)
+info_metric(r1, "Total Buy Value", f"{base_currency} {buy_value:,.2f}", "Total gross capital required for buy trades.")
+info_metric(r2, "Total Sell Value", f"{base_currency} {sell_value:,.2f}", "Total gross capital released by sell trades.")
+info_metric(r3, "Estimated Transaction Costs", f"{base_currency} {total_estimated_cost:,.2f}", "Estimated total trading costs under the selected transaction cost model.")
+info_metric(r4, "Net Cash Impact After Costs", f"{base_currency} {net_cash_after_costs:,.2f}", "Positive means net cash released. Negative means additional cash required.")
 
 st.dataframe(rebal_df, use_container_width=True)
 
 
 # =========================
-# PHASE 1 - STRESS TESTING
+# STRESS TESTING
 # =========================
 info_section(
     "Scenario / Stress Testing",
@@ -1202,9 +1419,9 @@ stress_pnl = stressed_total_value - current_total_value
 stress_return = (stressed_total_value / current_total_value - 1) if current_total_value > 0 else 0.0
 
 s1, s2, s3 = st.columns(3)
-info_metric(s1, "Current Portfolio Value", f"${current_total_value:,.2f}", "Current market value before stress shocks.")
-info_metric(s2, "Stressed Portfolio Value", f"${stressed_total_value:,.2f}", "Portfolio value after applying the stress scenario.")
-info_metric(s3, "Scenario P/L", f"${stress_pnl:,.2f} ({stress_return:.2%})", "Profit or loss implied by the scenario.")
+info_metric(s1, "Current Portfolio Value", f"{base_currency} {current_total_value:,.2f}", "Current portfolio value before the stress scenario.")
+info_metric(s2, "Stressed Portfolio Value", f"{base_currency} {stressed_total_value:,.2f}", "Portfolio value after applying the stress scenario.")
+info_metric(s3, "Scenario P/L", f"{base_currency} {stress_pnl:,.2f} ({stress_return:.2%})", "Profit or loss implied by the selected shocks.")
 
 fig_stress = go.Figure()
 fig_stress.add_bar(x=stress_df["Ticker"], y=stress_df["Current Value"], name="Current Value")
@@ -1221,7 +1438,7 @@ st.dataframe(stress_df, use_container_width=True)
 
 
 # =========================
-# PHASE 1 - ROLLING METRICS
+# ROLLING METRICS
 # =========================
 info_section(
     "Rolling Metrics",
@@ -1261,9 +1478,14 @@ else:
     last_val = rolling_df[available_metric].dropna()
     if not last_val.empty:
         last_value = last_val.iloc[-1]
+        if "Sharpe" in available_metric or "Beta" in available_metric:
+            latest_display = f"{last_value:.2f}"
+        else:
+            latest_display = f"{last_value:.2%}"
+
         info_metric(
             st,
             f"Latest {available_metric}",
-            f"{last_value:.2%}" if "Sharpe" not in available_metric and "Beta" not in available_metric else f"{last_value:.2f}",
+            latest_display,
             f"Most recent value of {available_metric.lower()} using a {rolling_window}-day rolling window."
         )
