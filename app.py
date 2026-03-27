@@ -8,7 +8,7 @@ from utils import get_prices, get_historical_data
 st.title("Portfolio Dashboard")
 
 # =========================
-# LOAD PRIVATE
+# PRIVATE LOAD
 # =========================
 private_available = False
 real_portfolio = {}
@@ -25,7 +25,6 @@ try:
     }
 
     private_available = True
-
 except:
     private_available = False
 
@@ -37,17 +36,19 @@ mode = st.sidebar.selectbox("View Mode", ["Public", "Private"])
 authenticated = False
 
 if mode == "Private":
-    if not private_available:
-        st.error("Configure secrets")
-    else:
+    if private_available:
         password = st.sidebar.text_input("Password", type="password")
 
         if password == st.secrets["auth"]["password"]:
             authenticated = True
             st.success("Access granted")
+        elif password:
+            st.error("Incorrect password")
+    else:
+        st.error("Configure secrets")
 
 # =========================
-# SELECT DATA
+# SELECT PORTFOLIO
 # =========================
 if mode == "Private" and authenticated:
     portfolio_data = real_portfolio
@@ -55,61 +56,43 @@ else:
     portfolio_data = public_portfolio
 
 # =========================
-# SAFE SESSION STATE (NO BUGS)
+# 🔥 RESET TOTAL POR MODO
 # =========================
-if "portfolio_state" not in st.session_state:
-    st.session_state.portfolio_state = {}
+if "mode_memory" not in st.session_state:
+    st.session_state.mode_memory = mode
 
-# reconstrucción total (clave)
-new_state = {}
-
-for t in portfolio_data:
-    new_state[t] = st.session_state.portfolio_state.get(
-        t, portfolio_data[t]["shares"]
-    )
-
-st.session_state.portfolio_state = new_state
-
-# =========================
-# RESET
-# =========================
-if st.sidebar.button("Reset Portfolio"):
-    st.session_state.portfolio_state = {
-        t: portfolio_data[t]["shares"] for t in portfolio_data
-    }
+if st.session_state.mode_memory != mode:
+    # reset completo
+    st.session_state.clear()
+    st.session_state.mode_memory = mode
     st.rerun()
 
 # =========================
-# INPUTS (100% SAFE)
+# 🔥 INIT STATE CORRECTO
+# =========================
+if "shares" not in st.session_state:
+    st.session_state.shares = {
+        t: portfolio_data[t]["shares"] for t in portfolio_data
+    }
+
+# =========================
+# INPUTS (SIN BUGS)
 # =========================
 st.sidebar.header("Portfolio Inputs")
 
-updated = {}
-
 for ticker in portfolio_data:
-
-    shares = st.sidebar.number_input(
+    st.session_state.shares[ticker] = st.sidebar.number_input(
         f"{ticker} shares",
         min_value=0.0,
         step=0.1,
-        value=float(st.session_state.portfolio_state[ticker]),
+        value=float(st.session_state.shares.get(ticker, portfolio_data[ticker]["shares"])),
         key=f"{mode}_{ticker}"
     )
 
-    updated[ticker] = {
-        "name": portfolio_data[ticker]["name"],
-        "shares": float(shares)
-    }
-
-# actualizar estado DESPUÉS del input
-st.session_state.portfolio_state = {
-    t: updated[t]["shares"] for t in updated
-}
-
 # =========================
-# DATA (ROBUSTA)
+# DATA
 # =========================
-tickers = list(updated.keys())
+tickers = list(st.session_state.shares.keys())
 
 prices = get_prices(tickers)
 historical = get_historical_data(tickers)
@@ -119,10 +102,9 @@ historical = historical.ffill().dropna()
 data = []
 total_value = 0
 
-for t in updated:
-    shares = updated[t]["shares"]
+for t in tickers:
+    shares = float(st.session_state.shares[t])
 
-    # 🔥 precio seguro
     price = prices.get(t)
 
     if price is None or not isinstance(price, (int, float)):
@@ -131,12 +113,12 @@ for t in updated:
         except:
             price = 0.0
 
-    value = float(shares) * float(price)
+    value = shares * price
     total_value += value
 
     data.append({
         "Ticker": t,
-        "Name": updated[t]["name"],
+        "Name": portfolio_data[t]["name"],
         "Shares": shares,
         "Price": round(price, 2),
         "Value": round(value, 2)
@@ -154,7 +136,6 @@ else:
 
 df["Weight %"] = (df["Weight"] * 100).round(2)
 
-# target equal weight
 target_weight = 1 / len(df)
 
 df["Target %"] = round(target_weight * 100, 2)
