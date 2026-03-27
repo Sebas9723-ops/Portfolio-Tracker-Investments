@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 from portfolio import portfolio
 from utils import get_prices, get_historical_data
 
-st.title("Sebastian'sPortfolio Dashboard")
+st.title("Portfolio Dashboard")
 
 st.info("This dashboard allows dynamic portfolio simulation. Changes are not saved.")
 
@@ -26,6 +26,7 @@ if st.sidebar.button("Reset to Original Portfolio"):
     st.session_state.portfolio_state = {
         ticker: portfolio[ticker]["shares"] for ticker in portfolio
     }
+    st.rerun()
 
 # =========================
 # SIDEBAR INPUTS
@@ -38,9 +39,9 @@ for ticker in portfolio:
     shares = st.sidebar.number_input(
         f"{ticker} shares",
         min_value=0.0,
-        value=float(st.session_state.portfolio_state[ticker]),
         step=1.0,
-        key=f"{ticker}_input"
+        key=ticker,
+        value=float(st.session_state.portfolio_state[ticker])
     )
 
     st.session_state.portfolio_state[ticker] = shares
