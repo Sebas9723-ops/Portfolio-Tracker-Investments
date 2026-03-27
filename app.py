@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import plotly.graph_objects as go
 
 from portfolio import public_portfolio
 from utils import get_prices, get_historical_data
@@ -65,12 +64,12 @@ else:
     st.info("Public portfolio view")
 
 # =========================
-# SESSION STATE (FIX DEFINITIVO)
+# SESSION STATE (FIX TOTAL)
 # =========================
 if "portfolio_state" not in st.session_state:
     st.session_state.portfolio_state = {}
 
-# Agregar tickers nuevos
+# Añadir tickers nuevos
 for ticker in portfolio_data:
     if ticker not in st.session_state.portfolio_state:
         st.session_state.portfolio_state[ticker] = portfolio_data[ticker]["shares"]
@@ -81,6 +80,17 @@ tickers_guardados = set(st.session_state.portfolio_state.keys())
 
 for t in list(tickers_guardados - tickers_actuales):
     del st.session_state.portfolio_state[t]
+
+# 🔥 LIMPIAR KEYS DE INPUTS AL CAMBIAR MODO
+if "last_mode" not in st.session_state:
+    st.session_state.last_mode = mode
+
+if st.session_state.last_mode != mode:
+    for key in list(st.session_state.keys()):
+        if key.startswith("Public_") or key.startswith("Private_"):
+            del st.session_state[key]
+
+    st.session_state.last_mode = mode
 
 # =========================
 # RESET
@@ -104,7 +114,7 @@ for ticker in portfolio_data:
         min_value=0.0,
         step=0.1,
         value=float(st.session_state.portfolio_state[ticker]),
-        key=ticker
+        key=f"{mode}_{ticker}"  # 🔥 FIX CLAVE
     )
 
     st.session_state.portfolio_state[ticker] = shares
@@ -138,7 +148,7 @@ for t in updated:
     shares = updated[t]["shares"]
     price = prices.get(t)
 
-    # FIX precios en 0
+    # FIX precios faltantes
     if price is None or price == 0:
         try:
             price = historical[t].dropna().iloc[-1]
