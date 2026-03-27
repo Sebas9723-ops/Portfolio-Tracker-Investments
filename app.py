@@ -45,8 +45,10 @@ def reset_mode_state(portfolio_data: dict, prefix: str):
         st.session_state[f"{prefix}_shares_{ticker}"] = float(meta["shares"])
 
 
-def build_current_portfolio(portfolio_data: dict, prefix: str):
+def build_current_portfolio(portfolio_data: dict, prefix: str, mode: str):
     updated = {}
+
+    step_value = 1.0 if mode == "Public" else 0.0001
 
     for ticker, meta in portfolio_data.items():
         widget_key = f"{prefix}_shares_{ticker}"
@@ -54,7 +56,8 @@ def build_current_portfolio(portfolio_data: dict, prefix: str):
         st.sidebar.number_input(
             f"{ticker} shares",
             min_value=0.0,
-            step=0.0001,
+            step=step_value,
+            format="%.4f",
             key=widget_key,
         )
 
@@ -104,10 +107,10 @@ def build_portfolio_df(updated_portfolio: dict, live_prices: dict, historical: p
             {
                 "Ticker": ticker,
                 "Name": meta["name"],
-                "Shares": shares,
+                "Shares": round(shares, 4),
                 "Price": round(price, 2),
                 "Value": round(value, 2),
-                "Base Shares": base_shares,
+                "Base Shares": round(base_shares, 4),
                 "Base Value": round(base_value, 2),
             }
         )
@@ -141,7 +144,7 @@ def build_portfolio_returns(df: pd.DataFrame, historical: pd.DataFrame):
     returns = hist.pct_change().dropna()
 
     if returns.empty:
-        return pd.Series(dtype=float), pd.DataFrame()
+        return pd.Series(dtype=float), returns
 
     weight_map = df.set_index("Ticker")["Weight"]
     weights = weight_map.loc[usable]
@@ -246,7 +249,7 @@ if st.sidebar.button("Reset Portfolio"):
     st.rerun()
 
 st.sidebar.header("Portfolio Inputs")
-updated_portfolio = build_current_portfolio(portfolio_data, prefix)
+updated_portfolio = build_current_portfolio(portfolio_data, prefix, mode)
 
 # -------------------------
 # Market data
@@ -298,6 +301,7 @@ fig_bar = go.Figure()
 fig_bar.add_bar(x=df["Ticker"], y=df["Weight %"], name="Actual %")
 fig_bar.add_bar(x=df["Ticker"], y=df["Target %"], name="Target %")
 fig_bar.update_layout(barmode="group")
+
 st.plotly_chart(fig_bar, use_container_width=True)
 
 # -------------------------
@@ -418,7 +422,6 @@ else:
                 colorbar=dict(title="Sharpe"),
             ),
             name="Simulated Portfolios",
-            text=[str(np.round(w, 4)) for w in frontier["Weights"]],
             hovertemplate="Volatility: %{x:.2%}<br>Return: %{y:.2%}<extra></extra>",
         )
     )
