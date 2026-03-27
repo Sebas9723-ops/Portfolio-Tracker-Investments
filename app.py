@@ -7,11 +7,24 @@ import json
 import os
 
 from portfolio import public_portfolio
+from utils import get_prices, get_historical_data
 
-# Try to load private portfolio
+# =========================
+# LOAD PRIVATE FROM SECRETS
+# =========================
 try:
-    from private_portfolio import real_portfolio
+    private_portfolio_secrets = st.secrets["private_portfolio"]
+
+    real_portfolio = {
+        "SCHD": {"name": "Dividend ETF", "shares": private_portfolio_secrets["SCHD"]},
+        "VOO": {"name": "S&P 500", "shares": private_portfolio_secrets["VOO"]},
+        "VWCE.DE": {"name": "All World", "shares": private_portfolio_secrets["VWCE_DE"]},
+        "IGLN.L": {"name": "Gold", "shares": private_portfolio_secrets["IGLN_L"]},
+        "BND": {"name": "Bonds", "shares": private_portfolio_secrets["BND"]},
+    }
+
     private_available = True
+
 except:
     private_available = False
 
@@ -33,12 +46,12 @@ def save_private_state(state):
 st.title("Portfolio Dashboard")
 
 # =========================
-# MODE SELECTOR
+# MODE
 # =========================
 mode = st.sidebar.selectbox("View Mode", ["Public", "Private"])
 
 # =========================
-# PASSWORD PROTECTION
+# PASSWORD
 # =========================
 authenticated = False
 
@@ -66,7 +79,7 @@ else:
     st.info("Public portfolio view.")
 
 # =========================
-# SESSION STATE INIT / SYNC
+# SESSION STATE
 # =========================
 if "current_mode" not in st.session_state:
     st.session_state.current_mode = mode
@@ -79,7 +92,6 @@ if "portfolio_state" not in st.session_state:
             ticker: portfolio_data[ticker]["shares"] for ticker in portfolio_data
         }
 
-# Reset when switching mode
 if st.session_state.current_mode != mode:
     if mode == "Private" and authenticated:
         st.session_state.portfolio_state = load_private_state(portfolio_data)
@@ -91,7 +103,7 @@ if st.session_state.current_mode != mode:
     st.session_state.current_mode = mode
 
 # =========================
-# RESET BUTTON
+# RESET
 # =========================
 if st.sidebar.button("Reset to Original Portfolio"):
     st.session_state.portfolio_state = {
@@ -104,7 +116,7 @@ if st.sidebar.button("Reset to Original Portfolio"):
     st.rerun()
 
 # =========================
-# SIDEBAR INPUTS
+# INPUTS
 # =========================
 st.sidebar.header("Portfolio Inputs")
 
@@ -126,29 +138,27 @@ for ticker in portfolio_data:
         "shares": shares
     }
 
-# Save ONLY in private mode
+# Save only in private
 if mode == "Private" and authenticated:
     save_private_state(st.session_state.portfolio_state)
 
 # =========================
 # DATA
 # =========================
-from utils import get_prices, get_historical_data
-
 tickers = list(updated_portfolio.keys())
 
 prices = get_prices(tickers)
 historical = get_historical_data(tickers)
 
 if historical is None or historical.empty:
-    st.error("Error loading historical data")
+    st.error("Error loading data")
     st.stop()
 
 historical = historical.ffill().dropna()
 returns = historical.pct_change().dropna()
 
 # =========================
-# BUILD DATAFRAME
+# BUILD DF
 # =========================
 data = []
 total_value = 0
@@ -157,11 +167,8 @@ for ticker in updated_portfolio:
     shares = updated_portfolio[ticker]["shares"]
     price = prices.get(ticker, None)
 
-    if price is not None:
-        value = shares * price
-        total_value += value
-    else:
-        value = 0
+    value = shares * price if price else 0
+    total_value += value
 
     data.append({
         "Ticker": ticker,
@@ -172,19 +179,13 @@ for ticker in updated_portfolio:
 
 df = pd.DataFrame(data)
 
-if total_value > 0:
-    df["Weight"] = df["Value"] / total_value
-else:
-    df["Weight"] = 0
-
+df["Weight"] = df["Value"] / total_value if total_value > 0 else 0
 df["Weight %"] = (df["Weight"] * 100).round(2)
 
 # =========================
-# TARGET ALLOCATION
+# TARGET
 # =========================
-target_weights = {
-    ticker: 1 / len(df) for ticker in df["Ticker"]
-}
+target_weights = {t: 1 / len(df) for t in df["Ticker"]}
 
 df["Target Weight"] = df["Ticker"].map(target_weights)
 df["Target %"] = (df["Target Weight"] * 100).round(2)
@@ -193,72 +194,18 @@ df["Deviation"] = df["Weight"] - df["Target Weight"]
 df["Deviation %"] = (df["Deviation"] * 100).round(2)
 
 # =========================
-# RETURNS
-# =========================
-weights = df["Weight"].values
-
-portfolio_returns = returns.dot(weights)
-portfolio_cum = (1 + portfolio_returns).cumprod()
-
-# =========================
-# BENCHMARK
-# =========================
-sp500_data = get_historical_data(["VOO"])
-
-if sp500_data is not None and "VOO" in sp500_data:
-    sp500 = sp500_data["VOO"]
-    sp500_returns = sp500.pct_change().dropna()
-    sp500_cum = (1 + sp500_returns).cumprod()
-else:
-    sp500_returns = pd.Series(dtype=float)
-    sp500_cum = pd.Series(dtype=float)
-
-# =========================
-# METRICS
-# =========================
-if not portfolio_returns.empty:
-    mean_return = portfolio_returns.mean() * 252
-    volatility = portfolio_returns.std() * np.sqrt(252)
-    sharpe = mean_return / volatility if volatility != 0 else 0
-
-    cumulative = portfolio_cum
-    peak = cumulative.cummax()
-    drawdown = (cumulative - peak) / peak
-    max_dd = drawdown.min()
-
-    var_95 = np.percentile(portfolio_returns, 5)
-else:
-    mean_return = volatility = sharpe = max_dd = var_95 = 0
-
-# =========================
 # DISPLAY
 # =========================
 st.subheader("Portfolio")
-
-if mode == "Public":
-    st.dataframe(df[[
-        "Ticker", "Name", "Weight %", "Target %", "Deviation %"
-    ]])
-else:
-    st.dataframe(df)
+st.dataframe(df)
 
 st.metric("Total Value", f"${total_value:,.2f}" if mode == "Private" else "Hidden")
 
 # =========================
-# CHARTS
+# PIE
 # =========================
 st.subheader("Portfolio Allocation")
 
 values = df["Value"] if mode == "Private" else df["Weight"]
 
 st.plotly_chart(px.pie(df, names="Name", values=values, hole=0.4))
-
-st.subheader("Target vs Actual Allocation")
-
-fig_target = go.Figure()
-fig_target.add_trace(go.Bar(x=df["Ticker"], y=df["Weight"], name="Actual"))
-fig_target.add_trace(go.Bar(x=df["Ticker"], y=df["Target Weight"], name="Target"))
-
-fig_target.update_layout(barmode="group")
-
-st.plotly_chart(fig_target)

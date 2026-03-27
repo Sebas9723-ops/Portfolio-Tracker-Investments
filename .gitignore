@@ -1,3 +1,3 @@
 private_portfolio.py
-.streamlit/secrets.toml
 private_state.json
+.streamlit/secrets.toml
