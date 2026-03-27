@@ -64,23 +64,15 @@ else:
     st.info("Public portfolio view")
 
 # =========================
-# 🔥 FIX DEFINITIVO (RESET TOTAL)
-# =========================
-if "last_mode_for_inputs" not in st.session_state:
-    st.session_state.last_mode_for_inputs = mode
-
-if st.session_state.last_mode_for_inputs != mode:
-    st.session_state.clear()  # 🔥 limpia TODO el estado
-    st.session_state.last_mode_for_inputs = mode
-    st.rerun()
-
-# =========================
-# SESSION STATE LIMPIO
+# 🔥 FIX DEFINITIVO KEYERROR
 # =========================
 if "portfolio_state" not in st.session_state:
-    st.session_state.portfolio_state = {
-        t: portfolio_data[t]["shares"] for t in portfolio_data
-    }
+    st.session_state.portfolio_state = {}
+
+# 🔥 GARANTIZAR QUE TODOS LOS TICKERS EXISTEN
+for ticker in portfolio_data:
+    if ticker not in st.session_state.portfolio_state:
+        st.session_state.portfolio_state[ticker] = portfolio_data[ticker]["shares"]
 
 # =========================
 # RESET BUTTON
@@ -92,19 +84,24 @@ if st.sidebar.button("Reset Portfolio"):
     st.rerun()
 
 # =========================
-# INPUTS
+# INPUTS (FIX FINAL)
 # =========================
 st.sidebar.header("Portfolio Inputs")
 
 updated = {}
 
 for ticker in portfolio_data:
+
+    # 🔥 GARANTÍA ABSOLUTA
+    if ticker not in st.session_state.portfolio_state:
+        st.session_state.portfolio_state[ticker] = portfolio_data[ticker]["shares"]
+
     shares = st.sidebar.number_input(
         f"{ticker} shares",
         min_value=0.0,
         step=0.1,
         value=float(st.session_state.portfolio_state[ticker]),
-        key=f"{mode}_{ticker}"  # 🔥 separación total
+        key=f"{mode}_{ticker}"
     )
 
     st.session_state.portfolio_state[ticker] = shares
@@ -138,7 +135,6 @@ for t in updated:
     shares = updated[t]["shares"]
     price = prices.get(t)
 
-    # 🔥 FIX PRECIOS EN 0
     if price is None or price == 0:
         try:
             price = historical[t].dropna().iloc[-1]
