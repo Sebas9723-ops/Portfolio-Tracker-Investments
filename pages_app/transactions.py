@@ -14,6 +14,13 @@ from app_core import (
 )
 
 
+def _get_manage_password() -> str:
+    try:
+        return str(st.secrets["auth"]["manage_password"])
+    except Exception:
+        return ""
+
+
 def render_transactions_page(ctx):
     render_page_title("Transactions")
 
@@ -23,7 +30,7 @@ def render_transactions_page(ctx):
 
     info_section(
         "Add Transaction",
-        "Register a buy or sell operation. Share quantities in Private mode are derived from this transaction ledger."
+        "Register a buy or sell operation. Current shares in Private mode are derived from this transaction ledger."
     )
 
     tx_tickers = []
@@ -74,6 +81,7 @@ def render_transactions_page(ctx):
             manual_ticker = st.text_input("Manual Ticker (only if OTHER)").strip().upper()
             notes = st.text_input("Notes").strip()
             update_cash = st.checkbox("Update cash balance automatically", value=True)
+            auth_password = st.text_input("Authorization Password", type="password")
 
         ticker = manual_ticker if ticker_choice == "OTHER" else ticker_choice
         native_ccy = asset_currency(ticker) if ticker else "—"
@@ -82,6 +90,10 @@ def render_transactions_page(ctx):
         submitted = st.form_submit_button("Add Transaction")
 
     if submitted:
+        if auth_password != _get_manage_password():
+            st.error("Invalid authorization password.")
+            return
+
         if not ticker:
             st.error("Please select a ticker or enter one manually.")
             return
@@ -110,7 +122,7 @@ def render_transactions_page(ctx):
                 delta = gross_value - float(fees)
             adjust_cash_balance(native_ccy, delta)
 
-        st.success("Transaction saved successfully.")
+        st.success("Transaction saved successfully. Current shares were updated.")
         st.rerun()
 
     info_section("Cash Balances", "Edit and save current cash balances by currency.")
