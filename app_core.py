@@ -551,7 +551,7 @@ def render_market_clocks():
       setTimeout(renderClocks, 700);
     </script>
     """
-    components_html(component, height=980, scrolling=False)
+    components_html(component, height=620, scrolling=False)
 
 # =========================
 # INVESTMENT HORIZON
