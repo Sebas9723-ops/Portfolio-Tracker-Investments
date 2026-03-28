@@ -4,6 +4,9 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+import gspread
+
+from google.oauth2.service_account import Credentials
 
 from portfolio import public_portfolio
 from utils import get_prices, get_historical_data
@@ -227,6 +230,104 @@ def load_private_portfolio():
     }
 
 
+def get_manage_password():
+    auth_section = dict(st.secrets["auth"])
+    return auth_section.get("manage_password", auth_section["password"])
+
+
+def merge_private_portfolios(base_private: dict, custom_private: dict):
+    merged = dict(base_private)
+    merged.update(custom_private)
+    return merged
+
+
+def validate_new_ticker(ticker: str):
+    try:
+        live = get_prices([ticker]).get(ticker)
+        hist = get_historical_data([ticker], period="1mo")
+
+        live_ok = isinstance(live, (int, float)) and pd.notna(live) and live > 0
+        hist_ok = not hist.empty and ticker in hist.columns
+
+        return live_ok or hist_ok
+    except Exception:
+        return False
+
+
+# =========================
+# GOOGLE SHEETS PRIVATE POSITIONS
+# =========================
+def connect_private_positions_worksheet():
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+
+    creds = Credentials.from_service_account_info(
+        dict(st.secrets["gcp_service_account"]),
+        scopes=scopes,
+    )
+
+    client = gspread.authorize(creds)
+
+    sheets_cfg = dict(st.secrets["sheets"])
+    sheet_url = sheets_cfg["private_positions_sheet_url"]
+    worksheet_name = sheets_cfg.get("private_positions_worksheet", "private_positions")
+
+    spreadsheet = client.open_by_url(sheet_url)
+
+    try:
+        ws = spreadsheet.worksheet(worksheet_name)
+    except gspread.WorksheetNotFound:
+        ws = spreadsheet.add_worksheet(title=worksheet_name, rows=200, cols=3)
+
+    expected_header = ["Ticker", "Name", "Shares"]
+    current_header = ws.row_values(1)
+
+    if current_header != expected_header:
+        ws.clear()
+        ws.update(values=[expected_header], range_name="A1:C1")
+
+    return ws
+
+
+def load_private_custom_positions_from_sheets():
+    ws = connect_private_positions_worksheet()
+    records = ws.get_all_records()
+
+    positions = {}
+    for row in records:
+        ticker = str(row.get("Ticker", "")).strip().upper()
+        name = str(row.get("Name", "")).strip()
+        shares = row.get("Shares", 0)
+
+        if ticker and name:
+            try:
+                positions[ticker] = {
+                    "name": name,
+                    "shares": float(shares),
+                }
+            except Exception:
+                continue
+
+    return positions
+
+
+def save_private_custom_positions_to_sheets(custom_positions: dict):
+    ws = connect_private_positions_worksheet()
+
+    rows = [["Ticker", "Name", "Shares"]]
+    for ticker in sorted(custom_positions.keys()):
+        meta = custom_positions[ticker]
+        rows.append([ticker, meta["name"], float(meta["shares"])])
+
+    ws.clear()
+    ws.update(values=rows, range_name="A1")
+
+
+# =========================
+# GENERAL HELPERS
+# =========================
 def get_active_portfolio(mode: str, authenticated: bool, private_portfolio: dict):
     if mode == "Private" and authenticated:
         return private_portfolio
@@ -848,12 +949,27 @@ def compute_rolling_metrics(portfolio_returns: pd.Series, benchmark_returns: pd.
 # PRIVATE PORTFOLIO / AUTH
 # =========================
 private_available = True
+positions_sheet_available = True
 private_portfolio = {}
+private_custom_positions = {}
 
 try:
-    private_portfolio = load_private_portfolio()
+    base_private_portfolio = load_private_portfolio()
 except Exception:
     private_available = False
+    base_private_portfolio = {}
+
+if private_available:
+    try:
+        private_custom_positions = load_private_custom_positions_from_sheets()
+    except Exception:
+        positions_sheet_available = False
+        private_custom_positions = {}
+
+    private_portfolio = merge_private_portfolios(
+        base_private_portfolio,
+        private_custom_positions,
+    )
 
 mode = st.sidebar.selectbox("View Mode", ["Public", "Private"])
 authenticated = False
@@ -880,6 +996,91 @@ if mode == "Private":
 # =========================
 portfolio_data = get_active_portfolio(mode, authenticated, private_portfolio)
 prefix = get_mode_prefix(mode)
+
+if mode == "Private" and authenticated:
+    st.sidebar.header(
+        "Private Position Manager",
+        help="Add or remove private positions. Changes are stored in Google Sheets and loaded into the private portfolio."
+    )
+
+    if not positions_sheet_available:
+        st.sidebar.warning("Google Sheets connection is not available.")
+    else:
+        manager_password_input = st.sidebar.text_input(
+            "Manager Password",
+            type="password",
+            key="manager_password_input",
+            help="Required to add or remove private positions.",
+        )
+
+        manager_unlocked = manager_password_input == get_manage_password()
+
+        if manager_password_input and not manager_unlocked:
+            st.sidebar.error("Incorrect manager password.")
+
+        if manager_unlocked:
+            with st.sidebar.form("add_private_position_form", clear_on_submit=True):
+                new_ticker = st.text_input(
+                    "New Ticker",
+                    help="Use the exact Yahoo Finance ticker, for example VOO, VWCE.DE or IGLN.L."
+                ).strip().upper()
+
+                new_name = st.text_input(
+                    "Position Name",
+                    help="Display name shown in the dashboard."
+                ).strip()
+
+                new_shares = st.number_input(
+                    "Initial Shares",
+                    min_value=0.0000,
+                    step=0.0001,
+                    format="%.4f",
+                    value=0.0000,
+                    help="Initial quantity for the new private position."
+                )
+
+                submitted_new_position = st.form_submit_button("Add Private Position")
+
+            if submitted_new_position:
+                current_custom_positions = load_private_custom_positions_from_sheets()
+
+                if not new_ticker:
+                    st.sidebar.error("Ticker is required.")
+                elif not new_name:
+                    st.sidebar.error("Position name is required.")
+                elif new_shares <= 0:
+                    st.sidebar.error("Initial shares must be greater than zero.")
+                elif new_ticker in private_portfolio:
+                    st.sidebar.error("This ticker already exists in your private portfolio.")
+                elif not validate_new_ticker(new_ticker):
+                    st.sidebar.error("Ticker validation failed. Check the Yahoo Finance symbol and try again.")
+                else:
+                    current_custom_positions[new_ticker] = {
+                        "name": new_name,
+                        "shares": float(new_shares),
+                    }
+                    save_private_custom_positions_to_sheets(current_custom_positions)
+                    st.sidebar.success(f"{new_ticker} added to private portfolio.")
+                    st.rerun()
+
+            current_custom_positions = load_private_custom_positions_from_sheets()
+
+            if current_custom_positions:
+                removable = st.sidebar.selectbox(
+                    "Remove Custom Position",
+                    [""] + sorted(current_custom_positions.keys()),
+                    help="Only custom-added positions can be removed here."
+                )
+
+                if st.sidebar.button(
+                    "Remove Position",
+                    help="Delete the selected custom position from the Google Sheet and the private portfolio."
+                ):
+                    if removable:
+                        current_custom_positions.pop(removable, None)
+                        save_private_custom_positions_to_sheets(current_custom_positions)
+                        st.sidebar.success(f"{removable} removed.")
+                        st.rerun()
 
 base_currency = st.sidebar.selectbox(
     "Base Currency",
