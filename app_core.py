@@ -429,7 +429,7 @@ def render_market_clocks():
           card.style.border = "1px solid #2d3642";
           card.style.borderRadius = "6px";
           card.style.padding = "12px";
-          card.style.minHeight = "102px";
+          card.style.minHeight = "98px";
           card.innerHTML = `
             <div style="color:#f3a712; font-weight:800; font-size:13px; text-transform:uppercase;">${{m.label}}</div>
             <div style="color:#9fb0c3; font-size:11px; margin-top:2px;">${{m.exchange}}</div>
@@ -448,7 +448,7 @@ def render_market_clocks():
       setTimeout(setFrameHeight, 180);
     </script>
     """
-    components_html(component, height=520, scrolling=False)
+    components_html(component, height=500, scrolling=False)
 
 
 # =========================
