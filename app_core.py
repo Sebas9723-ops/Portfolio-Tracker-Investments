@@ -18,8 +18,13 @@ from utils import get_prices, get_historical_data
 
 DEFAULT_RISK_FREE_RATE = 0.02
 N_SIMULATIONS = 8000
-SUPPORTED_BASE_CCY = ["USD", "EUR", "GBP", "COP", "CHF"]
+SUPPORTED_BASE_CCY = ["USD", "EUR", "GBP", "COP", "CHF", "AUD"]
 PUBLIC_DEFAULTS_VERSION = "public_defaults_v10_each_20260328"
+
+# Fallbacks for Yahoo issues
+PROXY_TICKER_MAP = {
+    "IWDA.AS": "EUNL.DE",
+}
 
 
 # =========================
@@ -361,6 +366,7 @@ def render_market_clocks():
         {"label": "Shanghai", "exchange": "SSE", "tz": "Asia/Shanghai"},
         {"label": "Singapore", "exchange": "SGX", "tz": "Asia/Singapore"},
         {"label": "Bogotá", "exchange": "BVC", "tz": "America/Bogota"},
+        {"label": "Sydney", "exchange": "ASX", "tz": "Australia/Sydney"},
     ]
 
     component = f"""
@@ -368,7 +374,7 @@ def render_market_clocks():
       <div style="color:#f3a712; font-weight:800; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:10px;">
         Live Market Clocks
       </div>
-      <div id="clock-grid" style="display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:10px;"></div>
+      <div id="clock-grid" style="display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:10px;"></div>
     </div>
 
     <script>
@@ -378,8 +384,7 @@ def render_market_clocks():
         const w = window.innerWidth;
         if (w <= 520) return 1;
         if (w <= 900) return 2;
-        if (w <= 1200) return 3;
-        return 4;
+        return 3;
       }}
 
       function formatTime(tz) {{
@@ -423,27 +428,27 @@ def render_market_clocks():
           card.style.background = "#0f141b";
           card.style.border = "1px solid #2d3642";
           card.style.borderRadius = "6px";
-          card.style.padding = "10px";
-          card.style.minHeight = "92px";
+          card.style.padding = "12px";
+          card.style.minHeight = "112px";
           card.innerHTML = `
             <div style="color:#f3a712; font-weight:800; font-size:13px; text-transform:uppercase;">${{m.label}}</div>
             <div style="color:#9fb0c3; font-size:11px; margin-top:2px;">${{m.exchange}}</div>
-            <div style="color:#f8f8f8; font-size:18px; font-weight:800; margin-top:8px;">${{t.time}}</div>
+            <div style="color:#f8f8f8; font-size:18px; font-weight:800; margin-top:10px;">${{t.time}}</div>
             <div style="color:#7fb3ff; font-size:11px; margin-top:4px;">${{t.date}}</div>
           `;
           grid.appendChild(card);
         }});
 
-        setTimeout(setFrameHeight, 50);
+        setTimeout(setFrameHeight, 120);
       }}
 
       renderClocks();
       setInterval(renderClocks, 1000);
       window.addEventListener("resize", renderClocks);
-      setTimeout(setFrameHeight, 120);
+      setTimeout(setFrameHeight, 180);
     </script>
     """
-    components_html(component, height=260, scrolling=False)
+    components_html(component, height=720, scrolling=False)
 
 
 # =========================
@@ -860,12 +865,16 @@ def asset_currency(ticker: str) -> str:
         return "EUR"
     if ticker.endswith(".L"):
         return "GBP"
+    if ticker.endswith(".AX"):
+        return "AUD"
     return "USD"
 
 
 def asset_market_group(ticker: str) -> str:
     if ticker.endswith(".L"):
         return "UK"
+    if ticker.endswith(".AX"):
+        return "Australia"
     if "." in ticker:
         return "Europe"
     return "US"
@@ -887,6 +896,45 @@ def build_fx_data(tickers: list, base_currency: str, period: str = "2y"):
     fx_hist = get_historical_data(fx_tickers, period=period) if fx_tickers else pd.DataFrame()
 
     return fx_prices, fx_hist, fx_tickers
+
+
+def is_valid_series(df: pd.DataFrame, ticker: str) -> bool:
+    try:
+        return ticker in df.columns and not pd.to_numeric(df[ticker], errors="coerce").dropna().empty
+    except Exception:
+        return False
+
+
+def is_valid_price(prices: dict, ticker: str) -> bool:
+    val = prices.get(ticker)
+    return isinstance(val, (int, float)) and pd.notna(val) and val > 0
+
+
+def patch_market_data_with_proxies(live_prices_native: dict, asset_hist_native: pd.DataFrame, tickers: list, period: str = "2y"):
+    patched_prices = dict(live_prices_native) if live_prices_native is not None else {}
+    patched_hist = asset_hist_native.copy() if asset_hist_native is not None else pd.DataFrame()
+
+    for ticker in tickers:
+        proxy = PROXY_TICKER_MAP.get(ticker)
+        if not proxy:
+            continue
+
+        need_hist = not is_valid_series(patched_hist, ticker)
+        need_price = not is_valid_price(patched_prices, ticker)
+
+        if not need_hist and not need_price:
+            continue
+
+        proxy_hist = get_historical_data([proxy], period=period)
+        proxy_prices = get_prices([proxy])
+
+        if need_hist and not proxy_hist.empty and proxy in proxy_hist.columns:
+            patched_hist[ticker] = pd.to_numeric(proxy_hist[proxy], errors="coerce")
+
+        if need_price and is_valid_price(proxy_prices, proxy):
+            patched_prices[ticker] = float(proxy_prices[proxy])
+
+    return patched_prices, patched_hist
 
 
 def _get_direct_or_inverse_current(from_ccy: str, to_ccy: str, fx_prices: dict, fx_hist: pd.DataFrame):
@@ -984,6 +1032,9 @@ def convert_historical_to_base(asset_hist_native: pd.DataFrame, tickers: list, b
             continue
 
         native_series = pd.to_numeric(asset_hist_native[ticker], errors="coerce").dropna()
+        if native_series.empty:
+            continue
+
         from_ccy = asset_currency(ticker)
 
         if from_ccy == base_currency:
@@ -1640,6 +1691,13 @@ def build_app_context():
     if asset_hist_native.empty:
         st.error("Could not load historical data.")
         st.stop()
+
+    live_prices_native, asset_hist_native = patch_market_data_with_proxies(
+        live_prices_native=live_prices_native,
+        asset_hist_native=asset_hist_native,
+        tickers=tickers,
+        period="2y",
+    )
 
     fx_prices, fx_hist, _ = build_fx_data(tickers, base_currency, period="2y")
     historical_base, missing_fx = convert_historical_to_base(asset_hist_native, tickers, base_currency, fx_hist)
