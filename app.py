@@ -279,7 +279,7 @@ def connect_private_positions_worksheet():
     try:
         ws = spreadsheet.worksheet(worksheet_name)
     except gspread.WorksheetNotFound:
-        ws = spreadsheet.add_worksheet(title=worksheet_name, rows=200, cols=3)
+        ws = spreadsheet.add_worksheet(title=worksheet_name, rows=500, cols=3)
 
     expected_header = ["Ticker", "Name", "Shares"]
     current_header = ws.row_values(1)
@@ -291,7 +291,7 @@ def connect_private_positions_worksheet():
     return ws
 
 
-def load_private_custom_positions_from_sheets():
+def load_private_positions_from_sheets():
     ws = connect_private_positions_worksheet()
     records = ws.get_all_records()
 
@@ -313,16 +313,29 @@ def load_private_custom_positions_from_sheets():
     return positions
 
 
-def save_private_custom_positions_to_sheets(custom_positions: dict):
+def save_private_positions_to_sheets(positions: dict):
     ws = connect_private_positions_worksheet()
 
     rows = [["Ticker", "Name", "Shares"]]
-    for ticker in sorted(custom_positions.keys()):
-        meta = custom_positions[ticker]
+    for ticker in sorted(positions.keys()):
+        meta = positions[ticker]
         rows.append([ticker, meta["name"], float(meta["shares"])])
 
     ws.clear()
     ws.update(values=rows, range_name="A1")
+
+
+def build_private_portfolio_for_save(portfolio_data: dict, prefix: str):
+    saved = {}
+
+    for ticker, meta in portfolio_data.items():
+        widget_key = f"{prefix}_shares_{ticker}"
+        saved[ticker] = {
+            "name": meta["name"],
+            "shares": float(st.session_state.get(widget_key, meta["shares"])),
+        }
+
+    return saved
 
 
 # =========================
@@ -951,7 +964,7 @@ def compute_rolling_metrics(portfolio_returns: pd.Series, benchmark_returns: pd.
 private_available = True
 positions_sheet_available = True
 private_portfolio = {}
-private_custom_positions = {}
+private_sheet_positions = {}
 
 try:
     base_private_portfolio = load_private_portfolio()
@@ -961,14 +974,14 @@ except Exception:
 
 if private_available:
     try:
-        private_custom_positions = load_private_custom_positions_from_sheets()
+        private_sheet_positions = load_private_positions_from_sheets()
     except Exception:
         positions_sheet_available = False
-        private_custom_positions = {}
+        private_sheet_positions = {}
 
     private_portfolio = merge_private_portfolios(
         base_private_portfolio,
-        private_custom_positions,
+        private_sheet_positions,
     )
 
 mode = st.sidebar.selectbox("View Mode", ["Public", "Private"])
@@ -1042,7 +1055,7 @@ if mode == "Private" and authenticated:
                 submitted_new_position = st.form_submit_button("Add Private Position")
 
             if submitted_new_position:
-                current_custom_positions = load_private_custom_positions_from_sheets()
+                current_sheet_positions = load_private_positions_from_sheets()
 
                 if not new_ticker:
                     st.sidebar.error("Ticker is required.")
@@ -1055,30 +1068,33 @@ if mode == "Private" and authenticated:
                 elif not validate_new_ticker(new_ticker):
                     st.sidebar.error("Ticker validation failed. Check the Yahoo Finance symbol and try again.")
                 else:
-                    current_custom_positions[new_ticker] = {
+                    current_sheet_positions[new_ticker] = {
                         "name": new_name,
                         "shares": float(new_shares),
                     }
-                    save_private_custom_positions_to_sheets(current_custom_positions)
+                    save_private_positions_to_sheets(current_sheet_positions)
                     st.sidebar.success(f"{new_ticker} added to private portfolio.")
                     st.rerun()
 
-            current_custom_positions = load_private_custom_positions_from_sheets()
+            current_sheet_positions = load_private_positions_from_sheets()
+            removable_customs = sorted(
+                [t for t in current_sheet_positions.keys() if t not in base_private_portfolio]
+            )
 
-            if current_custom_positions:
+            if removable_customs:
                 removable = st.sidebar.selectbox(
                     "Remove Custom Position",
-                    [""] + sorted(current_custom_positions.keys()),
+                    [""] + removable_customs,
                     help="Only custom-added positions can be removed here."
                 )
 
                 if st.sidebar.button(
                     "Remove Position",
-                    help="Delete the selected custom position from the Google Sheet and the private portfolio."
+                    help="Delete the selected custom position from Google Sheets."
                 ):
                     if removable:
-                        current_custom_positions.pop(removable, None)
-                        save_private_custom_positions_to_sheets(current_custom_positions)
+                        current_sheet_positions.pop(removable, None)
+                        save_private_positions_to_sheets(current_sheet_positions)
                         st.sidebar.success(f"{removable} removed.")
                         st.rerun()
 
@@ -1097,6 +1113,16 @@ if st.sidebar.button("Reset Portfolio", help="Restore the original share quantit
 
 st.sidebar.header("Portfolio Inputs")
 updated_portfolio = build_current_portfolio(portfolio_data, prefix, mode)
+
+if mode == "Private" and authenticated and positions_sheet_available:
+    if st.sidebar.button(
+        "Save Private Shares",
+        help="Save the current private share quantities to Google Sheets so they persist across sessions."
+    ):
+        sheet_payload = build_private_portfolio_for_save(portfolio_data, prefix)
+        save_private_positions_to_sheets(sheet_payload)
+        st.sidebar.success("Private shares saved to Google Sheets.")
+        st.rerun()
 
 st.sidebar.header("Optimization Settings")
 
