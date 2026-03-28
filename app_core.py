@@ -18,6 +18,7 @@ from utils import get_prices, get_historical_data
 DEFAULT_RISK_FREE_RATE = 0.02
 N_SIMULATIONS = 8000
 SUPPORTED_BASE_CCY = ["USD", "EUR", "GBP", "COP", "CHF"]
+PUBLIC_DEFAULTS_VERSION = "public_defaults_v10_each_20260328"
 
 
 # =========================
@@ -252,10 +253,10 @@ def render_market_clocks():
 
     component = f"""
     <div style="border:1px solid #2b3340; border-left:4px solid #f3a712; border-radius:6px; padding:14px; background:#111821;">
-      <div style="color:#f3a712; font-weight:800; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:10px;">
+      <div style="color:#f3a712; font-weight:800; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:12px;">
         Live Market Clocks
       </div>
-      <div id="clock-grid" style="display:grid; grid-template-columns:repeat(3, minmax(180px, 1fr)); gap:10px;"></div>
+      <div id="clock-grid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px;"></div>
     </div>
 
     <script>
@@ -291,11 +292,11 @@ def render_market_clocks():
           card.style.background = "#0f141b";
           card.style.border = "1px solid #2d3642";
           card.style.borderRadius = "6px";
-          card.style.padding = "10px";
+          card.style.padding = "12px";
           card.innerHTML = `
-            <div style="color:#f3a712; font-weight:800; font-size:13px; text-transform:uppercase;">${{m.label}}</div>
+            <div style="color:#f3a712; font-weight:800; font-size:14px; text-transform:uppercase;">${{m.label}}</div>
             <div style="color:#9fb0c3; font-size:11px; margin-top:2px;">${{m.exchange}}</div>
-            <div style="color:#f8f8f8; font-size:22px; font-weight:800; margin-top:8px;">${{t.time}}</div>
+            <div style="color:#f8f8f8; font-size:22px; font-weight:800; margin-top:10px;">${{t.time}}</div>
             <div style="color:#7fb3ff; font-size:11px; margin-top:4px;">${{t.date}}</div>
           `;
           grid.appendChild(card);
@@ -306,7 +307,7 @@ def render_market_clocks():
       setInterval(renderClocks, 1000);
     </script>
     """
-    components_html(component, height=215)
+    components_html(component, height=420, scrolling=False)
 
 
 # =========================
@@ -363,15 +364,17 @@ def render_investment_horizon_section(
         if np.isfinite(hist_return):
             default_return = min(max(hist_return, 0.00), 0.15)
 
-    expected_return = st.slider(
-        "Expected Annual Return",
-        min_value=0.00,
-        max_value=0.20,
-        value=float(round(default_return, 3)),
-        step=0.005,
-        format="%.3f",
-        help="Annual return assumption used in the projection.",
+    expected_return_pct = st.slider(
+        "Expected Annual Return (%)",
+        min_value=0.0,
+        max_value=20.0,
+        value=float(round(default_return * 100, 1)),
+        step=0.1,
+        format="%.1f",
+        help="Annual return assumption used in the projection, expressed as a percentage.",
     )
+    expected_return = expected_return_pct / 100.0
+    st.caption(f"Selected expected annual return: {expected_return_pct:.1f}%")
 
     monthly_contribution = st.number_input(
         f"Monthly Contribution ({base_currency})",
@@ -381,15 +384,16 @@ def render_investment_horizon_section(
         help="Optional monthly contribution added to the portfolio projection.",
     )
 
-    scenario_spread = st.slider(
-        "Scenario Spread",
-        min_value=0.00,
-        max_value=0.10,
-        value=0.03,
-        step=0.005,
-        format="%.3f",
+    scenario_spread_pct = st.slider(
+        "Scenario Spread (%)",
+        min_value=0.0,
+        max_value=10.0,
+        value=3.0,
+        step=0.1,
+        format="%.1f",
         help="Difference around the base expected return used to build conservative and optimistic scenarios.",
     )
+    scenario_spread = scenario_spread_pct / 100.0
 
     conservative_return = max(expected_return - scenario_spread, -0.95)
     optimistic_return = expected_return + scenario_spread
@@ -440,6 +444,8 @@ def render_investment_horizon_section(
         paper_bgcolor="#0b0f14",
         plot_bgcolor="#0b0f14",
         font=dict(color="#e6e6e6"),
+        height=420,
+        margin=dict(t=25, b=25, l=25, r=25),
     )
     st.plotly_chart(fig_projection, use_container_width=True)
 
@@ -1403,6 +1409,10 @@ def build_app_context():
 
     init_mode_state(portfolio_data, prefix)
 
+    if mode == "Public" and st.session_state.get("public_defaults_version") != PUBLIC_DEFAULTS_VERSION:
+        reset_mode_state(portfolio_data, prefix)
+        st.session_state["public_defaults_version"] = PUBLIC_DEFAULTS_VERSION
+
     if st.sidebar.button("Reset Portfolio", help="Restore the original share quantities defined for the active mode."):
         reset_mode_state(portfolio_data, prefix)
         st.rerun()
@@ -1535,11 +1545,28 @@ def build_app_context():
         ]
     ].copy()
 
-    fig_pie = px.pie(df, names="Name", values=(df["Value"] if total_value > 0 else df["Weight"]), hole=0.4)
+    nonzero_df = df[df["Value"] > 0].copy()
+
+    if not nonzero_df.empty:
+        fig_pie = px.pie(nonzero_df, names="Name", values="Value", hole=0.45)
+        fig_pie.update_traces(textposition="inside", textinfo="percent+label")
+    else:
+        fig_pie = go.Figure()
+        fig_pie.add_annotation(
+            text="No portfolio value to display",
+            x=0.5,
+            y=0.5,
+            showarrow=False,
+            font=dict(size=18, color="#cbd5df"),
+        )
+
     fig_pie.update_layout(
         paper_bgcolor="#0b0f14",
         plot_bgcolor="#0b0f14",
         font=dict(color="#e6e6e6"),
+        height=360,
+        margin=dict(t=20, b=20, l=20, r=20),
+        legend=dict(orientation="h", y=-0.08),
     )
 
     fig_bar = go.Figure()
@@ -1550,6 +1577,8 @@ def build_app_context():
         paper_bgcolor="#0b0f14",
         plot_bgcolor="#0b0f14",
         font=dict(color="#e6e6e6"),
+        height=360,
+        margin=dict(t=20, b=20, l=20, r=20),
     )
 
     portfolio_returns, asset_returns = build_portfolio_returns(df, historical_base)
@@ -1647,6 +1676,8 @@ def build_app_context():
             paper_bgcolor="#0b0f14",
             plot_bgcolor="#0b0f14",
             font=dict(color="#e6e6e6"),
+            height=400,
+            margin=dict(t=20, b=20, l=20, r=20),
         )
 
     frontier = simulate_constrained_efficient_frontier(
@@ -1756,6 +1787,8 @@ def build_app_context():
             paper_bgcolor="#0b0f14",
             plot_bgcolor="#0b0f14",
             font=dict(color="#e6e6e6"),
+            height=430,
+            margin=dict(t=20, b=20, l=20, r=20),
         )
 
     stress_df, current_total_value, stressed_total_value = build_stress_test_table(df, stress_shocks)
@@ -1770,6 +1803,8 @@ def build_app_context():
         paper_bgcolor="#0b0f14",
         plot_bgcolor="#0b0f14",
         font=dict(color="#e6e6e6"),
+        height=380,
+        margin=dict(t=20, b=20, l=20, r=20),
     )
 
     rolling_df = compute_rolling_metrics(portfolio_returns, benchmark_returns, risk_free_rate, rolling_window)
