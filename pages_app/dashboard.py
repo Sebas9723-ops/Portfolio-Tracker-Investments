@@ -238,7 +238,7 @@ def _render_market_clocks_block():
     """
 
     html_block = html_block.replace("__MARKETS_JSON__", json.dumps(markets))
-    components_html(html_block, height=500, scrolling=False)
+    components_html(html_block, height=495, scrolling=False)
 
 
 def render_dashboard(ctx):
