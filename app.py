@@ -17,18 +17,59 @@ apply_bloomberg_style()
 ctx = build_app_context()
 
 pages = [
-    st.Page(lambda: render_dashboard(ctx), title="Dashboard", icon=":material/dashboard:"),
-    st.Page(lambda: render_portfolio_page(ctx), title="Portfolio", icon=":material/account_balance_wallet:"),
-    st.Page(lambda: render_analytics_page(ctx), title="Analytics", icon=":material/analytics:"),
-    st.Page(lambda: render_optimization_page(ctx), title="Optimization", icon=":material/show_chart:"),
-    st.Page(lambda: render_rebalancing_page(ctx), title="Rebalancing", icon=":material/swap_horiz:"),
-    st.Page(lambda: render_risk_page(ctx), title="Risk", icon=":material/warning:"),
-    st.Page(lambda: render_investment_horizon_page(ctx), title="Investment Horizon", icon=":material/timeline:"),
+    st.Page(
+        lambda: render_dashboard(ctx),
+        title="Dashboard",
+        icon=":material/dashboard:",
+        url_path="dashboard",
+        default=True,
+    ),
+    st.Page(
+        lambda: render_portfolio_page(ctx),
+        title="Portfolio",
+        icon=":material/account_balance_wallet:",
+        url_path="portfolio",
+    ),
+    st.Page(
+        lambda: render_analytics_page(ctx),
+        title="Analytics",
+        icon=":material/analytics:",
+        url_path="analytics",
+    ),
+    st.Page(
+        lambda: render_optimization_page(ctx),
+        title="Optimization",
+        icon=":material/show_chart:",
+        url_path="optimization",
+    ),
+    st.Page(
+        lambda: render_rebalancing_page(ctx),
+        title="Rebalancing",
+        icon=":material/swap_horiz:",
+        url_path="rebalancing",
+    ),
+    st.Page(
+        lambda: render_risk_page(ctx),
+        title="Risk",
+        icon=":material/warning:",
+        url_path="risk",
+    ),
+    st.Page(
+        lambda: render_investment_horizon_page(ctx),
+        title="Investment Horizon",
+        icon=":material/timeline:",
+        url_path="investment-horizon",
+    ),
 ]
 
 if ctx["mode"] == "Private" and ctx["authenticated"]:
     pages.append(
-        st.Page(lambda: render_private_manager_page(ctx), title="Private Manager", icon=":material/lock:")
+        st.Page(
+            lambda: render_private_manager_page(ctx),
+            title="Private Manager",
+            icon=":material/lock:",
+            url_path="private-manager",
+        )
     )
 
 pg = st.navigation(pages, position="sidebar", expanded=True)
