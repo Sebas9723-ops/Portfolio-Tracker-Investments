@@ -267,19 +267,6 @@ def merge_private_portfolios(base_private: dict, custom_private: dict):
     return merged
 
 
-def validate_new_ticker(ticker: str):
-    try:
-        live = get_prices([ticker]).get(ticker)
-        hist = get_historical_data([ticker], period="1mo")
-
-        live_ok = isinstance(live, (int, float)) and pd.notna(live) and live > 0
-        hist_ok = not hist.empty and ticker in hist.columns
-
-        return live_ok or hist_ok
-    except Exception:
-        return False
-
-
 # =========================
 # GOOGLE SHEETS PRIVATE POSITIONS
 # =========================
@@ -305,11 +292,12 @@ def connect_private_positions_worksheet():
     if missing_gcp:
         raise RuntimeError(f"Missing keys in [gcp_service_account]: {', '.join(missing_gcp)}")
 
-    if "private_positions_sheet_url" not in sheets_cfg or not str(sheets_cfg["private_positions_sheet_url"]).strip():
-        raise RuntimeError("Missing 'private_positions_sheet_url' in [sheets].")
-
     worksheet_name = str(sheets_cfg.get("private_positions_worksheet", "private_positions")).strip()
-    sheet_url = str(sheets_cfg["private_positions_sheet_url"]).strip()
+    sheet_id = str(sheets_cfg.get("private_positions_sheet_id", "")).strip()
+    sheet_url = str(sheets_cfg.get("private_positions_sheet_url", "")).strip()
+
+    if not sheet_id and not sheet_url:
+        raise RuntimeError("Missing 'private_positions_sheet_id' or 'private_positions_sheet_url' in [sheets].")
 
     private_key = str(gcp_cfg["private_key"])
     if "\\n" in private_key:
@@ -331,10 +319,13 @@ def connect_private_positions_worksheet():
         raise RuntimeError(f"Google authorization failed: {e}") from e
 
     try:
-        spreadsheet = client.open_by_url(sheet_url)
+        if sheet_id:
+            spreadsheet = client.open_by_key(sheet_id)
+        else:
+            spreadsheet = client.open_by_url(sheet_url)
     except Exception as e:
         raise RuntimeError(
-            "Could not open Google Sheet. Check the URL and make sure the sheet is shared with the service account email."
+            f"Could not open Google Sheet. Verify sheet access, APIs enabled, and sheet id/url. Original error: {e}"
         ) from e
 
     try:
@@ -409,6 +400,24 @@ def build_private_portfolio_for_save(portfolio_data: dict, prefix: str):
     return saved
 
 
+def update_selected_private_position(updated_portfolio: dict, prefix: str, selected_ticker: str, new_shares: float):
+    payload = {}
+
+    for ticker, meta in updated_portfolio.items():
+        payload[ticker] = {
+            "name": meta["name"],
+            "shares": float(st.session_state.get(f"{prefix}_shares_{ticker}", meta["shares"])),
+        }
+
+    if selected_ticker not in payload:
+        raise ValueError(f"{selected_ticker} not found in private portfolio.")
+
+    payload[selected_ticker]["shares"] = float(new_shares)
+    st.session_state[f"{prefix}_shares_{selected_ticker}"] = float(new_shares)
+
+    save_private_positions_to_sheets(payload)
+
+
 # =========================
 # GENERAL HELPERS
 # =========================
@@ -479,12 +488,6 @@ def asset_market_group(ticker: str) -> str:
     if "." in ticker:
         return "Europe"
     return "US"
-
-
-def get_fx_ticker(from_ccy: str, to_ccy: str):
-    if from_ccy == to_ccy:
-        return None
-    return f"{from_ccy}{to_ccy}=X"
 
 
 def build_fx_data(tickers: list, base_currency: str, period: str = "2y"):
@@ -607,7 +610,6 @@ def convert_historical_to_base(asset_hist_native: pd.DataFrame, tickers: list, b
             continue
 
         fx_series = get_fx_series(from_ccy, base_currency, fx_hist)
-
         if fx_series is None:
             missing_fx.append(f"{from_ccy}->{base_currency}")
             continue
@@ -735,7 +737,7 @@ def build_portfolio_returns(df: pd.DataFrame, historical_base: pd.DataFrame):
     return portfolio_returns, returns
 
 
-def build_benchmark_returns(base_currency: str, fx_prices: dict, fx_hist: pd.DataFrame):
+def build_benchmark_returns(base_currency: str, fx_hist: pd.DataFrame):
     bench_native = get_historical_data(["VOO"], period="2y")
     if bench_native.empty or "VOO" not in bench_native.columns:
         return pd.Series(dtype=float)
@@ -1149,115 +1151,6 @@ if mode == "Private":
 portfolio_data = get_active_portfolio(mode, authenticated, private_portfolio)
 prefix = get_mode_prefix(mode)
 
-if mode == "Private" and authenticated:
-    st.sidebar.header(
-        "Private Position Manager",
-        help="Add or remove private positions. Changes are stored in Google Sheets and loaded into the private portfolio."
-    )
-
-    if not positions_sheet_available:
-        st.sidebar.error("Google Sheets connection is not available.")
-        if positions_sheet_error:
-            st.sidebar.caption(positions_sheet_error)
-
-        if st.sidebar.button("Retry Google Sheets"):
-            st.rerun()
-    else:
-        manager_password_input = st.sidebar.text_input(
-            "Manager Password",
-            type="password",
-            key="manager_password_input",
-            help="Required to add or remove private positions.",
-        )
-
-        manager_unlocked = manager_password_input == get_manage_password()
-
-        if manager_password_input and not manager_unlocked:
-            st.sidebar.error("Incorrect manager password.")
-
-        if manager_unlocked:
-            with st.sidebar.form("add_private_position_form", clear_on_submit=True):
-                new_ticker = st.text_input(
-                    "New Ticker",
-                    help="Use the exact Yahoo Finance ticker, for example VOO, VWCE.DE or IGLN.L."
-                ).strip().upper()
-
-                new_name = st.text_input(
-                    "Position Name",
-                    help="Display name shown in the dashboard."
-                ).strip()
-
-                new_shares = st.number_input(
-                    "Initial Shares",
-                    min_value=0.0000,
-                    step=0.0001,
-                    format="%.4f",
-                    value=0.0000,
-                    help="Initial quantity for the new private position."
-                )
-
-                submitted_new_position = st.form_submit_button("Add Private Position")
-
-            if submitted_new_position:
-                try:
-                    current_sheet_positions = load_private_positions_from_sheets()
-                except Exception as e:
-                    st.sidebar.error(str(e))
-                    current_sheet_positions = None
-
-                if current_sheet_positions is not None:
-                    if not new_ticker:
-                        st.sidebar.error("Ticker is required.")
-                    elif not new_name:
-                        st.sidebar.error("Position name is required.")
-                    elif new_shares <= 0:
-                        st.sidebar.error("Initial shares must be greater than zero.")
-                    elif new_ticker in private_portfolio:
-                        st.sidebar.error("This ticker already exists in your private portfolio.")
-                    elif not validate_new_ticker(new_ticker):
-                        st.sidebar.error("Ticker validation failed. Check the Yahoo Finance symbol and try again.")
-                    else:
-                        try:
-                            current_sheet_positions[new_ticker] = {
-                                "name": new_name,
-                                "shares": float(new_shares),
-                            }
-                            save_private_positions_to_sheets(current_sheet_positions)
-                            st.sidebar.success(f"{new_ticker} added to private portfolio.")
-                            st.rerun()
-                        except Exception as e:
-                            st.sidebar.error(str(e))
-
-            try:
-                current_sheet_positions = load_private_positions_from_sheets()
-            except Exception as e:
-                current_sheet_positions = {}
-                st.sidebar.error(str(e))
-
-            removable_customs = sorted(
-                [t for t in current_sheet_positions.keys() if t not in base_private_portfolio]
-            )
-
-            if removable_customs:
-                removable = st.sidebar.selectbox(
-                    "Remove Custom Position",
-                    [""] + removable_customs,
-                    help="Only custom-added positions can be removed here."
-                )
-
-                if st.sidebar.button(
-                    "Remove Position",
-                    help="Delete the selected custom position from Google Sheets."
-                ):
-                    if removable:
-                        try:
-                            current_sheet_positions.pop(removable, None)
-                            save_private_positions_to_sheets(current_sheet_positions)
-                            st.sidebar.success(f"{removable} removed.")
-                            st.rerun()
-                        except Exception as e:
-                            st.sidebar.error(str(e))
-
 base_currency = st.sidebar.selectbox(
     "Base Currency",
     SUPPORTED_BASE_CCY,
@@ -1274,13 +1167,97 @@ if st.sidebar.button("Reset Portfolio", help="Restore the original share quantit
 st.sidebar.header("Portfolio Inputs")
 updated_portfolio = build_current_portfolio(portfolio_data, prefix, mode)
 
+if mode == "Private" and authenticated:
+    st.sidebar.header(
+        "Private Position Manager",
+        help="Select one of your existing private tickers and update its current shares."
+    )
+
+    if not positions_sheet_available:
+        st.sidebar.error("Google Sheets connection is not available.")
+        if positions_sheet_error:
+            st.sidebar.caption(positions_sheet_error)
+
+        if st.sidebar.button("Retry Google Sheets", key="retry_google_sheets_manager"):
+            st.rerun()
+    else:
+        manager_password_input = st.sidebar.text_input(
+            "Manager Password",
+            type="password",
+            key="manager_password_input_update",
+            help="Required to update a private position in Google Sheets.",
+        )
+
+        manager_unlocked = manager_password_input == get_manage_password()
+
+        if manager_password_input and not manager_unlocked:
+            st.sidebar.error("Incorrect manager password.")
+
+        if manager_unlocked:
+            selectable_tickers = list(updated_portfolio.keys())
+
+            selected_ticker = st.sidebar.selectbox(
+                "Select Ticker",
+                selectable_tickers,
+                key="selected_private_ticker_to_update",
+                help="Choose which existing private ticker you want to update.",
+            )
+
+            current_selected_shares = float(
+                st.session_state.get(
+                    f"{prefix}_shares_{selected_ticker}",
+                    updated_portfolio[selected_ticker]["shares"]
+                )
+            )
+
+            selected_name = updated_portfolio[selected_ticker]["name"]
+            selected_value = current_selected_shares * float(
+                next(
+                    (
+                        get_safe_native_price(selected_ticker, get_prices([selected_ticker]), get_historical_data([selected_ticker], period="1mo"))
+                        * (get_fx_rate_current(asset_currency(selected_ticker), base_currency, *build_fx_data([selected_ticker], base_currency, period="1mo")[:2]) or 0)
+                    ),
+                    0.0
+                )
+            )
+
+            st.sidebar.caption(f"Selected name: {selected_name}")
+            st.sidebar.caption(f"Current shares: {current_selected_shares:.4f}")
+
+            new_selected_shares = st.sidebar.number_input(
+                "New Current Shares",
+                min_value=0.0,
+                step=0.0001,
+                format="%.4f",
+                value=current_selected_shares,
+                key=f"new_current_shares_{selected_ticker}",
+                help="Write the new current shares for the selected ticker.",
+            )
+
+            if st.sidebar.button(
+                "Update Selected Position",
+                key="update_selected_position_button",
+                help="Save only the selected ticker with the new current shares."
+            ):
+                try:
+                    update_selected_private_position(
+                        updated_portfolio=updated_portfolio,
+                        prefix=prefix,
+                        selected_ticker=selected_ticker,
+                        new_shares=new_selected_shares,
+                    )
+                    st.sidebar.success(f"{selected_ticker} updated successfully.")
+                    st.rerun()
+                except Exception as e:
+                    st.sidebar.error(str(e))
+
 if mode == "Private" and authenticated and positions_sheet_available:
     if st.sidebar.button(
         "Save Private Shares",
-        help="Save the current private share quantities to Google Sheets so they persist across sessions."
+        help="Save all current private share quantities to Google Sheets so they persist across sessions."
     ):
         try:
-            sheet_payload = build_private_portfolio_for_save(portfolio_data, prefix)
+            sheet_payload = build_private_portfolio_for_save(updated_portfolio, prefix)
             save_private_positions_to_sheets(sheet_payload)
             st.sidebar.success("Private shares saved to Google Sheets.")
             st.rerun()
@@ -1466,7 +1443,7 @@ st.plotly_chart(fig_bar, use_container_width=True)
 # PERFORMANCE
 # =========================
 portfolio_returns, asset_returns = build_portfolio_returns(df, historical_base)
-benchmark_returns = build_benchmark_returns(base_currency, fx_prices, fx_hist)
+benchmark_returns = build_benchmark_returns(base_currency, fx_hist)
 
 total_return = 0.0
 volatility = 0.0
