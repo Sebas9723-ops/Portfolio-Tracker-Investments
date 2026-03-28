@@ -39,8 +39,12 @@ def apply_bloomberg_style():
             -webkit-tap-highlight-color: transparent;
         }
 
+        [data-testid="stAppViewContainer"] {
+            background-color: #0b0f14;
+        }
+
         .block-container {
-            padding-top: 1rem !important;
+            padding-top: calc(1.8rem + env(safe-area-inset-top)) !important;
             padding-right: 1.1rem !important;
             padding-left: 1.1rem !important;
             padding-bottom: 2rem !important;
@@ -64,12 +68,17 @@ def apply_bloomberg_style():
         .bb-title {
             font-size: 2rem;
             font-weight: 800;
+            line-height: 1.15;
             color: #f3a712;
             letter-spacing: 1px;
-            padding: 0.15rem 0 0.8rem 0;
-            border-bottom: 2px solid #f3a712;
+            padding-top: 0.2rem;
+            padding-bottom: 0.8rem;
+            margin-top: 0.35rem;
             margin-bottom: 1rem;
+            border-bottom: 2px solid #f3a712;
             text-transform: uppercase;
+            display: block;
+            overflow: visible !important;
         }
 
         .bb-section {
@@ -184,16 +193,19 @@ def apply_bloomberg_style():
 
         @media (max-width: 900px) {
             .block-container {
-                padding-top: 0.7rem !important;
-                padding-right: 0.6rem !important;
-                padding-left: 0.6rem !important;
+                padding-top: calc(3.8rem + env(safe-area-inset-top)) !important;
+                padding-right: 0.7rem !important;
+                padding-left: 0.7rem !important;
                 padding-bottom: 1.5rem !important;
             }
 
             .bb-title {
-                font-size: 1.45rem;
+                font-size: 1.55rem;
+                line-height: 1.15;
+                padding-top: 0.15rem;
                 padding-bottom: 0.55rem;
-                margin-bottom: 0.7rem;
+                margin-top: 0.6rem;
+                margin-bottom: 0.8rem;
             }
 
             .bb-section {
@@ -227,7 +239,13 @@ def apply_bloomberg_style():
 
 
 def render_page_title(title: str):
-    st.markdown(f'<div class="bb-title">{html.escape(title)}</div>', unsafe_allow_html=True)
+    st.markdown(
+        f"""
+        <div style="height: 0.2rem;"></div>
+        <div class="bb-title">{html.escape(title)}</div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def get_logo_path():
