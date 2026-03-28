@@ -248,15 +248,17 @@ def render_market_clocks():
         {"label": "Frankfurt", "exchange": "Xetra", "tz": "Europe/Berlin"},
         {"label": "Zurich", "exchange": "SIX", "tz": "Europe/Zurich"},
         {"label": "Tokyo", "exchange": "TSE", "tz": "Asia/Tokyo"},
+        {"label": "Shanghai", "exchange": "SSE", "tz": "Asia/Shanghai"},
+        {"label": "Singapore", "exchange": "SGX", "tz": "Asia/Singapore"},
         {"label": "Bogotá", "exchange": "BVC", "tz": "America/Bogota"},
     ]
 
     component = f"""
-    <div style="border:1px solid #2b3340; border-left:4px solid #f3a712; border-radius:6px; padding:14px; background:#111821;">
-      <div style="color:#f3a712; font-weight:800; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:12px;">
+    <div style="border:1px solid #2b3340; border-left:4px solid #f3a712; border-radius:6px; padding:12px; background:#111821;">
+      <div style="color:#f3a712; font-weight:800; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:10px;">
         Live Market Clocks
       </div>
-      <div id="clock-grid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px;"></div>
+      <div id="clock-grid" style="display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:10px;"></div>
     </div>
 
     <script>
@@ -292,11 +294,12 @@ def render_market_clocks():
           card.style.background = "#0f141b";
           card.style.border = "1px solid #2d3642";
           card.style.borderRadius = "6px";
-          card.style.padding = "12px";
+          card.style.padding = "10px";
+          card.style.minHeight = "96px";
           card.innerHTML = `
-            <div style="color:#f3a712; font-weight:800; font-size:14px; text-transform:uppercase;">${{m.label}}</div>
+            <div style="color:#f3a712; font-weight:800; font-size:13px; text-transform:uppercase;">${{m.label}}</div>
             <div style="color:#9fb0c3; font-size:11px; margin-top:2px;">${{m.exchange}}</div>
-            <div style="color:#f8f8f8; font-size:22px; font-weight:800; margin-top:10px;">${{t.time}}</div>
+            <div style="color:#f8f8f8; font-size:18px; font-weight:800; margin-top:8px;">${{t.time}}</div>
             <div style="color:#7fb3ff; font-size:11px; margin-top:4px;">${{t.date}}</div>
           `;
           grid.appendChild(card);
@@ -307,8 +310,7 @@ def render_market_clocks():
       setInterval(renderClocks, 1000);
     </script>
     """
-    components_html(component, height=420, scrolling=False)
-
+    components_html(component, height=285, scrolling=False)
 
 # =========================
 # INVESTMENT HORIZON
