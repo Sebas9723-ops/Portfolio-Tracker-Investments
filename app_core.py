@@ -355,7 +355,7 @@ def render_market_clocks():
     ]
 
     component = """
-    <div style="
+    <div id="clock-wrapper" style="
         border:1px solid #2b3340;
         border-left:4px solid #f3a712;
         border-radius:6px;
@@ -378,7 +378,6 @@ def render_market_clocks():
 
         <div id="market-clock-grid" style="
             display:grid;
-            grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));
             gap:10px;
             width:100%;
             box-sizing:border-box;
@@ -387,7 +386,56 @@ def render_market_clocks():
 
     <script>
         const markets = __MARKETS_JSON__;
+        const wrapper = document.getElementById("clock-wrapper");
         const grid = document.getElementById("market-clock-grid");
+
+        function getCols() {
+            const w = window.innerWidth;
+            if (w <= 520) return 1;
+            if (w <= 900) return 2;
+            return 3;
+        }
+
+        function getCardStyle() {
+            const w = window.innerWidth;
+
+            if (w <= 520) {
+                return {
+                    minHeight: 88,
+                    padding: "10px 12px",
+                    titleSize: "14px",
+                    exchangeSize: "11px",
+                    timeSize: "19px",
+                    dateSize: "11px",
+                    timeTop: "7px",
+                    gap: 10
+                };
+            }
+
+            if (w <= 900) {
+                return {
+                    minHeight: 94,
+                    padding: "10px",
+                    titleSize: "13px",
+                    exchangeSize: "11px",
+                    timeSize: "18px",
+                    dateSize: "11px",
+                    timeTop: "8px",
+                    gap: 10
+                };
+            }
+
+            return {
+                minHeight: 94,
+                padding: "10px",
+                titleSize: "13px",
+                exchangeSize: "11px",
+                timeSize: "18px",
+                dateSize: "11px",
+                timeTop: "8px",
+                gap: 10
+            };
+        }
 
         function getTimeValues(timeZone) {
             const now = new Date();
@@ -410,7 +458,24 @@ def render_market_clocks():
             return { timeVal, dateVal };
         }
 
+        function setFrameHeight() {
+            const h = Math.ceil(wrapper.getBoundingClientRect().height) + 8;
+            window.parent.postMessage(
+                {
+                    isStreamlitMessage: true,
+                    type: "streamlit:setFrameHeight",
+                    height: h
+                },
+                "*"
+            );
+        }
+
         function renderGrid() {
+            const cols = getCols();
+            const style = getCardStyle();
+
+            grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+            grid.style.gap = `${style.gap}px`;
             grid.innerHTML = "";
 
             markets.forEach((market) => {
@@ -420,36 +485,48 @@ def render_market_clocks():
                 card.style.background = "#0f141b";
                 card.style.border = "1px solid #2d3642";
                 card.style.borderRadius = "6px";
-                card.style.padding = "10px";
-                card.style.minHeight = "94px";
+                card.style.padding = style.padding;
+                card.style.minHeight = `${style.minHeight}px`;
                 card.style.boxSizing = "border-box";
+                card.style.width = "100%";
 
                 card.innerHTML = `
-                    <div style="color:#f3a712;font-weight:800;font-size:13px;text-transform:uppercase;line-height:1.15;">
+                    <div style="color:#f3a712;font-weight:800;font-size:${style.titleSize};text-transform:uppercase;line-height:1.15;">
                         ${market.name}
                     </div>
-                    <div style="color:#9fb0c3;font-size:11px;margin-top:2px;line-height:1.1;">
+                    <div style="color:#9fb0c3;font-size:${style.exchangeSize};margin-top:2px;line-height:1.1;">
                         ${market.exchange}
                     </div>
-                    <div style="color:#f8f8f8;font-size:18px;font-weight:800;margin-top:8px;line-height:1.1;">
+                    <div style="color:#f8f8f8;font-size:${style.timeSize};font-weight:800;margin-top:${style.timeTop};line-height:1.1;">
                         ${vals.timeVal}
                     </div>
-                    <div style="color:#7fb3ff;font-size:11px;margin-top:6px;line-height:1.1;">
+                    <div style="color:#7fb3ff;font-size:${style.dateSize};margin-top:6px;line-height:1.1;">
                         ${vals.dateVal}
                     </div>
                 `;
 
                 grid.appendChild(card);
             });
+
+            requestAnimationFrame(() => {
+                setTimeout(setFrameHeight, 40);
+            });
         }
 
         renderGrid();
         setInterval(renderGrid, 1000);
+        window.addEventListener("resize", renderGrid);
+
+        const ro = new ResizeObserver(() => setFrameHeight());
+        ro.observe(wrapper);
+
+        setTimeout(setFrameHeight, 150);
+        setTimeout(setFrameHeight, 400);
     </script>
     """
 
     component = component.replace("__MARKETS_JSON__", json.dumps(markets))
-    components_html(component, height=630, scrolling=False)
+    components_html(component, height=260, scrolling=False)
     
 # =========================
 # INVESTMENT HORIZON
