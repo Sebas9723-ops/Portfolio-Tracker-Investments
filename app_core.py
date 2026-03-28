@@ -344,6 +344,7 @@ def render_status_bar(mode: str, base_currency: str, profile: str, tc_model: str
 def render_market_clocks():
     from datetime import datetime
     from zoneinfo import ZoneInfo
+    import streamlit as st
 
     markets = [
         {"name": "New York", "exchange": "NYSE / Nasdaq", "tz": "America/New_York"},
@@ -357,14 +358,14 @@ def render_market_clocks():
         {"name": "Sydney", "exchange": "ASX", "tz": "Australia/Sydney"},
     ]
 
-    cards_html = []
+    cards = []
 
     for market in markets:
         now = datetime.now(ZoneInfo(market["tz"]))
         time_val = now.strftime("%H:%M:%S")
         date_val = now.strftime("%a %d %b")
 
-        cards_html.append(
+        cards.append(
             f"""
             <div class="pm-clock-card">
                 <div class="pm-clock-name">{market["name"]}</div>
@@ -375,37 +376,36 @@ def render_market_clocks():
             """
         )
 
-    html_block = """
+    html_block = f"""
     <style>
-    .pm-clock-wrapper {
+    .pm-clock-wrapper {{
         border: 1px solid #2b3340;
         border-left: 4px solid #f3a712;
         border-radius: 6px;
         padding: 12px;
         background: #111821;
-        box-sizing: border-box;
         width: 100%;
+        box-sizing: border-box;
         margin-bottom: 1rem;
-    }
+    }}
 
-    .pm-clock-title {
+    .pm-clock-title {{
         color: #f3a712;
         font-weight: 800;
         text-transform: uppercase;
         letter-spacing: 0.5px;
         margin-bottom: 10px;
         font-size: 15px;
-    }
+    }}
 
-    .pm-clock-grid {
+    .pm-clock-grid {{
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 10px;
         width: 100%;
-        box-sizing: border-box;
-    }
+    }}
 
-    .pm-clock-card {
+    .pm-clock-card {{
         background: #0f141b;
         border: 1px solid #2d3642;
         border-radius: 6px;
@@ -413,9 +413,9 @@ def render_market_clocks():
         min-height: 94px;
         box-sizing: border-box;
         overflow: hidden;
-    }
+    }}
 
-    .pm-clock-name {
+    .pm-clock-name {{
         color: #f3a712;
         font-weight: 800;
         font-size: 13px;
@@ -424,9 +424,9 @@ def render_market_clocks():
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-    }
+    }}
 
-    .pm-clock-exchange {
+    .pm-clock-exchange {{
         color: #9fb0c3;
         font-size: 11px;
         margin-top: 2px;
@@ -434,79 +434,73 @@ def render_market_clocks():
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-    }
+    }}
 
-    .pm-clock-time {
+    .pm-clock-time {{
         color: #f8f8f8;
         font-size: 18px;
         font-weight: 800;
         margin-top: 8px;
         line-height: 1.05;
         white-space: nowrap;
-    }
+    }}
 
-    .pm-clock-date {
+    .pm-clock-date {{
         color: #7fb3ff;
         font-size: 11px;
         margin-top: 4px;
         line-height: 1.05;
         white-space: nowrap;
-    }
+    }}
 
-    @media (max-width: 760px) {
-        .pm-clock-grid {
+    /* Tablet y móvil ancho */
+    @media (max-width: 900px) {{
+        .pm-clock-grid {{
             grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 8px;
-        }
+        }}
 
-        .pm-clock-card {
+        .pm-clock-card {{
             padding: 8px 10px;
             min-height: 82px;
-        }
+        }}
 
-        .pm-clock-name {
+        .pm-clock-name {{
             font-size: 12px;
-        }
+        }}
 
-        .pm-clock-exchange {
+        .pm-clock-exchange {{
             font-size: 10px;
-        }
+        }}
 
-        .pm-clock-time {
+        .pm-clock-time {{
             font-size: 16px;
             margin-top: 6px;
-        }
+        }}
 
-        .pm-clock-date {
+        .pm-clock-date {{
             font-size: 10px;
-        }
-    }
+        }}
+    }}
 
-    @media (max-width: 360px) {
-        .pm-clock-grid {
+    /* Solo móviles extremadamente estrechos */
+    @media (max-width: 320px) {{
+        .pm-clock-grid {{
             grid-template-columns: 1fr;
-        }
-
-        .pm-clock-card {
-            min-height: 78px;
-        }
-
-        .pm-clock-time {
-            font-size: 17px;
-        }
-    }
+        }}
+    }}
     </style>
 
     <div class="pm-clock-wrapper">
         <div class="pm-clock-title">Live Market Clocks</div>
         <div class="pm-clock-grid">
-            __CLOCK_CARDS__
+            {''.join(cards)}
         </div>
     </div>
     """
 
-    html_block = html_block.replace("__CLOCK_CARDS__", "".join(cards_html))
     st.markdown(html_block, unsafe_allow_html=True)
+
             
 # =========================
 # INVESTMENT HORIZON
