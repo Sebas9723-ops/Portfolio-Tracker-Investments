@@ -21,6 +21,27 @@ def _get_manage_password() -> str:
         return ""
 
 
+def _safe_load_cash_balances():
+    try:
+        df = load_cash_balances_from_sheets().copy()
+        if df is None or df.empty:
+            return pd.DataFrame(
+                {
+                    "currency": SUPPORTED_BASE_CCY,
+                    "amount": [0.0] * len(SUPPORTED_BASE_CCY),
+                }
+            ), False, "Cash balances sheet is empty or unavailable."
+        return df, True, ""
+    except Exception as e:
+        fallback = pd.DataFrame(
+            {
+                "currency": SUPPORTED_BASE_CCY,
+                "amount": [0.0] * len(SUPPORTED_BASE_CCY),
+            }
+        )
+        return fallback, False, str(e)
+
+
 def render_transactions_page(ctx):
     render_page_title("Transactions")
 
@@ -115,20 +136,33 @@ def render_transactions_page(ctx):
         append_transaction_to_sheets(tx)
 
         if update_cash:
-            gross_value = float(shares) * float(price)
-            if tx_type == "BUY":
-                delta = -(gross_value + float(fees))
-            else:
-                delta = gross_value - float(fees)
-            adjust_cash_balance(native_ccy, delta)
+            try:
+                gross_value = float(shares) * float(price)
+                if tx_type == "BUY":
+                    delta = -(gross_value + float(fees))
+                else:
+                    delta = gross_value - float(fees)
+                adjust_cash_balance(native_ccy, delta)
+            except Exception as e:
+                st.warning(
+                    f"Transaction was saved and current shares were updated, but cash balance could not be updated: {e}"
+                )
+                st.rerun()
 
         st.success("Transaction saved successfully. Current shares were updated.")
         st.rerun()
 
     info_section("Cash Balances", "Edit and save current cash balances by currency.")
 
-    live_cash_df = load_cash_balances_from_sheets().copy()
+    live_cash_df, cash_sheet_ok, cash_sheet_error = _safe_load_cash_balances()
     live_cash_df["currency"] = live_cash_df["currency"].astype(str).str.upper()
+
+    if not cash_sheet_ok:
+        st.warning(
+            "Cash balances sheet is not available right now. "
+            "You can still use transactions and update current shares. "
+            f"Detail: {cash_sheet_error}"
+        )
 
     cash_cols = st.columns(3)
     cash_values = {}
@@ -147,15 +181,18 @@ def render_transactions_page(ctx):
             )
 
     if st.button("Save Cash Balances"):
-        save_df = pd.DataFrame(
-            {
-                "currency": list(cash_values.keys()),
-                "amount": list(cash_values.values()),
-            }
-        )
-        save_cash_balances_to_sheets(save_df)
-        st.success("Cash balances saved.")
-        st.rerun()
+        try:
+            save_df = pd.DataFrame(
+                {
+                    "currency": list(cash_values.keys()),
+                    "amount": list(cash_values.values()),
+                }
+            )
+            save_cash_balances_to_sheets(save_df)
+            st.success("Cash balances saved.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Could not save cash balances: {e}")
 
     t1, t2, t3 = st.columns(3)
     info_metric(
