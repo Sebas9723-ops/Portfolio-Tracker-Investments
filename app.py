@@ -184,8 +184,8 @@ def info_html(text: str, help_text: str, size: str = "1rem", weight: str = "700"
     safe_help = html.escape(help_text, quote=True)
     safe_text = html.escape(text)
     return (
-        f"<span style='font-size:{size}; font-weight:{weight}; color:#f3a712; text-transform:uppercase; letter-spacing:0.5px;'>"
-        f"{safe_text}</span>"
+        f"<span style='font-size:{size}; font-weight:{weight}; color:#f3a712; "
+        f"text-transform:uppercase; letter-spacing:0.5px;'>{safe_text}</span>"
         f"<span class='bb-info' title='{safe_help}'>ⓘ</span>"
     )
 
@@ -240,6 +240,178 @@ def render_status_bar(mode: str, base_currency: str, profile: str, tc_model: str
         """,
         unsafe_allow_html=True,
     )
+
+
+# =========================
+# INVESTMENT HORIZON HELPERS
+# =========================
+def build_projection_series(
+    initial_value: float,
+    annual_return: float,
+    years: int,
+    monthly_contribution: float = 0.0,
+):
+    months = int(years * 12)
+
+    if annual_return <= -0.999:
+        monthly_rate = -0.999
+    else:
+        monthly_rate = (1 + annual_return) ** (1 / 12) - 1
+
+    values = [float(initial_value)]
+
+    for _ in range(months):
+        next_value = values[-1] * (1 + monthly_rate) + monthly_contribution
+        values.append(max(float(next_value), 0.0))
+
+    return pd.DataFrame(
+        {
+            "Month": range(months + 1),
+            "Year": np.arange(months + 1) / 12,
+            "Value": values,
+        }
+    )
+
+
+def render_investment_horizon_section(
+    total_value: float,
+    base_currency: str,
+    portfolio_returns: pd.Series,
+):
+    info_section(
+        "Investment Horizon",
+        "Projected portfolio value over a selected investment horizon using monthly compounding and optional monthly contributions."
+    )
+
+    horizon_years = st.selectbox(
+        "Investment Horizon (Years)",
+        [5, 10, 15, 20, 25, 30],
+        index=1,
+        help="Select the projection horizon.",
+    )
+
+    default_return = 0.08
+    if not portfolio_returns.empty:
+        hist_return = float(portfolio_returns.mean() * 252)
+        if np.isfinite(hist_return):
+            default_return = min(max(hist_return, 0.00), 0.15)
+
+    expected_return = st.slider(
+        "Expected Annual Return",
+        min_value=0.00,
+        max_value=0.20,
+        value=float(round(default_return, 3)),
+        step=0.005,
+        format="%.3f",
+        help="Annual return assumption used in the projection.",
+    )
+
+    monthly_contribution = st.number_input(
+        f"Monthly Contribution ({base_currency})",
+        min_value=0.0,
+        value=0.0,
+        step=100.0,
+        help="Optional monthly contribution added to the portfolio projection.",
+    )
+
+    scenario_spread = st.slider(
+        "Scenario Spread",
+        min_value=0.00,
+        max_value=0.10,
+        value=0.03,
+        step=0.005,
+        format="%.3f",
+        help="Difference around the base expected return used to build conservative and optimistic scenarios.",
+    )
+
+    conservative_return = max(expected_return - scenario_spread, -0.95)
+    optimistic_return = expected_return + scenario_spread
+
+    conservative_df = build_projection_series(
+        initial_value=total_value,
+        annual_return=conservative_return,
+        years=horizon_years,
+        monthly_contribution=monthly_contribution,
+    )
+
+    base_df = build_projection_series(
+        initial_value=total_value,
+        annual_return=expected_return,
+        years=horizon_years,
+        monthly_contribution=monthly_contribution,
+    )
+
+    optimistic_df = build_projection_series(
+        initial_value=total_value,
+        annual_return=optimistic_return,
+        years=horizon_years,
+        monthly_contribution=monthly_contribution,
+    )
+
+    fig_projection = go.Figure()
+    fig_projection.add_scatter(
+        x=conservative_df["Year"],
+        y=conservative_df["Value"],
+        name=f"Conservative ({conservative_return:.1%})",
+        mode="lines",
+    )
+    fig_projection.add_scatter(
+        x=base_df["Year"],
+        y=base_df["Value"],
+        name=f"Base ({expected_return:.1%})",
+        mode="lines",
+    )
+    fig_projection.add_scatter(
+        x=optimistic_df["Year"],
+        y=optimistic_df["Value"],
+        name=f"Optimistic ({optimistic_return:.1%})",
+        mode="lines",
+    )
+    fig_projection.update_layout(
+        xaxis_title="Years",
+        yaxis_title=f"Projected Value ({base_currency})",
+        paper_bgcolor="#0b0f14",
+        plot_bgcolor="#0b0f14",
+        font=dict(color="#e6e6e6"),
+    )
+    st.plotly_chart(fig_projection, use_container_width=True)
+
+    c1, c2, c3 = st.columns(3)
+    info_metric(
+        c1,
+        "Conservative Final Value",
+        f"{base_currency} {conservative_df['Value'].iloc[-1]:,.2f}",
+        "Projected final portfolio value under the conservative scenario.",
+    )
+    info_metric(
+        c2,
+        "Base Final Value",
+        f"{base_currency} {base_df['Value'].iloc[-1]:,.2f}",
+        "Projected final portfolio value under the base scenario.",
+    )
+    info_metric(
+        c3,
+        "Optimistic Final Value",
+        f"{base_currency} {optimistic_df['Value'].iloc[-1]:,.2f}",
+        "Projected final portfolio value under the optimistic scenario.",
+    )
+
+    projection_table = pd.DataFrame(
+        {
+            "Scenario": ["Conservative", "Base", "Optimistic"],
+            "Annual Return %": [
+                round(conservative_return * 100, 2),
+                round(expected_return * 100, 2),
+                round(optimistic_return * 100, 2),
+            ],
+            "Final Value": [
+                round(conservative_df["Value"].iloc[-1], 2),
+                round(base_df["Value"].iloc[-1], 2),
+                round(optimistic_df["Value"].iloc[-1], 2),
+            ],
+        }
+    )
+    st.dataframe(projection_table, use_container_width=True)
 
 
 # =========================
@@ -840,21 +1012,25 @@ def simulate_constrained_efficient_frontier(
     port_vols = np.sqrt(np.einsum("ij,jk,ik->i", feasible, cov_matrix.values, feasible))
     sharpe = np.where(port_vols > 0, (port_returns - risk_free_rate) / port_vols, 0)
 
-    frontier = pd.DataFrame({
-        "Return": port_returns,
-        "Volatility": port_vols,
-        "Sharpe": sharpe,
-    })
+    frontier = pd.DataFrame(
+        {
+            "Return": port_returns,
+            "Volatility": port_vols,
+            "Sharpe": sharpe,
+        }
+    )
     frontier["Weights"] = list(feasible)
 
     return frontier
 
 
 def weights_table(weight_array, asset_names):
-    out = pd.DataFrame({
-        "Ticker": asset_names,
-        "Weight %": np.round(np.array(weight_array) * 100, 2),
-    })
+    out = pd.DataFrame(
+        {
+            "Ticker": asset_names,
+            "Weight %": np.round(np.array(weight_array) * 100, 2),
+        }
+    )
     return out.sort_values("Weight %", ascending=False).reset_index(drop=True)
 
 
@@ -877,16 +1053,18 @@ def build_recommended_shares_table(weight_array, asset_names, df_current):
         target_shares = target_value / price if price > 0 else 0.0
         delta_shares = target_shares - current_shares
 
-        rows.append({
-            "Ticker": ticker,
-            "Current Shares": round(current_shares, 4),
-            "Recommended Shares": round(target_shares, 4),
-            "Shares Delta": round(delta_shares, 4),
-            "Current Value": round(current_value, 2),
-            "Target Value": round(target_value, 2),
-            "Current Weight %": round(current_weight, 2),
-            "Target Weight %": round(float(weight) * 100, 2),
-        })
+        rows.append(
+            {
+                "Ticker": ticker,
+                "Current Shares": round(current_shares, 4),
+                "Recommended Shares": round(target_shares, 4),
+                "Shares Delta": round(delta_shares, 4),
+                "Current Value": round(current_value, 2),
+                "Target Value": round(target_value, 2),
+                "Current Weight %": round(current_weight, 2),
+                "Target Weight %": round(float(weight) * 100, 2),
+            }
+        )
 
     rec = pd.DataFrame(rows)
     rec["Abs Delta"] = rec["Shares Delta"].abs()
@@ -1000,22 +1178,24 @@ def build_rebalancing_table(
         else:
             net_cash_flow = 0.0
 
-        rows.append({
-            "Ticker": ticker,
-            "Market": market,
-            "Native Currency": native_currency,
-            "Current Shares": round(current_shares, 4),
-            "Target Shares": round(target_shares, 4),
-            "Shares Delta": round(shares_delta, 4),
-            "Current Value": round(current_value, 2),
-            "Target Value": round(target_value, 2),
-            "Value Delta": round(value_delta, 2),
-            "Current Weight %": round(current_weight * 100, 2),
-            "Target Weight %": round(target_weight * 100, 2),
-            "Estimated Cost": round(costs["Total Cost"], 2),
-            "Net Cash Flow": round(net_cash_flow, 2),
-            "Action": action,
-        })
+        rows.append(
+            {
+                "Ticker": ticker,
+                "Market": market,
+                "Native Currency": native_currency,
+                "Current Shares": round(current_shares, 4),
+                "Target Shares": round(target_shares, 4),
+                "Shares Delta": round(shares_delta, 4),
+                "Current Value": round(current_value, 2),
+                "Target Value": round(target_value, 2),
+                "Value Delta": round(value_delta, 2),
+                "Current Weight %": round(current_weight * 100, 2),
+                "Target Weight %": round(target_weight * 100, 2),
+                "Estimated Cost": round(costs["Total Cost"], 2),
+                "Net Cash Flow": round(net_cash_flow, 2),
+                "Action": action,
+            }
+        )
 
     out = pd.DataFrame(rows)
     out["Abs Value Delta"] = out["Value Delta"].abs()
@@ -1044,16 +1224,18 @@ def build_stress_test_table(df_current: pd.DataFrame, shocks: dict):
         stressed_value = shares * stressed_price
         stressed_total += stressed_value
 
-        rows.append({
-            "Ticker": ticker,
-            "Bucket": bucket,
-            "Shock %": round(shock * 100, 2),
-            "Current Price": round(current_price, 2),
-            "Stressed Price": round(stressed_price, 2),
-            "Current Value": round(current_value, 2),
-            "Stressed Value": round(stressed_value, 2),
-            "P/L": round(stressed_value - current_value, 2),
-        })
+        rows.append(
+            {
+                "Ticker": ticker,
+                "Bucket": bucket,
+                "Shock %": round(shock * 100, 2),
+                "Current Price": round(current_price, 2),
+                "Stressed Price": round(stressed_price, 2),
+                "Current Value": round(current_value, 2),
+                "Stressed Value": round(stressed_value, 2),
+                "P/L": round(stressed_value - current_value, 2),
+            }
+        )
 
     out = pd.DataFrame(rows)
     if stressed_total > 0:
@@ -1146,17 +1328,37 @@ if mode == "Private":
 
 
 # =========================
-# ACTIVE PORTFOLIO / SIDEBAR
+# SIDEBAR NAVIGATION / INPUTS
 # =========================
-portfolio_data = get_active_portfolio(mode, authenticated, private_portfolio)
-prefix = get_mode_prefix(mode)
-
 base_currency = st.sidebar.selectbox(
     "Base Currency",
     SUPPORTED_BASE_CCY,
     index=0,
     help="Reference currency used to convert all positions, weights, returns, and rebalancing calculations.",
 )
+
+page_options = [
+    "Dashboard",
+    "Portfolio",
+    "Analytics",
+    "Optimization",
+    "Rebalancing",
+    "Risk",
+    "Investment Horizon",
+]
+
+if mode == "Private" and authenticated:
+    page_options.append("Private Manager")
+
+page = st.sidebar.radio(
+    "Navigation",
+    page_options,
+    index=0,
+    help="Main app navigation.",
+)
+
+portfolio_data = get_active_portfolio(mode, authenticated, private_portfolio)
+prefix = get_mode_prefix(mode)
 
 init_mode_state(portfolio_data, prefix)
 
@@ -1167,7 +1369,7 @@ if st.sidebar.button("Reset Portfolio", help="Restore the original share quantit
 st.sidebar.header("Portfolio Inputs")
 updated_portfolio = build_current_portfolio(portfolio_data, prefix, mode)
 
-if mode == "Private" and authenticated:
+if mode == "Private" and authenticated and page == "Private Manager":
     st.sidebar.header(
         "Private Position Manager",
         help="Select one of your existing private tickers and update its current shares."
@@ -1242,7 +1444,7 @@ if mode == "Private" and authenticated:
                 except Exception as e:
                     st.sidebar.error(str(e))
 
-if mode == "Private" and authenticated and positions_sheet_available:
+if mode == "Private" and authenticated and positions_sheet_available and page == "Private Manager":
     if st.sidebar.button(
         "Save Private Shares",
         help="Save all current private share quantities to Google Sheets so they persist across sessions."
@@ -1336,7 +1538,7 @@ stress_shocks = {
 
 
 # =========================
-# MARKET DATA + FX
+# MARKET DATA
 # =========================
 tickers = list(updated_portfolio.keys())
 live_prices_native = get_prices(tickers)
@@ -1346,7 +1548,7 @@ if asset_hist_native.empty:
     st.error("Could not load historical data.")
     st.stop()
 
-fx_prices, fx_hist, fx_tickers = build_fx_data(tickers, base_currency, period="2y")
+fx_prices, fx_hist, _ = build_fx_data(tickers, base_currency, period="2y")
 historical_base, missing_fx = convert_historical_to_base(asset_hist_native, tickers, base_currency, fx_hist)
 
 if historical_base.empty:
@@ -1362,7 +1564,7 @@ if missing_fx:
 
 
 # =========================
-# PORTFOLIO TABLE
+# DERIVED DATA
 # =========================
 df, total_value = build_portfolio_df(
     updated_portfolio=updated_portfolio,
@@ -1373,50 +1575,29 @@ df, total_value = build_portfolio_df(
     base_currency=base_currency,
 )
 
-render_status_bar(
-    mode=mode,
-    base_currency=base_currency,
-    profile=profile,
-    tc_model=tc_model,
-    sheets_ok=(positions_sheet_available if mode == "Private" else True),
-)
+display_df = df[
+    [
+        "Ticker",
+        "Name",
+        "Market",
+        "Native Currency",
+        "Shares",
+        "Native Price",
+        "FX Rate",
+        "Price",
+        "Value",
+        "Weight %",
+        "Target %",
+        "Deviation %",
+    ]
+].copy()
 
-info_section("Portfolio", f"Snapshot of current positions in {base_currency}, including FX conversion, current weights, target weights, and deviations.")
-
-display_df = df[[
-    "Ticker",
-    "Name",
-    "Market",
-    "Native Currency",
-    "Shares",
-    "Native Price",
-    "FX Rate",
-    "Price",
-    "Value",
-    "Weight %",
-    "Target %",
-    "Deviation %",
-]].copy()
-
-st.dataframe(display_df, use_container_width=True)
-info_metric(st, f"Total Value ({base_currency})", f"{base_currency} {total_value:,.2f}", f"Current market value of the portfolio converted into {base_currency}.")
-
-
-# =========================
-# ALLOCATION
-# =========================
-info_section("Portfolio Allocation", f"Portfolio composition by market value in {base_currency}.")
-
-pie_values = df["Value"] if total_value > 0 else df["Weight"]
-fig_pie = px.pie(df, names="Name", values=pie_values, hole=0.4)
+fig_pie = px.pie(df, names="Name", values=(df["Value"] if total_value > 0 else df["Weight"]), hole=0.4)
 fig_pie.update_layout(
     paper_bgcolor="#0b0f14",
     plot_bgcolor="#0b0f14",
     font=dict(color="#e6e6e6"),
 )
-st.plotly_chart(fig_pie, use_container_width=True)
-
-info_section("Target vs Actual Allocation", "Compares current weights with the original base weights for the active mode.")
 
 fig_bar = go.Figure()
 fig_bar.add_bar(x=df["Ticker"], y=df["Weight %"], name="Actual %")
@@ -1427,12 +1608,7 @@ fig_bar.update_layout(
     plot_bgcolor="#0b0f14",
     font=dict(color="#e6e6e6"),
 )
-st.plotly_chart(fig_bar, use_container_width=True)
 
-
-# =========================
-# PERFORMANCE
-# =========================
 portfolio_returns, asset_returns = build_portfolio_returns(df, historical_base)
 benchmark_returns = build_benchmark_returns(base_currency, fx_hist)
 
@@ -1483,27 +1659,12 @@ if not portfolio_returns.empty and not benchmark_returns.empty:
         if tracking_error > 0:
             information_ratio = float((excess.mean() * 252) / tracking_error)
 
-info_section("Performance Metrics", f"Return and risk indicators in base currency ({base_currency}) derived from historical daily returns.")
+fig_perf = None
+portfolio_cum_return = None
+benchmark_cum_return = None
+excess_vs_benchmark = None
 
-c1, c2, c3, c4 = st.columns(4)
-info_metric(c1, "Return", f"{total_return:.2%}", "Cumulative portfolio return over the historical sample.")
-info_metric(c2, "Volatility", f"{volatility:.2%}", "Annualized standard deviation of portfolio returns.")
-info_metric(c3, "Sharpe Ratio", f"{sharpe:.2f}", "Risk-adjusted return using the selected risk-free rate.")
-info_metric(c4, "Max Drawdown", f"{max_drawdown:.2%}", "Largest peak-to-trough decline over the sample.")
-
-c5, c6, c7, c8 = st.columns(4)
-info_metric(c5, "Alpha", f"{alpha:.2%}", "Return unexplained by benchmark beta exposure.")
-info_metric(c6, "Beta", f"{beta:.2f}", "Sensitivity of portfolio returns to benchmark returns.")
-info_metric(c7, "Tracking Error", f"{tracking_error:.2%}", "Annualized volatility of active returns versus the benchmark.")
-info_metric(c8, "Information Ratio", f"{information_ratio:.2f}", "Active return divided by tracking error.")
-
-
-# =========================
-# PERFORMANCE VS BENCHMARK
-# =========================
 if not portfolio_cum.empty:
-    info_section("Performance vs Benchmark", "Cumulative growth of the portfolio compared with the benchmark (VOO), both expressed in the selected base currency.")
-
     fig_perf = go.Figure()
     fig_perf.add_scatter(x=portfolio_cum.index, y=portfolio_cum, name="Portfolio")
 
@@ -1520,9 +1681,6 @@ if not portfolio_cum.empty:
         ax=20,
         ay=-20,
     )
-
-    benchmark_cum_return = None
-    excess_vs_benchmark = None
 
     if not benchmark_cum.empty:
         fig_perf.add_scatter(x=benchmark_cum.index, y=benchmark_cum, name="VOO")
@@ -1547,22 +1705,6 @@ if not portfolio_cum.empty:
         plot_bgcolor="#0b0f14",
         font=dict(color="#e6e6e6"),
     )
-    st.plotly_chart(fig_perf, use_container_width=True)
-
-    p1, p2, p3 = st.columns(3)
-    info_metric(p1, "Portfolio Cumulative Return", f"{portfolio_cum_return:.2%}", "End-to-end cumulative return of the portfolio.")
-    if benchmark_cum_return is not None:
-        info_metric(p2, "Benchmark Cumulative Return", f"{benchmark_cum_return:.2%}", "End-to-end cumulative return of the benchmark.")
-        info_metric(p3, "Excess Return vs Benchmark", f"{excess_vs_benchmark:.2%}", "Portfolio cumulative return minus benchmark cumulative return.")
-    else:
-        info_metric(p2, "Benchmark Cumulative Return", "N/A", "Benchmark data is not available.")
-        info_metric(p3, "Excess Return vs Benchmark", "N/A", "Benchmark data is not available.")
-
-
-# =========================
-# EFFICIENT FRONTIER
-# =========================
-info_section("Efficient Frontier", "Simulated portfolios showing the trade-off between expected return and volatility under the selected constraints.")
 
 frontier = simulate_constrained_efficient_frontier(
     asset_returns=asset_returns,
@@ -1575,10 +1717,12 @@ frontier = simulate_constrained_efficient_frontier(
 max_sharpe_row = None
 min_vol_row = None
 usable = []
+fig_frontier = None
+current_return = 0.0
+current_vol = 0.0
+current_sharpe = 0.0
 
-if frontier.empty:
-    st.info("No feasible frontier was found. Try relaxing the constraints or checking historical data availability.")
-else:
+if not frontier.empty:
     mean_returns = asset_returns.mean() * 252
     cov_matrix = asset_returns.cov() * 252
     usable = asset_returns.columns.tolist()
@@ -1606,7 +1750,6 @@ else:
     cml_y = risk_free_rate + float(max_sharpe_row["Sharpe"]) * cml_x
 
     fig_frontier = go.Figure()
-
     fig_frontier.add_trace(
         go.Scatter(
             x=frontier["Volatility"],
@@ -1623,7 +1766,6 @@ else:
             hovertemplate="Volatility: %{x:.2%}<br>Expected Return: %{y:.2%}<br>Sharpe: %{marker.color:.2f}<extra></extra>",
         )
     )
-
     fig_frontier.add_trace(
         go.Scatter(
             x=cml_x,
@@ -1632,7 +1774,6 @@ else:
             name="Capital Market Line",
         )
     )
-
     fig_frontier.add_trace(
         go.Scatter(
             x=[current_vol],
@@ -1644,7 +1785,6 @@ else:
             name="Current Portfolio",
         )
     )
-
     fig_frontier.add_trace(
         go.Scatter(
             x=[max_sharpe_row["Volatility"]],
@@ -1656,7 +1796,6 @@ else:
             name="Max Sharpe",
         )
     )
-
     fig_frontier.add_trace(
         go.Scatter(
             x=[min_vol_row["Volatility"]],
@@ -1668,7 +1807,6 @@ else:
             name="Min Volatility",
         )
     )
-
     fig_frontier.update_layout(
         xaxis_title="Volatility",
         yaxis_title="Expected Return",
@@ -1677,73 +1815,23 @@ else:
         font=dict(color="#e6e6e6"),
     )
 
-    st.plotly_chart(fig_frontier, use_container_width=True)
-
-    f1, f2, f3 = st.columns(3)
-    info_metric(f1, "Current Expected Return / Volatility", f"{current_return:.2%} / {current_vol:.2%}", "Expected annual return and annualized volatility of the current portfolio.")
-    info_metric(f2, "Max Sharpe Return / Volatility", f"{max_sharpe_row['Return']:.2%} / {max_sharpe_row['Volatility']:.2%}", "Expected annual return and volatility of the highest-Sharpe simulated portfolio.")
-    info_metric(f3, "Min Vol Return / Volatility", f"{min_vol_row['Return']:.2%} / {min_vol_row['Volatility']:.2%}", "Expected annual return and volatility of the minimum-volatility portfolio.")
-
-    f4, f5, f6 = st.columns(3)
-    info_metric(f4, "Current Sharpe Ratio", f"{current_sharpe:.2f}", "Risk-adjusted return of the current portfolio using the selected risk-free rate.")
-    info_metric(f5, "Max Sharpe Ratio", f"{max_sharpe_row['Sharpe']:.2f}", "Highest Sharpe ratio among the feasible simulated portfolios.")
-    info_metric(f6, "Min Vol Sharpe Ratio", f"{min_vol_row['Sharpe']:.2f}", "Sharpe ratio of the minimum-volatility feasible portfolio.")
-
-    action_col1, action_col2, _ = st.columns([1, 1, 2])
-
-    with action_col1:
-        if st.button("Estimate Max Sharpe Shares", help="Estimate how many shares each ETF should have to match the maximum-Sharpe portfolio, without modifying your current holdings."):
-            st.session_state[f"show_max_sharpe_targets_{prefix}"] = True
-
-    with action_col2:
-        if st.button("Estimate Min Vol Shares", help="Estimate how many shares each ETF should have to match the minimum-volatility portfolio, without modifying your current holdings."):
-            st.session_state[f"show_min_vol_targets_{prefix}"] = True
-
-    if st.session_state.get(f"show_max_sharpe_targets_{prefix}", False):
-        info_section("Recommended Shares for Max Sharpe", "Estimated share quantities required to reach the maximum-Sharpe allocation, based on current total portfolio value and current prices.")
-        rec_df_max = build_recommended_shares_table(max_sharpe_row["Weights"], usable, df)
-        st.dataframe(rec_df_max, use_container_width=True)
-
-    if st.session_state.get(f"show_min_vol_targets_{prefix}", False):
-        info_section("Recommended Shares for Minimum Volatility", "Estimated share quantities required to reach the minimum-volatility allocation, based on current total portfolio value and current prices.")
-        rec_df_min = build_recommended_shares_table(min_vol_row["Weights"], usable, df)
-        st.dataframe(rec_df_min, use_container_width=True)
-
-    info_section("Optimization Weights", "Weight breakdown for the optimal simulated portfolios.")
-    opt1, opt2 = st.columns(2)
-
-    with opt1:
-        st.write("Max Sharpe Portfolio")
-        st.dataframe(weights_table(max_sharpe_row["Weights"], usable), use_container_width=True)
-
-    with opt2:
-        st.write("Minimum Volatility Portfolio")
-        st.dataframe(weights_table(min_vol_row["Weights"], usable), use_container_width=True)
-
-
-# =========================
-# REBALANCING ENGINE + COSTS
-# =========================
-info_section(
-    "Rebalancing Engine",
-    "Trade list showing the required buy and sell adjustments to move from the current allocation to a selected target allocation, including estimated transaction costs."
-)
-
 target_options = ["Base Target"]
 if max_sharpe_row is not None:
     target_options.append("Max Sharpe")
 if min_vol_row is not None:
     target_options.append("Minimum Volatility")
 
-rebal_target = st.selectbox(
-    "Rebalancing Target",
-    target_options,
-    help="Choose the target allocation used to generate the trade list."
-)
+selected_rebal_target = "Base Target"
+if page == "Rebalancing":
+    selected_rebal_target = st.selectbox(
+        "Rebalancing Target",
+        target_options,
+        help="Choose the target allocation used to generate the trade list."
+    )
 
-if rebal_target == "Base Target":
+if selected_rebal_target == "Base Target":
     target_weight_map = df.set_index("Ticker")["Target Weight"].to_dict()
-elif rebal_target == "Max Sharpe" and max_sharpe_row is not None:
+elif selected_rebal_target == "Max Sharpe" and max_sharpe_row is not None:
     target_weight_map = dict(zip(usable, max_sharpe_row["Weights"]))
 else:
     target_weight_map = dict(zip(usable, min_vol_row["Weights"]))
@@ -1761,31 +1849,9 @@ sell_value = -rebal_df.loc[rebal_df["Action"] == "Sell", "Value Delta"].sum()
 total_estimated_cost = rebal_df["Estimated Cost"].sum()
 net_cash_after_costs = rebal_df["Net Cash Flow"].sum()
 
-r1, r2, r3, r4 = st.columns(4)
-info_metric(r1, "Total Buy Value", f"{base_currency} {buy_value:,.2f}", "Total gross capital required for buy trades.")
-info_metric(r2, "Total Sell Value", f"{base_currency} {sell_value:,.2f}", "Total gross capital released by sell trades.")
-info_metric(r3, "Estimated Transaction Costs", f"{base_currency} {total_estimated_cost:,.2f}", "Estimated total trading costs under the selected transaction cost model.")
-info_metric(r4, "Net Cash Impact After Costs", f"{base_currency} {net_cash_after_costs:,.2f}", "Positive means net cash released. Negative means additional cash required.")
-
-st.dataframe(rebal_df, use_container_width=True)
-
-
-# =========================
-# STRESS TESTING
-# =========================
-info_section(
-    "Scenario / Stress Testing",
-    "Applies category-level shocks to estimate how the portfolio would behave under adverse or favorable market scenarios."
-)
-
 stress_df, current_total_value, stressed_total_value = build_stress_test_table(df, stress_shocks)
 stress_pnl = stressed_total_value - current_total_value
 stress_return = (stressed_total_value / current_total_value - 1) if current_total_value > 0 else 0.0
-
-s1, s2, s3 = st.columns(3)
-info_metric(s1, "Current Portfolio Value", f"{base_currency} {current_total_value:,.2f}", "Current portfolio value before the stress scenario.")
-info_metric(s2, "Stressed Portfolio Value", f"{base_currency} {stressed_total_value:,.2f}", "Portfolio value after applying the stress scenario.")
-info_metric(s3, "Scenario P/L", f"{base_currency} {stress_pnl:,.2f} ({stress_return:.2%})", "Profit or loss implied by the selected shocks.")
 
 fig_stress = go.Figure()
 fig_stress.add_bar(x=stress_df["Ticker"], y=stress_df["Current Value"], name="Current Value")
@@ -1796,60 +1862,203 @@ fig_stress.update_layout(
     plot_bgcolor="#0b0f14",
     font=dict(color="#e6e6e6"),
 )
-st.plotly_chart(fig_stress, use_container_width=True)
-
-st.dataframe(stress_df, use_container_width=True)
-
-
-# =========================
-# ROLLING METRICS
-# =========================
-info_section(
-    "Rolling Metrics",
-    "Time-varying view of portfolio risk and risk-adjusted performance using a rolling historical window."
-)
 
 rolling_df = compute_rolling_metrics(portfolio_returns, benchmark_returns, risk_free_rate, rolling_window)
 
-if rolling_df.empty:
-    st.info("Rolling metrics are not available for the current data window.")
-else:
-    rolling_metric = st.selectbox(
-        "Rolling Metric",
-        ["Rolling Volatility", "Rolling Sharpe", "Rolling Beta", "Rolling Drawdown"],
-        help="Select the rolling indicator to display."
-    )
+render_status_bar(
+    mode=mode,
+    base_currency=base_currency,
+    profile=profile,
+    tc_model=tc_model,
+    sheets_ok=(positions_sheet_available if mode == "Private" else True),
+)
 
-    available_metric = rolling_metric
-    if available_metric not in rolling_df.columns:
-        available_metric = rolling_df.columns[0]
 
-    fig_roll = go.Figure()
-    fig_roll.add_scatter(
-        x=rolling_df.index,
-        y=rolling_df[available_metric],
-        name=available_metric,
-    )
-    fig_roll.update_layout(
-        paper_bgcolor="#0b0f14",
-        plot_bgcolor="#0b0f14",
-        font=dict(color="#e6e6e6"),
-        xaxis_title="Date",
-        yaxis_title=available_metric,
-    )
-    st.plotly_chart(fig_roll, use_container_width=True)
+# =========================
+# PAGE RENDERING
+# =========================
+if page == "Dashboard":
+    d1, d2, d3, d4 = st.columns(4)
+    info_metric(d1, f"Total Value ({base_currency})", f"{base_currency} {total_value:,.2f}", "Current market value of the portfolio converted into the selected base currency.")
+    info_metric(d2, "Return", f"{total_return:.2%}", "Cumulative portfolio return over the historical sample.")
+    info_metric(d3, "Volatility", f"{volatility:.2%}", "Annualized standard deviation of portfolio returns.")
+    info_metric(d4, "Sharpe Ratio", f"{sharpe:.2f}", "Risk-adjusted return using the selected risk-free rate.")
 
-    last_val = rolling_df[available_metric].dropna()
-    if not last_val.empty:
-        last_value = last_val.iloc[-1]
-        if "Sharpe" in available_metric or "Beta" in available_metric:
-            latest_display = f"{last_value:.2f}"
+    c_left, c_right = st.columns([1.2, 1])
+
+    with c_left:
+        info_section("Top Holdings", "Largest portfolio positions by current market value.")
+        top_holdings = display_df.sort_values("Value", ascending=False).head(5)[
+            ["Ticker", "Name", "Value", "Weight %", "Deviation %"]
+        ]
+        st.dataframe(top_holdings, use_container_width=True)
+
+    with c_right:
+        info_section("Portfolio Allocation", "Portfolio composition by market value.")
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+    if fig_perf is not None:
+        info_section("Performance vs Benchmark", "Cumulative growth of the portfolio versus VOO.")
+        st.plotly_chart(fig_perf, use_container_width=True)
+
+elif page == "Portfolio":
+    info_section("Portfolio", f"Snapshot of current positions in {base_currency}, including FX conversion, current weights, target weights, and deviations.")
+    st.dataframe(display_df, use_container_width=True)
+    info_metric(st, f"Total Value ({base_currency})", f"{base_currency} {total_value:,.2f}", f"Current market value of the portfolio converted into {base_currency}.")
+
+    info_section("Portfolio Allocation", f"Portfolio composition by market value in {base_currency}.")
+    st.plotly_chart(fig_pie, use_container_width=True)
+
+    info_section("Target vs Actual Allocation", "Compares current weights with the original base weights for the active mode.")
+    st.plotly_chart(fig_bar, use_container_width=True)
+
+elif page == "Analytics":
+    info_section("Performance Metrics", f"Return and risk indicators in base currency ({base_currency}) derived from historical daily returns.")
+
+    c1, c2, c3, c4 = st.columns(4)
+    info_metric(c1, "Return", f"{total_return:.2%}", "Cumulative portfolio return over the historical sample.")
+    info_metric(c2, "Volatility", f"{volatility:.2%}", "Annualized standard deviation of portfolio returns.")
+    info_metric(c3, "Sharpe Ratio", f"{sharpe:.2f}", "Risk-adjusted return using the selected risk-free rate.")
+    info_metric(c4, "Max Drawdown", f"{max_drawdown:.2%}", "Largest peak-to-trough decline over the sample.")
+
+    c5, c6, c7, c8 = st.columns(4)
+    info_metric(c5, "Alpha", f"{alpha:.2%}", "Return unexplained by benchmark beta exposure.")
+    info_metric(c6, "Beta", f"{beta:.2f}", "Sensitivity of portfolio returns to benchmark returns.")
+    info_metric(c7, "Tracking Error", f"{tracking_error:.2%}", "Annualized volatility of active returns versus the benchmark.")
+    info_metric(c8, "Information Ratio", f"{information_ratio:.2f}", "Active return divided by tracking error.")
+
+    if fig_perf is not None:
+        info_section("Performance vs Benchmark", "Cumulative growth of the portfolio compared with the benchmark (VOO).")
+        st.plotly_chart(fig_perf, use_container_width=True)
+
+        p1, p2, p3 = st.columns(3)
+        info_metric(p1, "Portfolio Cumulative Return", f"{portfolio_cum_return:.2%}", "End-to-end cumulative return of the portfolio.")
+        if benchmark_cum_return is not None:
+            info_metric(p2, "Benchmark Cumulative Return", f"{benchmark_cum_return:.2%}", "End-to-end cumulative return of the benchmark.")
+            info_metric(p3, "Excess Return vs Benchmark", f"{excess_vs_benchmark:.2%}", "Portfolio cumulative return minus benchmark cumulative return.")
         else:
-            latest_display = f"{last_value:.2%}"
+            info_metric(p2, "Benchmark Cumulative Return", "N/A", "Benchmark data is not available.")
+            info_metric(p3, "Excess Return vs Benchmark", "N/A", "Benchmark data is not available.")
 
-        info_metric(
-            st,
-            f"Latest {available_metric}",
-            latest_display,
-            f"Most recent value of {available_metric.lower()} using a {rolling_window}-day rolling window."
+    info_section("Rolling Metrics", "Time-varying view of portfolio risk and risk-adjusted performance using a rolling historical window.")
+
+    if rolling_df.empty:
+        st.info("Rolling metrics are not available for the current data window.")
+    else:
+        rolling_metric = st.selectbox(
+            "Rolling Metric",
+            ["Rolling Volatility", "Rolling Sharpe", "Rolling Beta", "Rolling Drawdown"],
+            help="Select the rolling indicator to display."
         )
+
+        available_metric = rolling_metric
+        if available_metric not in rolling_df.columns:
+            available_metric = rolling_df.columns[0]
+
+        fig_roll = go.Figure()
+        fig_roll.add_scatter(
+            x=rolling_df.index,
+            y=rolling_df[available_metric],
+            name=available_metric,
+        )
+        fig_roll.update_layout(
+            paper_bgcolor="#0b0f14",
+            plot_bgcolor="#0b0f14",
+            font=dict(color="#e6e6e6"),
+            xaxis_title="Date",
+            yaxis_title=available_metric,
+        )
+        st.plotly_chart(fig_roll, use_container_width=True)
+
+elif page == "Optimization":
+    info_section("Efficient Frontier", "Simulated portfolios showing the trade-off between expected return and volatility under the selected constraints.")
+
+    if frontier.empty or fig_frontier is None:
+        st.info("No feasible frontier was found. Try relaxing the constraints or checking historical data availability.")
+    else:
+        st.plotly_chart(fig_frontier, use_container_width=True)
+
+        f1, f2, f3 = st.columns(3)
+        info_metric(f1, "Current Expected Return / Volatility", f"{current_return:.2%} / {current_vol:.2%}", "Expected annual return and annualized volatility of the current portfolio.")
+        info_metric(f2, "Max Sharpe Return / Volatility", f"{max_sharpe_row['Return']:.2%} / {max_sharpe_row['Volatility']:.2%}", "Expected annual return and volatility of the highest-Sharpe simulated portfolio.")
+        info_metric(f3, "Min Vol Return / Volatility", f"{min_vol_row['Return']:.2%} / {min_vol_row['Volatility']:.2%}", "Expected annual return and volatility of the minimum-volatility portfolio.")
+
+        f4, f5, f6 = st.columns(3)
+        info_metric(f4, "Current Sharpe Ratio", f"{current_sharpe:.2f}", "Risk-adjusted return of the current portfolio using the selected risk-free rate.")
+        info_metric(f5, "Max Sharpe Ratio", f"{max_sharpe_row['Sharpe']:.2f}", "Highest Sharpe ratio among the feasible simulated portfolios.")
+        info_metric(f6, "Min Vol Sharpe Ratio", f"{min_vol_row['Sharpe']:.2f}", "Sharpe ratio of the minimum-volatility feasible portfolio.")
+
+        action_col1, action_col2, _ = st.columns([1, 1, 2])
+
+        with action_col1:
+            if st.button("Estimate Max Sharpe Shares", help="Estimate how many shares each ETF should have to match the maximum-Sharpe portfolio, without modifying your current holdings."):
+                st.session_state[f"show_max_sharpe_targets_{prefix}"] = True
+
+        with action_col2:
+            if st.button("Estimate Min Vol Shares", help="Estimate how many shares each ETF should have to match the minimum-volatility portfolio, without modifying your current holdings."):
+                st.session_state[f"show_min_vol_targets_{prefix}"] = True
+
+        if st.session_state.get(f"show_max_sharpe_targets_{prefix}", False):
+            info_section("Recommended Shares for Max Sharpe", "Estimated share quantities required to reach the maximum-Sharpe allocation, based on current total portfolio value and current prices.")
+            rec_df_max = build_recommended_shares_table(max_sharpe_row["Weights"], usable, df)
+            st.dataframe(rec_df_max, use_container_width=True)
+
+        if st.session_state.get(f"show_min_vol_targets_{prefix}", False):
+            info_section("Recommended Shares for Minimum Volatility", "Estimated share quantities required to reach the minimum-volatility allocation, based on current total portfolio value and current prices.")
+            rec_df_min = build_recommended_shares_table(min_vol_row["Weights"], usable, df)
+            st.dataframe(rec_df_min, use_container_width=True)
+
+        info_section("Optimization Weights", "Weight breakdown for the optimal simulated portfolios.")
+        opt1, opt2 = st.columns(2)
+
+        with opt1:
+            st.write("Max Sharpe Portfolio")
+            st.dataframe(weights_table(max_sharpe_row["Weights"], usable), use_container_width=True)
+
+        with opt2:
+            st.write("Minimum Volatility Portfolio")
+            st.dataframe(weights_table(min_vol_row["Weights"], usable), use_container_width=True)
+
+elif page == "Rebalancing":
+    info_section(
+        "Rebalancing Engine",
+        "Trade list showing the required buy and sell adjustments to move from the current allocation to a selected target allocation, including estimated transaction costs."
+    )
+
+    r1, r2, r3, r4 = st.columns(4)
+    info_metric(r1, "Total Buy Value", f"{base_currency} {buy_value:,.2f}", "Total gross capital required for buy trades.")
+    info_metric(r2, "Total Sell Value", f"{base_currency} {sell_value:,.2f}", "Total gross capital released by sell trades.")
+    info_metric(r3, "Estimated Transaction Costs", f"{base_currency} {total_estimated_cost:,.2f}", "Estimated total trading costs under the selected transaction cost model.")
+    info_metric(r4, "Net Cash Impact After Costs", f"{base_currency} {net_cash_after_costs:,.2f}", "Positive means net cash released. Negative means additional cash required.")
+
+    st.dataframe(rebal_df, use_container_width=True)
+
+elif page == "Risk":
+    info_section(
+        "Scenario / Stress Testing",
+        "Applies category-level shocks to estimate how the portfolio would behave under adverse or favorable market scenarios."
+    )
+
+    s1, s2, s3 = st.columns(3)
+    info_metric(s1, "Current Portfolio Value", f"{base_currency} {current_total_value:,.2f}", "Current portfolio value before the stress scenario.")
+    info_metric(s2, "Stressed Portfolio Value", f"{base_currency} {stressed_total_value:,.2f}", "Portfolio value after applying the stress scenario.")
+    info_metric(s3, "Scenario P/L", f"{base_currency} {stress_pnl:,.2f} ({stress_return:.2%})", "Profit or loss implied by the selected shocks.")
+
+    st.plotly_chart(fig_stress, use_container_width=True)
+    st.dataframe(stress_df, use_container_width=True)
+
+elif page == "Investment Horizon":
+    render_investment_horizon_section(
+        total_value=total_value,
+        base_currency=base_currency,
+        portfolio_returns=portfolio_returns,
+    )
+
+elif page == "Private Manager":
+    info_section(
+        "Private Manager",
+        "Use the sidebar controls on this page to select one of your existing private tickers and update its current shares. The values are stored in Google Sheets."
+    )
+
+    private_view = display_df[["Ticker", "Name", "Shares", "Value", "Weight %"]].copy()
+    st.dataframe(private_view, use_container_width=True)
