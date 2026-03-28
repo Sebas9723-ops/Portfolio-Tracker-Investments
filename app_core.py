@@ -25,6 +25,10 @@ PROXY_TICKER_MAP = {
     "IWDA.AS": "EUNL.DE",
 }
 
+PRIVATE_POSITIONS_HEADERS = ["Ticker", "Name", "Shares"]
+TRANSACTIONS_HEADERS = ["date", "ticker", "type", "shares", "price", "fees", "notes"]
+CASH_BALANCES_HEADERS = ["currency", "amount"]
+
 
 # =========================
 # THEME / UI HELPERS
@@ -379,7 +383,7 @@ def render_market_clocks():
         width:100%;
         overflow:hidden;
     ">
-      <div id="clock-title" style="
+      <div style="
           color:#f3a712;
           font-weight:800;
           text-transform:uppercase;
@@ -400,58 +404,13 @@ def render_market_clocks():
 
     <script>
       const markets = {json.dumps(markets)};
-      const wrapper = document.getElementById("clock-wrapper");
       const grid = document.getElementById("clock-grid");
 
       function getCols() {{
         const w = window.innerWidth;
-        if (w <= 520) return 1;   // iPhone
-        if (w <= 900) return 2;   // tablet
-        return 3;                 // desktop
-      }}
-
-      function getCardConfig() {{
-        const w = window.innerWidth;
-
-        if (w <= 520) {{
-          return {{
-            padding: "10px 12px",
-            minHeight: 74,
-            titleSize: "13px",
-            exchSize: "10px",
-            timeSize: "16px",
-            dateSize: "10px",
-            timeMarginTop: "6px",
-            headerExtra: 58,
-            gap: 10
-          }};
-        }}
-
-        if (w <= 900) {{
-          return {{
-            padding: "10px",
-            minHeight: 90,
-            titleSize: "13px",
-            exchSize: "11px",
-            timeSize: "17px",
-            dateSize: "11px",
-            timeMarginTop: "7px",
-            headerExtra: 62,
-            gap: 10
-          }};
-        }}
-
-        return {{
-          padding: "10px",
-          minHeight: 98,
-          titleSize: "13px",
-          exchSize: "11px",
-          timeSize: "18px",
-          dateSize: "11px",
-          timeMarginTop: "8px",
-          headerExtra: 64,
-          gap: 10
-        }};
+        if (w <= 430) return 1;
+        if (w <= 900) return 2;
+        return 3;
       }}
 
       function formatTime(tz) {{
@@ -475,370 +434,134 @@ def render_market_clocks():
         return {{ time, date }};
       }}
 
-      function setFrameHeight(targetHeight = null) {{
-        const measured = Math.ceil(targetHeight || wrapper.getBoundingClientRect().height || document.body.scrollHeight);
-        window.parent.postMessage(
-          {{
-            isStreamlitMessage: true,
-            type: "streamlit:setFrameHeight",
-            height: measured + 8
-          }},
-          "*"
-        );
-      }}
-
       function renderClocks() {{
         const cols = getCols();
-        const cfg = getCardConfig();
-
         grid.style.gridTemplateColumns = `repeat(${{cols}}, minmax(0, 1fr))`;
-        grid.style.gap = `${{cfg.gap}}px`;
         grid.innerHTML = "";
+
+        const isPhone = cols === 1;
 
         markets.forEach((m) => {{
           const t = formatTime(m.tz);
-
           const card = document.createElement("div");
           card.style.background = "#0f141b";
           card.style.border = "1px solid #2d3642";
           card.style.borderRadius = "6px";
-          card.style.padding = cfg.padding;
-          card.style.minHeight = `${{cfg.minHeight}}px`;
-          card.style.boxSizing = "border-box";
-          card.style.width = "100%";
-
+          card.style.padding = isPhone ? "10px 12px" : "10px";
+          card.style.minHeight = isPhone ? "88px" : "98px";
           card.innerHTML = `
-            <div style="color:#f3a712; font-weight:800; font-size:${{cfg.titleSize}}; text-transform:uppercase; line-height:1.15;">
+            <div style="color:#f3a712; font-weight:800; font-size:${{isPhone ? "14px" : "13px"}}; text-transform:uppercase; line-height:1.15;">
               ${{m.label}}
             </div>
-            <div style="color:#9fb0c3; font-size:${{cfg.exchSize}}; margin-top:2px; line-height:1.1;">
+            <div style="color:#9fb0c3; font-size:11px; margin-top:2px; line-height:1.1;">
               ${{m.exchange}}
             </div>
-            <div style="color:#f8f8f8; font-size:${{cfg.timeSize}}; font-weight:800; margin-top:${{cfg.timeMarginTop}}; line-height:1.1;">
+            <div style="color:#f8f8f8; font-size:${{isPhone ? "19px" : "18px"}}; font-weight:800; margin-top:${{isPhone ? "7px" : "8px"}}; line-height:1.1;">
               ${{t.time}}
             </div>
-            <div style="color:#7fb3ff; font-size:${{cfg.dateSize}}; margin-top:4px; line-height:1.1;">
+            <div style="color:#7fb3ff; font-size:11px; margin-top:4px; line-height:1.1;">
               ${{t.date}}
             </div>
           `;
           grid.appendChild(card);
-        }});
-
-        const rows = Math.ceil(markets.length / cols);
-        const totalHeight =
-          cfg.headerExtra +
-          (rows * cfg.minHeight) +
-          ((rows - 1) * cfg.gap);
-
-        wrapper.style.minHeight = `${{totalHeight}}px`;
-
-        requestAnimationFrame(() => {{
-          setTimeout(() => setFrameHeight(totalHeight + 24), 60);
         }});
       }}
 
       renderClocks();
       setInterval(renderClocks, 1000);
       window.addEventListener("resize", renderClocks);
-
-      const ro = new ResizeObserver(() => {{
-        setFrameHeight();
-      }});
-      ro.observe(wrapper);
-
-      setTimeout(renderClocks, 120);
-      setTimeout(renderClocks, 300);
-      setTimeout(renderClocks, 700);
     </script>
     """
     components_html(component, height=630, scrolling=False)
 
-# =========================
-# INVESTMENT HORIZON
-# =========================
-def build_projection_series(
-    initial_value: float,
-    annual_return: float,
-    years: int,
-    monthly_contribution: float = 0.0,
-):
-    months = int(years * 12)
-
-    if annual_return <= -0.999:
-        monthly_rate = -0.999
-    else:
-        monthly_rate = (1 + annual_return) ** (1 / 12) - 1
-
-    values = [float(initial_value)]
-
-    for _ in range(months):
-        next_value = values[-1] * (1 + monthly_rate) + monthly_contribution
-        values.append(max(float(next_value), 0.0))
-
-    return pd.DataFrame(
-        {
-            "Month": range(months + 1),
-            "Year": np.arange(months + 1) / 12,
-            "Value": values,
-        }
-    )
-
-
-def render_investment_horizon_section(
-    total_value: float,
-    base_currency: str,
-    portfolio_returns: pd.Series,
-):
-    info_section(
-        "Investment Horizon",
-        "Projected portfolio value over a selected investment horizon using monthly compounding and optional monthly contributions."
-    )
-
-    horizon_years = st.selectbox(
-        "Investment Horizon (Years)",
-        [5, 10, 15, 20, 25, 30],
-        index=1,
-        help="Select the projection horizon.",
-    )
-
-    default_return = 0.08
-    if not portfolio_returns.empty:
-        hist_return = float(portfolio_returns.mean() * 252)
-        if np.isfinite(hist_return):
-            default_return = min(max(hist_return, 0.00), 0.15)
-
-    expected_return_pct = st.slider(
-        "Expected Annual Return (%)",
-        min_value=0.0,
-        max_value=20.0,
-        value=float(round(default_return * 100, 1)),
-        step=0.1,
-        format="%.1f",
-        help="Annual return assumption used in the projection, expressed as a percentage.",
-    )
-    expected_return = expected_return_pct / 100.0
-    st.caption(f"Selected expected annual return: {expected_return_pct:.1f}%")
-
-    monthly_contribution = st.number_input(
-        f"Monthly Contribution ({base_currency})",
-        min_value=0.0,
-        value=0.0,
-        step=100.0,
-        help="Optional monthly contribution added to the portfolio projection.",
-    )
-
-    scenario_spread_pct = st.slider(
-        "Scenario Spread (%)",
-        min_value=0.0,
-        max_value=10.0,
-        value=3.0,
-        step=0.1,
-        format="%.1f",
-        help="Difference around the base expected return used to build conservative and optimistic scenarios.",
-    )
-    scenario_spread = scenario_spread_pct / 100.0
-
-    conservative_return = max(expected_return - scenario_spread, -0.95)
-    optimistic_return = expected_return + scenario_spread
-
-    conservative_df = build_projection_series(
-        initial_value=total_value,
-        annual_return=conservative_return,
-        years=horizon_years,
-        monthly_contribution=monthly_contribution,
-    )
-
-    base_df = build_projection_series(
-        initial_value=total_value,
-        annual_return=expected_return,
-        years=horizon_years,
-        monthly_contribution=monthly_contribution,
-    )
-
-    optimistic_df = build_projection_series(
-        initial_value=total_value,
-        annual_return=optimistic_return,
-        years=horizon_years,
-        monthly_contribution=monthly_contribution,
-    )
-
-    fig_projection = go.Figure()
-    fig_projection.add_scatter(
-        x=conservative_df["Year"],
-        y=conservative_df["Value"],
-        name=f"Conservative ({conservative_return:.1%})",
-        mode="lines",
-    )
-    fig_projection.add_scatter(
-        x=base_df["Year"],
-        y=base_df["Value"],
-        name=f"Base ({expected_return:.1%})",
-        mode="lines",
-    )
-    fig_projection.add_scatter(
-        x=optimistic_df["Year"],
-        y=optimistic_df["Value"],
-        name=f"Optimistic ({optimistic_return:.1%})",
-        mode="lines",
-    )
-    fig_projection.update_layout(
-        xaxis_title="Years",
-        yaxis_title=f"Projected Value ({base_currency})",
-        paper_bgcolor="#0b0f14",
-        plot_bgcolor="#0b0f14",
-        font=dict(color="#e6e6e6"),
-        height=420,
-        margin=dict(t=25, b=25, l=25, r=25),
-    )
-    st.plotly_chart(fig_projection, use_container_width=True)
-
-    c1, c2, c3 = st.columns(3)
-    info_metric(
-        c1,
-        "Conservative Final Value",
-        f"{base_currency} {conservative_df['Value'].iloc[-1]:,.2f}",
-        "Projected final portfolio value under the conservative scenario.",
-    )
-    info_metric(
-        c2,
-        "Base Final Value",
-        f"{base_currency} {base_df['Value'].iloc[-1]:,.2f}",
-        "Projected final portfolio value under the base scenario.",
-    )
-    info_metric(
-        c3,
-        "Optimistic Final Value",
-        f"{base_currency} {optimistic_df['Value'].iloc[-1]:,.2f}",
-        "Projected final portfolio value under the optimistic scenario.",
-    )
-
-    projection_table = pd.DataFrame(
-        {
-            "Scenario": ["Conservative", "Base", "Optimistic"],
-            "Annual Return %": [
-                round(conservative_return * 100, 2),
-                round(expected_return * 100, 2),
-                round(optimistic_return * 100, 2),
-            ],
-            "Final Value": [
-                round(conservative_df["Value"].iloc[-1], 2),
-                round(base_df["Value"].iloc[-1], 2),
-                round(optimistic_df["Value"].iloc[-1], 2),
-            ],
-        }
-    )
-    st.dataframe(projection_table, use_container_width=True)
-
 
 # =========================
-# PRIVATE PORTFOLIO
+# GOOGLE SHEETS / STORAGE
 # =========================
-def load_private_portfolio():
-    p = st.secrets["private_portfolio"]
-    return {
-        "SCHD": {"name": "Dividend ETF", "shares": float(p["SCHD"])},
-        "VOO": {"name": "S&P 500", "shares": float(p["VOO"])},
-        "VWCE.DE": {"name": "All World", "shares": float(p["VWCE_DE"])},
-        "IGLN.L": {"name": "Gold", "shares": float(p["IGLN_L"])},
-        "BND": {"name": "Bonds", "shares": float(p["BND"])},
-    }
-
-
-def get_manage_password():
-    auth_section = dict(st.secrets["auth"])
-    return auth_section.get("manage_password", auth_section["password"])
-
-
-def merge_private_portfolios(base_private: dict, custom_private: dict):
-    merged = dict(base_private)
-    merged.update(custom_private)
-    return merged
-
-
-# =========================
-# GOOGLE SHEETS
-# =========================
-def connect_private_positions_worksheet():
+def _get_gcp_cfg():
     try:
         gcp_cfg = dict(st.secrets["gcp_service_account"])
     except Exception as e:
         raise RuntimeError("Missing [gcp_service_account] in Streamlit secrets.") from e
 
+    required_keys = ["type", "project_id", "private_key", "client_email", "token_uri"]
+    missing = [k for k in required_keys if k not in gcp_cfg or not str(gcp_cfg[k]).strip()]
+    if missing:
+        raise RuntimeError(f"Missing keys in [gcp_service_account]: {', '.join(missing)}")
+
+    private_key = str(gcp_cfg["private_key"])
+    if "\\n" in private_key:
+        gcp_cfg["private_key"] = private_key.replace("\\n", "\n")
+
+    return gcp_cfg
+
+
+def _get_sheets_cfg():
     try:
-        sheets_cfg = dict(st.secrets["sheets"])
+        return dict(st.secrets["sheets"])
     except Exception as e:
         raise RuntimeError("Missing [sheets] in Streamlit secrets.") from e
 
-    required_gcp_keys = [
-        "type",
-        "project_id",
-        "private_key",
-        "client_email",
-        "token_uri",
-    ]
-    missing_gcp = [k for k in required_gcp_keys if k not in gcp_cfg or not str(gcp_cfg[k]).strip()]
-    if missing_gcp:
-        raise RuntimeError(f"Missing keys in [gcp_service_account]: {', '.join(missing_gcp)}")
 
-    worksheet_name = str(sheets_cfg.get("private_positions_worksheet", "private_positions")).strip()
+def _get_spreadsheet():
+    gcp_cfg = _get_gcp_cfg()
+    sheets_cfg = _get_sheets_cfg()
+
     sheet_id = str(sheets_cfg.get("private_positions_sheet_id", "")).strip()
     sheet_url = str(sheets_cfg.get("private_positions_sheet_url", "")).strip()
 
     if not sheet_id and not sheet_url:
         raise RuntimeError("Missing 'private_positions_sheet_id' or 'private_positions_sheet_url' in [sheets].")
 
-    private_key = str(gcp_cfg["private_key"])
-    if "\\n" in private_key:
-        gcp_cfg["private_key"] = private_key.replace("\\n", "\n")
-
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
     ]
 
-    try:
-        creds = Credentials.from_service_account_info(gcp_cfg, scopes=scopes)
-    except Exception as e:
-        raise RuntimeError(f"Invalid Google service account credentials: {e}") from e
+    creds = Credentials.from_service_account_info(gcp_cfg, scopes=scopes)
+    client = gspread.authorize(creds)
 
-    try:
-        client = gspread.authorize(creds)
-    except Exception as e:
-        raise RuntimeError(f"Google authorization failed: {e}") from e
+    if sheet_id:
+        return client.open_by_key(sheet_id)
+    return client.open_by_url(sheet_url)
 
-    try:
-        if sheet_id:
-            spreadsheet = client.open_by_key(sheet_id)
-        else:
-            spreadsheet = client.open_by_url(sheet_url)
-    except Exception as e:
-        raise RuntimeError(
-            f"Could not open Google Sheet. Verify sheet access, APIs enabled, and sheet id/url. Original error: {e}"
-        ) from e
+
+def _connect_named_worksheet(worksheet_name: str, headers: list[str], default_rows: list[list] | None = None):
+    spreadsheet = _get_spreadsheet()
 
     try:
         ws = spreadsheet.worksheet(worksheet_name)
     except gspread.WorksheetNotFound:
-        try:
-            ws = spreadsheet.add_worksheet(title=worksheet_name, rows=500, cols=3)
-        except Exception as e:
-            raise RuntimeError(f"Could not create worksheet '{worksheet_name}': {e}") from e
-
-    expected_header = ["Ticker", "Name", "Shares"]
+        ws = spreadsheet.add_worksheet(title=worksheet_name, rows=1000, cols=max(len(headers), 5))
 
     try:
         current_header = ws.row_values(1)
     except Exception:
         current_header = []
 
-    if current_header != expected_header:
-        try:
-            ws.clear()
-            ws.update(range_name="A1:C1", values=[expected_header])
-        except Exception as e:
-            raise RuntimeError(f"Could not initialize worksheet header: {e}") from e
+    if current_header != headers:
+        ws.clear()
+        rows = [headers]
+        if default_rows:
+            rows.extend(default_rows)
+        ws.update(range_name="A1", values=rows)
 
     return ws
+
+
+def connect_private_positions_worksheet():
+    sheets_cfg = _get_sheets_cfg()
+    worksheet_name = str(sheets_cfg.get("private_positions_worksheet", "private_positions")).strip()
+    return _connect_named_worksheet(worksheet_name, PRIVATE_POSITIONS_HEADERS)
+
+
+def connect_transactions_worksheet():
+    return _connect_named_worksheet("transactions", TRANSACTIONS_HEADERS)
+
+
+def connect_cash_balances_worksheet():
+    default_rows = [[ccy, 0.0] for ccy in SUPPORTED_BASE_CCY]
+    return _connect_named_worksheet("cash_balances", CASH_BALANCES_HEADERS, default_rows=default_rows)
 
 
 def load_private_positions_from_sheets():
@@ -866,13 +589,222 @@ def load_private_positions_from_sheets():
 def save_private_positions_to_sheets(positions: dict):
     ws = connect_private_positions_worksheet()
 
-    rows = [["Ticker", "Name", "Shares"]]
+    rows = [PRIVATE_POSITIONS_HEADERS]
     for ticker in sorted(positions.keys()):
         meta = positions[ticker]
         rows.append([ticker, meta["name"], float(meta["shares"])])
 
     ws.clear()
     ws.update(range_name="A1", values=rows)
+
+
+def load_transactions_from_sheets():
+    ws = connect_transactions_worksheet()
+    records = ws.get_all_records()
+
+    if not records:
+        return pd.DataFrame(columns=TRANSACTIONS_HEADERS)
+
+    df = pd.DataFrame(records)
+    df.columns = [str(c).strip().lower() for c in df.columns]
+
+    for col in TRANSACTIONS_HEADERS:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["ticker"] = df["ticker"].astype(str).str.strip().str.upper()
+    df["type"] = df["type"].astype(str).str.strip().str.upper()
+    df["shares"] = pd.to_numeric(df["shares"], errors="coerce").fillna(0.0)
+    df["price"] = pd.to_numeric(df["price"], errors="coerce").fillna(0.0)
+    df["fees"] = pd.to_numeric(df["fees"], errors="coerce").fillna(0.0)
+    df["notes"] = df["notes"].fillna("").astype(str)
+
+    df = df.dropna(subset=["date"])
+    df = df[df["ticker"] != ""]
+    df = df[df["type"].isin(["BUY", "SELL"])]
+    df = df.sort_values(["date"]).reset_index(drop=True)
+
+    return df[TRANSACTIONS_HEADERS]
+
+
+def append_transaction_to_sheets(tx: dict):
+    ws = connect_transactions_worksheet()
+    row = [
+        str(tx["date"]),
+        str(tx["ticker"]).upper().strip(),
+        str(tx["type"]).upper().strip(),
+        float(tx["shares"]),
+        float(tx["price"]),
+        float(tx.get("fees", 0.0)),
+        str(tx.get("notes", "")).strip(),
+    ]
+    ws.append_row(row, value_input_option="USER_ENTERED")
+
+
+def load_cash_balances_from_sheets():
+    ws = connect_cash_balances_worksheet()
+    records = ws.get_all_records()
+
+    if not records:
+        rows = [[ccy, 0.0] for ccy in SUPPORTED_BASE_CCY]
+        ws.clear()
+        ws.update(range_name="A1", values=[CASH_BALANCES_HEADERS] + rows)
+        records = [{"currency": ccy, "amount": 0.0} for ccy in SUPPORTED_BASE_CCY]
+
+    df = pd.DataFrame(records)
+    df.columns = [str(c).strip().lower() for c in df.columns]
+
+    if "currency" not in df.columns:
+        df["currency"] = ""
+    if "amount" not in df.columns:
+        df["amount"] = 0.0
+
+    df["currency"] = df["currency"].astype(str).str.strip().str.upper()
+    df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
+    df = df[df["currency"] != ""].copy()
+
+    existing = set(df["currency"].tolist())
+    missing = [ccy for ccy in SUPPORTED_BASE_CCY if ccy not in existing]
+    if missing:
+        add_df = pd.DataFrame({"currency": missing, "amount": [0.0] * len(missing)})
+        df = pd.concat([df, add_df], ignore_index=True)
+
+    df = df.drop_duplicates(subset=["currency"], keep="last").reset_index(drop=True)
+    return df
+
+
+def save_cash_balances_to_sheets(cash_df: pd.DataFrame):
+    ws = connect_cash_balances_worksheet()
+
+    df = cash_df.copy()
+    df["currency"] = df["currency"].astype(str).str.strip().str.upper()
+    df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
+    df = df[df["currency"] != ""].drop_duplicates(subset=["currency"], keep="last")
+
+    preferred_order = {ccy: i for i, ccy in enumerate(SUPPORTED_BASE_CCY)}
+    df["__sort"] = df["currency"].map(lambda x: preferred_order.get(x, 999))
+    df = df.sort_values(["__sort", "currency"]).drop(columns="__sort").reset_index(drop=True)
+
+    rows = [CASH_BALANCES_HEADERS]
+    for _, row in df.iterrows():
+        rows.append([row["currency"], float(row["amount"])])
+
+    ws.clear()
+    ws.update(range_name="A1", values=rows)
+
+
+def adjust_cash_balance(currency: str, delta: float):
+    cash_df = load_cash_balances_from_sheets()
+    currency = str(currency).upper().strip()
+
+    if currency in cash_df["currency"].values:
+        cash_df.loc[cash_df["currency"] == currency, "amount"] += float(delta)
+    else:
+        cash_df = pd.concat(
+            [
+                cash_df,
+                pd.DataFrame({"currency": [currency], "amount": [float(delta)]}),
+            ],
+            ignore_index=True,
+        )
+
+    save_cash_balances_to_sheets(cash_df)
+
+
+# =========================
+# PORTFOLIO / TRANSACTIONS
+# =========================
+def load_private_portfolio():
+    p = st.secrets["private_portfolio"]
+    return {
+        "SCHD": {"name": "Dividend ETF", "shares": float(p["SCHD"])},
+        "VOO": {"name": "S&P 500", "shares": float(p["VOO"])},
+        "VWCE.DE": {"name": "All World", "shares": float(p["VWCE_DE"])},
+        "IGLN.L": {"name": "Gold", "shares": float(p["IGLN_L"])},
+        "BND": {"name": "Bonds", "shares": float(p["BND"])},
+    }
+
+
+def get_manage_password():
+    auth_section = dict(st.secrets["auth"])
+    return auth_section.get("manage_password", auth_section["password"])
+
+
+def merge_private_portfolios(base_private: dict, custom_private: dict):
+    merged = dict(base_private)
+    merged.update(custom_private)
+    return merged
+
+
+def build_transaction_positions(transactions_df: pd.DataFrame, name_map: dict):
+    state = {}
+
+    if transactions_df is None or transactions_df.empty:
+        return {}, {}
+
+    for _, row in transactions_df.sort_values("date").iterrows():
+        ticker = str(row["ticker"]).upper().strip()
+        tx_type = str(row["type"]).upper().strip()
+        shares = float(row["shares"])
+        price = float(row["price"])
+        fees = float(row.get("fees", 0.0))
+
+        if ticker not in state:
+            state[ticker] = {
+                "shares": 0.0,
+                "invested_capital_native": 0.0,
+                "realized_pnl_native": 0.0,
+                "tx_count": 0,
+            }
+
+        s = state[ticker]
+        s["tx_count"] += 1
+
+        if tx_type == "BUY":
+            total_cost = shares * price + fees
+            s["shares"] += shares
+            s["invested_capital_native"] += total_cost
+
+        elif tx_type == "SELL":
+            current_shares = float(s["shares"])
+            avg_cost = (
+                float(s["invested_capital_native"]) / current_shares
+                if current_shares > 0
+                else price
+            )
+
+            proceeds = shares * price - fees
+            cost_removed = min(shares, current_shares) * avg_cost
+
+            s["realized_pnl_native"] += proceeds - cost_removed
+            s["invested_capital_native"] = max(s["invested_capital_native"] - cost_removed, 0.0)
+            s["shares"] = max(current_shares - shares, 0.0)
+
+    positions = {}
+    stats = {}
+
+    for ticker, s in state.items():
+        shares = float(s["shares"])
+        invested = float(s["invested_capital_native"])
+        avg_cost = invested / shares if shares > 0 else 0.0
+
+        stats[ticker] = {
+            "name": name_map.get(ticker, ticker),
+            "shares": shares,
+            "avg_cost_native": avg_cost,
+            "invested_capital_native": invested,
+            "realized_pnl_native": float(s["realized_pnl_native"]),
+            "tx_count": int(s["tx_count"]),
+            "tracked": True,
+        }
+
+        positions[ticker] = {
+            "name": name_map.get(ticker, ticker),
+            "shares": shares,
+        }
+
+    return positions, stats
 
 
 def build_private_portfolio_for_save(portfolio_data: dict, prefix: str):
@@ -931,7 +863,7 @@ def reset_mode_state(portfolio_data: dict, prefix: str):
         st.session_state[f"{prefix}_shares_{ticker}"] = float(meta["shares"])
 
 
-def build_current_portfolio(portfolio_data: dict, prefix: str, mode: str):
+def build_current_portfolio(portfolio_data: dict, prefix: str, mode: str, disable_inputs: bool = False):
     updated = {}
     step_value = 1.0 if mode == "Public" else 0.0001
 
@@ -944,6 +876,7 @@ def build_current_portfolio(portfolio_data: dict, prefix: str, mode: str):
             step=step_value,
             format="%.4f",
             key=widget_key,
+            disabled=disable_inputs,
             help=(
                 "Number of shares currently held for this asset. "
                 "Public mode changes with step 1. Private mode changes with step 0.0001."
@@ -963,6 +896,7 @@ def build_current_portfolio(portfolio_data: dict, prefix: str, mode: str):
 # FX / PRICE HELPERS
 # =========================
 def asset_currency(ticker: str) -> str:
+    ticker = str(ticker).upper().strip()
     if ticker.endswith(".DE") or ticker.endswith(".AS"):
         return "EUR"
     if ticker.endswith(".L"):
@@ -973,6 +907,7 @@ def asset_currency(ticker: str) -> str:
 
 
 def asset_market_group(ticker: str) -> str:
+    ticker = str(ticker).upper().strip()
     if ticker.endswith(".L"):
         return "UK"
     if ticker.endswith(".AX"):
@@ -1250,6 +1185,29 @@ def get_safe_native_price(ticker: str, live_prices: dict, asset_hist_native: pd.
 # =========================
 # DATAFRAMES / RETURNS
 # =========================
+def build_cash_display_df(cash_balances_df: pd.DataFrame, base_currency: str, fx_prices: dict, fx_hist: pd.DataFrame):
+    rows = []
+
+    for _, row in cash_balances_df.iterrows():
+        ccy = str(row["currency"]).upper().strip()
+        amount = float(row["amount"])
+        fx_rate = get_fx_rate_current(ccy, base_currency, fx_prices, fx_hist)
+        if pd.isna(fx_rate):
+            fx_rate = 0.0
+        rows.append(
+            {
+                "Currency": ccy,
+                "Amount": round(amount, 2),
+                "FX Rate": round(fx_rate, 6),
+                f"Value ({base_currency})": round(amount * fx_rate, 2),
+            }
+        )
+
+    out = pd.DataFrame(rows)
+    total_cash_value = float(out[f"Value ({base_currency})"].sum()) if not out.empty else 0.0
+    return out, total_cash_value
+
+
 def build_portfolio_df(
     updated_portfolio: dict,
     live_prices_native: dict,
@@ -1257,10 +1215,16 @@ def build_portfolio_df(
     fx_prices: dict,
     fx_hist: pd.DataFrame,
     base_currency: str,
+    tx_stats_map: dict | None = None,
 ):
     rows = []
     total_value = 0.0
     base_total_value = 0.0
+    total_invested_base = 0.0
+    total_unrealized_base = 0.0
+    total_realized_base = 0.0
+
+    tx_stats_map = tx_stats_map or {}
 
     for ticker, meta in updated_portfolio.items():
         native_currency = asset_currency(ticker)
@@ -1275,23 +1239,50 @@ def build_portfolio_df(
         shares = float(meta["shares"])
         base_shares = float(meta["base_shares"])
 
+        tx_stat = tx_stats_map.get(ticker)
+        if tx_stat and tx_stat.get("tracked", False):
+            avg_cost_native = float(tx_stat["avg_cost_native"])
+            invested_native = float(tx_stat["invested_capital_native"])
+            realized_native = float(tx_stat["realized_pnl_native"])
+            tracked = "Transactions"
+        else:
+            avg_cost_native = native_price if shares > 0 else 0.0
+            invested_native = shares * native_price
+            realized_native = 0.0
+            tracked = "Snapshot"
+
+        avg_cost_base = avg_cost_native * fx_rate
+        invested_base = invested_native * fx_rate
+        realized_base = realized_native * fx_rate
+
         value = shares * price
         base_value = base_shares * price
+        unrealized_base = value - invested_base
+        unrealized_pct = (unrealized_base / invested_base) if invested_base > 0 else 0.0
 
         total_value += value
         base_total_value += base_value
+        total_invested_base += invested_base
+        total_unrealized_base += unrealized_base
+        total_realized_base += realized_base
 
         rows.append(
             {
                 "Ticker": ticker,
                 "Name": meta["name"],
+                "Source": tracked,
                 "Market": asset_market_group(ticker),
                 "Native Currency": native_currency,
                 "Shares": round(shares, 4),
                 "Native Price": round(native_price, 2),
                 "FX Rate": round(fx_rate, 6),
                 "Price": round(price, 2),
+                "Avg Cost": round(avg_cost_base, 2),
+                "Invested Capital": round(invested_base, 2),
                 "Value": round(value, 2),
+                "Unrealized PnL": round(unrealized_base, 2),
+                "Unrealized PnL %": round(unrealized_pct * 100, 2),
+                "Realized PnL": round(realized_base, 2),
                 "Base Shares": round(base_shares, 4),
                 "Base Value": round(base_value, 2),
             }
@@ -1313,7 +1304,14 @@ def build_portfolio_df(
     df["Target %"] = (df["Target Weight"] * 100).round(2)
     df["Deviation %"] = ((df["Weight"] - df["Target Weight"]) * 100).round(2)
 
-    return df, total_value
+    totals = {
+        "holdings_value": float(total_value),
+        "invested_capital": float(total_invested_base),
+        "unrealized_pnl": float(total_unrealized_base),
+        "realized_pnl": float(total_realized_base),
+    }
+
+    return df, total_value, totals
 
 
 def build_portfolio_returns(df: pd.DataFrame, historical_base: pd.DataFrame):
@@ -1715,6 +1713,9 @@ def build_app_context():
     positions_sheet_error = ""
     private_portfolio = {}
     private_sheet_positions = {}
+    tx_stats_map = {}
+    transactions_df = pd.DataFrame(columns=TRANSACTIONS_HEADERS)
+    cash_balances_df = pd.DataFrame(columns=CASH_BALANCES_HEADERS)
 
     try:
         base_private_portfolio = load_private_portfolio()
@@ -1731,10 +1732,23 @@ def build_app_context():
             positions_sheet_error = str(e)
             private_sheet_positions = {}
 
-        private_portfolio = merge_private_portfolios(
-            base_private_portfolio,
-            private_sheet_positions,
-        )
+        try:
+            transactions_df = load_transactions_from_sheets()
+        except Exception:
+            transactions_df = pd.DataFrame(columns=TRANSACTIONS_HEADERS)
+
+        try:
+            cash_balances_df = load_cash_balances_from_sheets()
+        except Exception:
+            cash_balances_df = pd.DataFrame({"currency": SUPPORTED_BASE_CCY, "amount": [0.0] * len(SUPPORTED_BASE_CCY)})
+
+        snapshot_private = merge_private_portfolios(base_private_portfolio, private_sheet_positions)
+
+        name_map = {t: meta["name"] for t, meta in snapshot_private.items()}
+        tx_positions, tx_stats_map = build_transaction_positions(transactions_df, name_map)
+
+        private_portfolio = dict(snapshot_private)
+        private_portfolio.update(tx_positions)
 
     mode = st.sidebar.selectbox("View Mode", ["Public", "Private"])
     authenticated = False
@@ -1775,8 +1789,17 @@ def build_app_context():
         reset_mode_state(portfolio_data, prefix)
         st.rerun()
 
+    has_transactions = bool(mode == "Private" and authenticated and not transactions_df.empty)
+    if has_transactions:
+        st.sidebar.info("Private shares are locked because they are now derived from the Transactions sheet.")
+
     st.sidebar.header("Portfolio Inputs")
-    updated_portfolio = build_current_portfolio(portfolio_data, prefix, mode)
+    updated_portfolio = build_current_portfolio(
+        portfolio_data=portfolio_data,
+        prefix=prefix,
+        mode=mode,
+        disable_inputs=has_transactions,
+    )
 
     st.sidebar.header("Optimization Settings")
     profile = st.sidebar.selectbox("Investor Profile", ["Aggressive", "Balanced", "Conservative"])
@@ -1899,36 +1922,49 @@ def build_app_context():
     if missing_fx:
         st.warning(f"Missing FX history for: {', '.join(missing_fx)}")
 
-    df, total_value = build_portfolio_df(
+    df, total_value, pnl_totals = build_portfolio_df(
         updated_portfolio=updated_portfolio,
         live_prices_native=live_prices_native,
         asset_hist_native=asset_hist_native,
         fx_prices=fx_prices,
         fx_hist=fx_hist,
         base_currency=base_currency,
+        tx_stats_map=tx_stats_map,
     )
+
+    cash_display_df, cash_total_value = build_cash_display_df(cash_balances_df, base_currency, fx_prices, fx_hist)
+    total_portfolio_value = pnl_totals["holdings_value"] + cash_total_value
 
     display_df = df[
         [
             "Ticker",
             "Name",
+            "Source",
             "Market",
             "Native Currency",
             "Shares",
-            "Native Price",
-            "FX Rate",
+            "Avg Cost",
             "Price",
+            "Invested Capital",
             "Value",
+            "Unrealized PnL",
+            "Unrealized PnL %",
+            "Realized PnL",
             "Weight %",
             "Target %",
             "Deviation %",
         ]
     ].copy()
 
-    nonzero_df = df[df["Value"] > 0].copy()
+    alloc_df = df[df["Value"] > 0][["Name", "Value"]].copy()
+    if cash_total_value > 0:
+        alloc_df = pd.concat(
+            [alloc_df, pd.DataFrame([{"Name": "Cash", "Value": cash_total_value}])],
+            ignore_index=True,
+        )
 
-    if not nonzero_df.empty:
-        fig_pie = px.pie(nonzero_df, names="Name", values="Value", hole=0.45)
+    if not alloc_df.empty:
+        fig_pie = px.pie(alloc_df, names="Name", values="Value", hole=0.45)
         fig_pie.update_traces(textposition="inside", textinfo="percent+label")
     else:
         fig_pie = go.Figure()
@@ -2203,6 +2239,16 @@ def build_app_context():
         "prefix": prefix,
         "df": df,
         "display_df": display_df,
+        "transactions_df": transactions_df,
+        "cash_balances_df": cash_balances_df,
+        "cash_display_df": cash_display_df,
+        "has_transactions": has_transactions,
+        "holdings_value": pnl_totals["holdings_value"],
+        "cash_total_value": cash_total_value,
+        "total_portfolio_value": total_portfolio_value,
+        "invested_capital": pnl_totals["invested_capital"],
+        "unrealized_pnl": pnl_totals["unrealized_pnl"],
+        "realized_pnl": pnl_totals["realized_pnl"],
         "total_value": total_value,
         "fig_pie": fig_pie,
         "fig_bar": fig_bar,

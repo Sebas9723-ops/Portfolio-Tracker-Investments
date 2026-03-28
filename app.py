@@ -9,46 +9,8 @@ from pages_app.rebalancing import render_rebalancing_page
 from pages_app.risk import render_risk_page
 from pages_app.investment_horizon import render_investment_horizon_page
 from pages_app.private_manager import render_private_manager_page
+from pages_app.transactions import render_transactions_page
 
-st.set_page_config(
-    page_title="Portfolio Management SA",
-    page_icon="📈",
-    layout="wide",
-)
-
-st.markdown(
-    """
-    <script>
-    const addHeadTag = (tagName, attrs) => {
-      const tag = document.createElement(tagName);
-      Object.entries(attrs).forEach(([k, v]) => tag.setAttribute(k, v));
-      document.head.appendChild(tag);
-    };
-
-    if (!document.querySelector("link[rel='apple-touch-icon']")) {
-      addHeadTag("link", {
-        rel: "apple-touch-icon",
-        href: "/app/static/apple-touch-icon.png"
-      });
-    }
-
-    if (!document.querySelector("meta[name='apple-mobile-web-app-title']")) {
-      addHeadTag("meta", {
-        name: "apple-mobile-web-app-title",
-        content: "PM SA"
-      });
-    }
-
-    if (!document.querySelector("meta[name='apple-mobile-web-app-capable']")) {
-      addHeadTag("meta", {
-        name: "apple-mobile-web-app-capable",
-        content: "yes"
-      });
-    }
-    </script>
-    """,
-    unsafe_allow_html=True,
-)
 
 st.set_page_config(page_title="Portfolio Dashboard", layout="wide")
 apply_bloomberg_style()
@@ -102,6 +64,15 @@ pages = [
 ]
 
 if ctx["mode"] == "Private" and ctx["authenticated"]:
+    pages.append(
+        st.Page(
+            lambda: render_transactions_page(ctx),
+            title="Transactions",
+            icon=":material/receipt_long:",
+            url_path="transactions",
+        )
+    )
+
     pages.append(
         st.Page(
             lambda: render_private_manager_page(ctx),
