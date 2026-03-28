@@ -342,10 +342,20 @@ def render_status_bar(mode: str, base_currency: str, profile: str, tc_model: str
 
 
 def render_market_clocks():
-    markets = get_market_times()
+    markets = [
+        {"name": "New York", "exchange": "NYSE / Nasdaq", "tz": "America/New_York"},
+        {"name": "London", "exchange": "LSE", "tz": "Europe/London"},
+        {"name": "Frankfurt", "exchange": "Xetra", "tz": "Europe/Berlin"},
+        {"name": "Zurich", "exchange": "SIX", "tz": "Europe/Zurich"},
+        {"name": "Tokyo", "exchange": "TSE", "tz": "Asia/Tokyo"},
+        {"name": "Shanghai", "exchange": "SSE", "tz": "Asia/Shanghai"},
+        {"name": "Singapore", "exchange": "SGX", "tz": "Asia/Singapore"},
+        {"name": "Bogotá", "exchange": "BVC", "tz": "America/Bogota"},
+        {"name": "Sydney", "exchange": "ASX", "tz": "Australia/Sydney"},
+    ]
 
-    component = f"""
-    <div id="clock-wrapper" style="
+    component = """
+    <div style="
         border:1px solid #2b3340;
         border-left:4px solid #f3a712;
         border-radius:6px;
@@ -355,68 +365,92 @@ def render_market_clocks():
         width:100%;
         overflow:hidden;
     ">
-      <div style="
-          color:#f3a712;
-          font-weight:800;
-          text-transform:uppercase;
-          letter-spacing:0.5px;
-          margin-bottom:10px;
-          font-size:15px;
-      ">
-        Market Clocks
-      </div>
+        <div style="
+            color:#f3a712;
+            font-weight:800;
+            text-transform:uppercase;
+            letter-spacing:0.5px;
+            margin-bottom:10px;
+            font-size:15px;
+        ">
+            Live Market Clocks
+        </div>
 
-      <div id="clock-grid" style="
-          display:grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap:10px;
-          width:100%;
-          box-sizing:border-box;
-      "></div>
+        <div id="market-clock-grid" style="
+            display:grid;
+            grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));
+            gap:10px;
+            width:100%;
+            box-sizing:border-box;
+        "></div>
     </div>
 
     <script>
-      const markets = {json.dumps(markets)};
+        const markets = __MARKETS_JSON__;
+        const grid = document.getElementById("market-clock-grid");
 
-      function buildCard(name, timeVal, dateVal) {{
-        return `
-          <div style="
-            background:#0f141b;
-            border:1px solid #2d3642;
-            border-radius:6px;
-            padding:10px;
-            min-height:94px;
-            box-sizing:border-box;
-          ">
-            <div style="color:#f3a712;font-weight:800;font-size:13px;text-transform:uppercase;line-height:1.15;">
-              ${name}
-            </div>
-            <div style="color:#f8f8f8;font-size:18px;font-weight:800;margin-top:8px;line-height:1.1;">
-              ${timeVal}
-            </div>
-            <div style="color:#7fb3ff;font-size:11px;margin-top:6px;line-height:1.1;">
-              ${dateVal}
-            </div>
-          </div>
-        `;
-      }}
+        function getTimeValues(timeZone) {
+            const now = new Date();
 
-      function renderClocks() {{
-        const grid = document.getElementById("clock-grid");
-        grid.innerHTML = "";
-        Object.entries(markets).forEach(([name, values]) => {{
-          const timeVal = values[0];
-          const dateVal = values[1];
-          grid.innerHTML += buildCard(name, timeVal, dateVal);
-        }});
-      }}
+            const timeVal = new Intl.DateTimeFormat("en-GB", {
+                timeZone: timeZone,
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+                hour12: false
+            }).format(now);
 
-      renderClocks();
+            const dateVal = new Intl.DateTimeFormat("en-GB", {
+                timeZone: timeZone,
+                weekday: "short",
+                day: "2-digit",
+                month: "short"
+            }).format(now);
+
+            return { timeVal, dateVal };
+        }
+
+        function renderGrid() {
+            grid.innerHTML = "";
+
+            markets.forEach((market) => {
+                const vals = getTimeValues(market.tz);
+
+                const card = document.createElement("div");
+                card.style.background = "#0f141b";
+                card.style.border = "1px solid #2d3642";
+                card.style.borderRadius = "6px";
+                card.style.padding = "10px";
+                card.style.minHeight = "94px";
+                card.style.boxSizing = "border-box";
+
+                card.innerHTML = `
+                    <div style="color:#f3a712;font-weight:800;font-size:13px;text-transform:uppercase;line-height:1.15;">
+                        ${market.name}
+                    </div>
+                    <div style="color:#9fb0c3;font-size:11px;margin-top:2px;line-height:1.1;">
+                        ${market.exchange}
+                    </div>
+                    <div style="color:#f8f8f8;font-size:18px;font-weight:800;margin-top:8px;line-height:1.1;">
+                        ${vals.timeVal}
+                    </div>
+                    <div style="color:#7fb3ff;font-size:11px;margin-top:6px;line-height:1.1;">
+                        ${vals.dateVal}
+                    </div>
+                `;
+
+                grid.appendChild(card);
+            });
+        }
+
+        renderGrid();
+        setInterval(renderGrid, 1000);
     </script>
     """
+
+    component = component.replace("__MARKETS_JSON__", json.dumps(markets))
     components_html(component, height=630, scrolling=False)
-
-
+    
 # =========================
 # INVESTMENT HORIZON
 # =========================
