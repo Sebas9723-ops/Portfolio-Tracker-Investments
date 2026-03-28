@@ -448,7 +448,7 @@ def render_market_clocks():
       setTimeout(setFrameHeight, 180);
     </script>
     """
-    components_html(component, height=720, scrolling=False)
+    components_html(component, height=600, scrolling=False)
 
 
 # =========================
