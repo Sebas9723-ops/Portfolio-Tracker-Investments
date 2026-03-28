@@ -1211,15 +1211,6 @@ if mode == "Private" and authenticated:
             )
 
             selected_name = updated_portfolio[selected_ticker]["name"]
-            selected_value = current_selected_shares * float(
-                next(
-                    (
-                        get_safe_native_price(selected_ticker, get_prices([selected_ticker]), get_historical_data([selected_ticker], period="1mo"))
-                        * (get_fx_rate_current(asset_currency(selected_ticker), base_currency, *build_fx_data([selected_ticker], base_currency, period="1mo")[:2]) or 0)
-                    ),
-                    0.0
-                )
-            )
 
             st.sidebar.caption(f"Selected name: {selected_name}")
             st.sidebar.caption(f"Current shares: {current_selected_shares:.4f}")
