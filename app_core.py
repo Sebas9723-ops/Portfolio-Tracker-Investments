@@ -428,7 +428,7 @@ def render_market_clocks():
           card.style.background = "#0f141b";
           card.style.border = "1px solid #2d3642";
           card.style.borderRadius = "6px";
-          card.style.padding = "12px";
+          card.style.padding = "10px";
           card.style.minHeight = "98px";
           card.innerHTML = `
             <div style="color:#f3a712; font-weight:800; font-size:13px; text-transform:uppercase;">${{m.label}}</div>
