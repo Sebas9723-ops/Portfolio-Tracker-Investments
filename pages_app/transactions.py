@@ -26,10 +26,11 @@ def render_transactions_page(ctx):
         "Register a buy or sell operation. Share quantities in Private mode are derived from this transaction ledger."
     )
 
-    current_tickers = sorted(
-        set(ctx["portfolio_data"].keys()) |
-        set(ctx["transactions_df"]["ticker"].tolist() if not ctx["transactions_df"].empty else [])
-    )
+    tx_tickers = []
+    if not ctx["transactions_df"].empty and "ticker" in ctx["transactions_df"].columns:
+        tx_tickers = ctx["transactions_df"]["ticker"].dropna().astype(str).str.upper().tolist()
+
+    current_tickers = sorted(set(ctx["portfolio_data"].keys()) | set(tx_tickers))
     ticker_options = current_tickers + ["OTHER"]
 
     with st.form("add_transaction_form", clear_on_submit=True):

@@ -476,6 +476,183 @@ def render_market_clocks():
 
 
 # =========================
+# INVESTMENT HORIZON
+# =========================
+def build_projection_series(
+    initial_value: float,
+    annual_return: float,
+    years: int,
+    monthly_contribution: float = 0.0,
+):
+    months = int(years * 12)
+
+    if annual_return <= -0.999:
+        monthly_rate = -0.999
+    else:
+        monthly_rate = (1 + annual_return) ** (1 / 12) - 1
+
+    values = [float(initial_value)]
+
+    for _ in range(months):
+        next_value = values[-1] * (1 + monthly_rate) + monthly_contribution
+        values.append(max(float(next_value), 0.0))
+
+    return pd.DataFrame(
+        {
+            "Month": range(months + 1),
+            "Year": np.arange(months + 1) / 12,
+            "Value": values,
+        }
+    )
+
+
+def render_investment_horizon_section(
+    total_value: float,
+    base_currency: str,
+    portfolio_returns: pd.Series,
+):
+    info_section(
+        "Investment Horizon",
+        "Projected portfolio value over a selected investment horizon using monthly compounding and optional monthly contributions."
+    )
+
+    horizon_years = st.selectbox(
+        "Investment Horizon (Years)",
+        [5, 10, 15, 20, 25, 30],
+        index=1,
+        help="Select the projection horizon.",
+    )
+
+    default_return = 0.08
+    if not portfolio_returns.empty:
+        hist_return = float(portfolio_returns.mean() * 252)
+        if np.isfinite(hist_return):
+            default_return = min(max(hist_return, 0.00), 0.15)
+
+    expected_return_pct = st.slider(
+        "Expected Annual Return (%)",
+        min_value=0.0,
+        max_value=20.0,
+        value=float(round(default_return * 100, 1)),
+        step=0.1,
+        format="%.1f",
+        help="Annual return assumption used in the projection, expressed as a percentage.",
+    )
+    expected_return = expected_return_pct / 100.0
+    st.caption(f"Selected expected annual return: {expected_return_pct:.1f}%")
+
+    monthly_contribution = st.number_input(
+        f"Monthly Contribution ({base_currency})",
+        min_value=0.0,
+        value=0.0,
+        step=100.0,
+        help="Optional monthly contribution added to the portfolio projection.",
+    )
+
+    scenario_spread_pct = st.slider(
+        "Scenario Spread (%)",
+        min_value=0.0,
+        max_value=10.0,
+        value=3.0,
+        step=0.1,
+        format="%.1f",
+        help="Difference around the base expected return used to build conservative and optimistic scenarios.",
+    )
+    scenario_spread = scenario_spread_pct / 100.0
+
+    conservative_return = max(expected_return - scenario_spread, -0.95)
+    optimistic_return = expected_return + scenario_spread
+
+    conservative_df = build_projection_series(
+        initial_value=total_value,
+        annual_return=conservative_return,
+        years=horizon_years,
+        monthly_contribution=monthly_contribution,
+    )
+
+    base_df = build_projection_series(
+        initial_value=total_value,
+        annual_return=expected_return,
+        years=horizon_years,
+        monthly_contribution=monthly_contribution,
+    )
+
+    optimistic_df = build_projection_series(
+        initial_value=total_value,
+        annual_return=optimistic_return,
+        years=horizon_years,
+        monthly_contribution=monthly_contribution,
+    )
+
+    fig_projection = go.Figure()
+    fig_projection.add_scatter(
+        x=conservative_df["Year"],
+        y=conservative_df["Value"],
+        name=f"Conservative ({conservative_return:.1%})",
+        mode="lines",
+    )
+    fig_projection.add_scatter(
+        x=base_df["Year"],
+        y=base_df["Value"],
+        name=f"Base ({expected_return:.1%})",
+        mode="lines",
+    )
+    fig_projection.add_scatter(
+        x=optimistic_df["Year"],
+        y=optimistic_df["Value"],
+        name=f"Optimistic ({optimistic_return:.1%})",
+        mode="lines",
+    )
+    fig_projection.update_layout(
+        xaxis_title="Years",
+        yaxis_title=f"Projected Value ({base_currency})",
+        paper_bgcolor="#0b0f14",
+        plot_bgcolor="#0b0f14",
+        font=dict(color="#e6e6e6"),
+        height=420,
+        margin=dict(t=25, b=25, l=25, r=25),
+    )
+    st.plotly_chart(fig_projection, use_container_width=True)
+
+    c1, c2, c3 = st.columns(3)
+    info_metric(
+        c1,
+        "Conservative Final Value",
+        f"{base_currency} {conservative_df['Value'].iloc[-1]:,.2f}",
+        "Projected final portfolio value under the conservative scenario.",
+    )
+    info_metric(
+        c2,
+        "Base Final Value",
+        f"{base_currency} {base_df['Value'].iloc[-1]:,.2f}",
+        "Projected final portfolio value under the base scenario.",
+    )
+    info_metric(
+        c3,
+        "Optimistic Final Value",
+        f"{base_currency} {optimistic_df['Value'].iloc[-1]:,.2f}",
+        "Projected final portfolio value under the optimistic scenario.",
+    )
+
+    projection_table = pd.DataFrame(
+        {
+            "Scenario": ["Conservative", "Base", "Optimistic"],
+            "Annual Return %": [
+                round(conservative_return * 100, 2),
+                round(expected_return * 100, 2),
+                round(optimistic_return * 100, 2),
+            ],
+            "Final Value": [
+                round(conservative_df["Value"].iloc[-1], 2),
+                round(base_df["Value"].iloc[-1], 2),
+                round(optimistic_df["Value"].iloc[-1], 2),
+            ],
+        }
+    )
+    st.dataframe(projection_table, use_container_width=True)
+
+
+# =========================
 # GOOGLE SHEETS / STORAGE
 # =========================
 def _get_gcp_cfg():
@@ -526,7 +703,7 @@ def _get_spreadsheet():
     return client.open_by_url(sheet_url)
 
 
-def _connect_named_worksheet(worksheet_name: str, headers: list[str], default_rows: list[list] | None = None):
+def _connect_named_worksheet(worksheet_name: str, headers: list[str], default_rows=None):
     spreadsheet = _get_spreadsheet()
 
     try:
@@ -1215,7 +1392,7 @@ def build_portfolio_df(
     fx_prices: dict,
     fx_hist: pd.DataFrame,
     base_currency: str,
-    tx_stats_map: dict | None = None,
+    tx_stats_map=None,
 ):
     rows = []
     total_value = 0.0
