@@ -1,5 +1,6 @@
 import json
 import html
+from pathlib import Path
 
 import gspread
 import numpy as np
@@ -35,6 +36,15 @@ def apply_bloomberg_style():
         .stApp {
             background-color: #0b0f14;
             color: #e6e6e6;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .block-container {
+            padding-top: 1rem !important;
+            padding-right: 1.1rem !important;
+            padding-left: 1.1rem !important;
+            padding-bottom: 2rem !important;
+            max-width: 1500px;
         }
 
         [data-testid="stSidebar"] {
@@ -117,6 +127,7 @@ def apply_bloomberg_style():
             font-weight: 700;
             text-transform: uppercase;
             letter-spacing: 0.4px;
+            min-height: 42px;
         }
 
         .stButton > button:hover {
@@ -136,6 +147,7 @@ def apply_bloomberg_style():
             color: #f2f2f2 !important;
             border: 1px solid #394250 !important;
             border-radius: 4px !important;
+            min-height: 42px !important;
         }
 
         .stExpander {
@@ -169,6 +181,45 @@ def apply_bloomberg_style():
             border-radius: 6px !important;
             border: 1px solid #2b3340 !important;
         }
+
+        @media (max-width: 900px) {
+            .block-container {
+                padding-top: 0.7rem !important;
+                padding-right: 0.6rem !important;
+                padding-left: 0.6rem !important;
+                padding-bottom: 1.5rem !important;
+            }
+
+            .bb-title {
+                font-size: 1.45rem;
+                padding-bottom: 0.55rem;
+                margin-bottom: 0.7rem;
+            }
+
+            .bb-section {
+                padding: 0.65rem 0.75rem 0.7rem 0.75rem;
+                margin: 0.45rem 0 0.8rem 0;
+            }
+
+            [data-testid="stMetricValue"] {
+                font-size: 1.15rem !important;
+            }
+
+            [data-testid="stHorizontalBlock"] {
+                flex-wrap: wrap !important;
+                gap: 0.6rem !important;
+            }
+
+            [data-testid="column"] {
+                min-width: 100% !important;
+                flex: 1 1 100% !important;
+                width: 100% !important;
+            }
+
+            div[data-testid="stDataFrame"] {
+                font-size: 12px !important;
+            }
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -177,6 +228,47 @@ def apply_bloomberg_style():
 
 def render_page_title(title: str):
     st.markdown(f'<div class="bb-title">{html.escape(title)}</div>', unsafe_allow_html=True)
+
+
+def get_logo_path():
+    candidates = [
+        Path("assets/logo_pm_sa.png"),
+        Path("assets/logo.png"),
+        Path("assets/portfolio_logo.png"),
+    ]
+    for path in candidates:
+        if path.exists():
+            return str(path)
+    return None
+
+
+def render_private_dashboard_logo(mode: str, authenticated: bool):
+    if mode != "Private" or not authenticated:
+        return
+
+    logo_path = get_logo_path()
+    if not logo_path:
+        return
+
+    c1, c2 = st.columns([1, 5])
+
+    with c1:
+        st.image(logo_path, width=110)
+
+    with c2:
+        st.markdown(
+            """
+            <div style="padding-top:0.35rem;">
+                <div style="font-size:1.05rem; font-weight:800; color:#f3a712; text-transform:uppercase; letter-spacing:0.6px;">
+                    Private Portfolio
+                </div>
+                <div style="font-size:0.82rem; color:#cbd5df; margin-top:0.2rem;">
+                    Portfolio Management SA · Sebastian Aguilar
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 def info_html(text: str, help_text: str, size: str = "1rem", weight: str = "700"):
@@ -254,7 +346,7 @@ def render_market_clocks():
     ]
 
     component = f"""
-    <div style="border:1px solid #2b3340; border-left:4px solid #f3a712; border-radius:6px; padding:12px; background:#111821;">
+    <div id="clock-wrapper" style="border:1px solid #2b3340; border-left:4px solid #f3a712; border-radius:6px; padding:12px; background:#111821;">
       <div style="color:#f3a712; font-weight:800; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:10px;">
         Live Market Clocks
       </div>
@@ -263,6 +355,14 @@ def render_market_clocks():
 
     <script>
       const markets = {json.dumps(markets)};
+
+      function getCols() {{
+        const w = window.innerWidth;
+        if (w <= 520) return 1;
+        if (w <= 900) return 2;
+        if (w <= 1200) return 3;
+        return 4;
+      }}
 
       function formatTime(tz) {{
         const now = new Date();
@@ -284,8 +384,19 @@ def render_market_clocks():
         return {{ time, date }};
       }}
 
+      function setFrameHeight() {{
+        const height = document.documentElement.scrollHeight;
+        window.parent.postMessage({{
+          isStreamlitMessage: true,
+          type: "streamlit:setFrameHeight",
+          height: height
+        }}, "*");
+      }}
+
       function renderClocks() {{
         const grid = document.getElementById("clock-grid");
+        const cols = getCols();
+        grid.style.gridTemplateColumns = `repeat(${{cols}}, minmax(0, 1fr))`;
         grid.innerHTML = "";
 
         markets.forEach((m) => {{
@@ -295,7 +406,7 @@ def render_market_clocks():
           card.style.border = "1px solid #2d3642";
           card.style.borderRadius = "6px";
           card.style.padding = "10px";
-          card.style.minHeight = "96px";
+          card.style.minHeight = "92px";
           card.innerHTML = `
             <div style="color:#f3a712; font-weight:800; font-size:13px; text-transform:uppercase;">${{m.label}}</div>
             <div style="color:#9fb0c3; font-size:11px; margin-top:2px;">${{m.exchange}}</div>
@@ -304,13 +415,18 @@ def render_market_clocks():
           `;
           grid.appendChild(card);
         }});
+
+        setTimeout(setFrameHeight, 50);
       }}
 
       renderClocks();
       setInterval(renderClocks, 1000);
+      window.addEventListener("resize", renderClocks);
+      setTimeout(setFrameHeight, 120);
     </script>
     """
-    components_html(component, height=285, scrolling=False)
+    components_html(component, height=260, scrolling=False)
+
 
 # =========================
 # INVESTMENT HORIZON
