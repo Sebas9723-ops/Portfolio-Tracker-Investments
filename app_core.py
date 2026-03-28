@@ -21,7 +21,6 @@ N_SIMULATIONS = 8000
 SUPPORTED_BASE_CCY = ["USD", "EUR", "GBP", "COP", "CHF", "AUD"]
 PUBLIC_DEFAULTS_VERSION = "public_defaults_v10_each_20260328"
 
-# Fallbacks for Yahoo issues
 PROXY_TICKER_MAP = {
     "IWDA.AS": "EUNL.DE",
 }
@@ -428,27 +427,27 @@ def render_market_clocks():
           card.style.background = "#0f141b";
           card.style.border = "1px solid #2d3642";
           card.style.borderRadius = "6px";
-          card.style.padding = "11px";
+          card.style.padding = "10px";
           card.style.minHeight = "98px";
           card.innerHTML = `
             <div style="color:#f3a712; font-weight:800; font-size:13px; text-transform:uppercase;">${{m.label}}</div>
             <div style="color:#9fb0c3; font-size:11px; margin-top:2px;">${{m.exchange}}</div>
-            <div style="color:#f8f8f8; font-size:18px; font-weight:800; margin-top:10px;">${{t.time}}</div>
+            <div style="color:#f8f8f8; font-size:18px; font-weight:800; margin-top:8px;">${{t.time}}</div>
             <div style="color:#7fb3ff; font-size:11px; margin-top:4px;">${{t.date}}</div>
           `;
           grid.appendChild(card);
         }});
 
-        setTimeout(setFrameHeight, 120);
+        setTimeout(setFrameHeight, 80);
       }}
 
       renderClocks();
       setInterval(renderClocks, 1000);
       window.addEventListener("resize", renderClocks);
-      setTimeout(setFrameHeight, 180);
+      setTimeout(setFrameHeight, 120);
     </script>
     """
-    components_html(component, height=470, scrolling=False)
+    components_html(component, height=460, scrolling=False)
 
 
 # =========================
@@ -898,43 +897,36 @@ def build_fx_data(tickers: list, base_currency: str, period: str = "2y"):
     return fx_prices, fx_hist, fx_tickers
 
 
-def is_valid_series(df: pd.DataFrame, ticker: str) -> bool:
-    try:
-        return ticker in df.columns and not pd.to_numeric(df[ticker], errors="coerce").dropna().empty
-    except Exception:
-        return False
-
-
-def is_valid_price(prices: dict, ticker: str) -> bool:
-    val = prices.get(ticker)
-    return isinstance(val, (int, float)) and pd.notna(val) and val > 0
-
-
-def patch_market_data_with_proxies(live_prices_native: dict, asset_hist_native: pd.DataFrame, tickers: list, period: str = "2y"):
-    patched_prices = dict(live_prices_native) if live_prices_native is not None else {}
-    patched_hist = asset_hist_native.copy() if asset_hist_native is not None else pd.DataFrame()
+def load_market_data_with_proxies(tickers: list, period: str = "2y"):
+    source_tickers = []
+    seen = set()
 
     for ticker in tickers:
-        proxy = PROXY_TICKER_MAP.get(ticker)
-        if not proxy:
-            continue
+        source = PROXY_TICKER_MAP.get(ticker, ticker)
+        if source not in seen:
+            source_tickers.append(source)
+            seen.add(source)
 
-        need_hist = not is_valid_series(patched_hist, ticker)
-        need_price = not is_valid_price(patched_prices, ticker)
+    raw_prices = get_prices(source_tickers)
+    raw_hist = get_historical_data(source_tickers, period=period)
 
-        if not need_hist and not need_price:
-            continue
+    mapped_prices = {}
+    mapped_hist = pd.DataFrame()
 
-        proxy_hist = get_historical_data([proxy], period=period)
-        proxy_prices = get_prices([proxy])
+    if raw_hist is not None and not raw_hist.empty:
+        mapped_hist = pd.DataFrame(index=raw_hist.index)
 
-        if need_hist and not proxy_hist.empty and proxy in proxy_hist.columns:
-            patched_hist[ticker] = pd.to_numeric(proxy_hist[proxy], errors="coerce")
+    for ticker in tickers:
+        source = PROXY_TICKER_MAP.get(ticker, ticker)
 
-        if need_price and is_valid_price(proxy_prices, proxy):
-            patched_prices[ticker] = float(proxy_prices[proxy])
+        price_val = raw_prices.get(source)
+        if isinstance(price_val, (int, float)) and pd.notna(price_val):
+            mapped_prices[ticker] = float(price_val)
 
-    return patched_prices, patched_hist
+        if raw_hist is not None and not raw_hist.empty and source in raw_hist.columns:
+            mapped_hist[ticker] = pd.to_numeric(raw_hist[source], errors="coerce")
+
+    return mapped_prices, mapped_hist
 
 
 def _get_direct_or_inverse_current(from_ccy: str, to_ccy: str, fx_prices: dict, fx_hist: pd.DataFrame):
@@ -1685,19 +1677,15 @@ def build_app_context():
     }
 
     tickers = list(updated_portfolio.keys())
-    live_prices_native = get_prices(tickers)
-    asset_hist_native = get_historical_data(tickers, period="2y")
 
-    if asset_hist_native.empty:
-        st.error("Could not load historical data.")
-        st.stop()
-
-    live_prices_native, asset_hist_native = patch_market_data_with_proxies(
-        live_prices_native=live_prices_native,
-        asset_hist_native=asset_hist_native,
+    live_prices_native, asset_hist_native = load_market_data_with_proxies(
         tickers=tickers,
         period="2y",
     )
+
+    if asset_hist_native is None or asset_hist_native.empty or asset_hist_native.dropna(how="all").empty:
+        st.error("Could not load historical data.")
+        st.stop()
 
     fx_prices, fx_hist, _ = build_fx_data(tickers, base_currency, period="2y")
     historical_base, missing_fx = convert_historical_to_base(asset_hist_native, tickers, base_currency, fx_hist)
@@ -1706,7 +1694,15 @@ def build_app_context():
         st.error("Could not build base-currency historical series.")
         st.stop()
 
-    missing_hist = [ticker for ticker in tickers if ticker not in historical_base.columns]
+    missing_hist = []
+    for ticker in tickers:
+        if ticker not in historical_base.columns:
+            missing_hist.append(ticker)
+        else:
+            s = pd.to_numeric(historical_base[ticker], errors="coerce").dropna()
+            if s.empty:
+                missing_hist.append(ticker)
+
     if missing_hist:
         st.warning(f"No converted historical data for: {', '.join(missing_hist)}")
 
