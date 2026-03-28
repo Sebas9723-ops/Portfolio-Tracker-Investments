@@ -166,14 +166,6 @@ def apply_bloomberg_style():
             border-radius: 6px !important;
             border: 1px solid #2b3340 !important;
         }
-
-        .bb-topline {
-            color: #7fb3ff;
-            font-size: 0.82rem;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 0.4rem;
-        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -214,6 +206,39 @@ def info_metric(container, label: str, value: str, help_text: str):
         unsafe_allow_html=True,
     )
     container.metric(" ", value)
+
+
+def render_status_bar(mode: str, base_currency: str, profile: str, tc_model: str, sheets_ok: bool):
+    sheets_text = "SHEETS OK" if sheets_ok else "SHEETS OFF"
+    sheets_color = "#22c55e" if sheets_ok else "#ef4444"
+
+    st.markdown(
+        f"""
+        <div style="
+            display:flex;
+            gap:18px;
+            flex-wrap:wrap;
+            align-items:center;
+            margin:0.2rem 0 0.9rem 0;
+            padding:0.45rem 0.65rem;
+            border:1px solid #2b3340;
+            border-left:4px solid #f3a712;
+            background:#111821;
+            border-radius:6px;
+            font-size:0.82rem;
+            text-transform:uppercase;
+            letter-spacing:0.5px;
+            color:#cbd5df;
+        ">
+            <span><b>Mode:</b> {mode}</span>
+            <span><b>Base CCY:</b> {base_currency}</span>
+            <span><b>Profile:</b> {profile}</span>
+            <span><b>TC Model:</b> {tc_model}</span>
+            <span><b>Private Sync:</b> <span style="color:{sheets_color}; font-weight:800;">{sheets_text}</span></span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 # =========================
@@ -258,35 +283,80 @@ def validate_new_ticker(ticker: str):
 # GOOGLE SHEETS PRIVATE POSITIONS
 # =========================
 def connect_private_positions_worksheet():
+    try:
+        gcp_cfg = dict(st.secrets["gcp_service_account"])
+    except Exception as e:
+        raise RuntimeError("Missing [gcp_service_account] in Streamlit secrets.") from e
+
+    try:
+        sheets_cfg = dict(st.secrets["sheets"])
+    except Exception as e:
+        raise RuntimeError("Missing [sheets] in Streamlit secrets.") from e
+
+    required_gcp_keys = [
+        "type",
+        "project_id",
+        "private_key",
+        "client_email",
+        "token_uri",
+    ]
+    missing_gcp = [k for k in required_gcp_keys if k not in gcp_cfg or not str(gcp_cfg[k]).strip()]
+    if missing_gcp:
+        raise RuntimeError(f"Missing keys in [gcp_service_account]: {', '.join(missing_gcp)}")
+
+    if "private_positions_sheet_url" not in sheets_cfg or not str(sheets_cfg["private_positions_sheet_url"]).strip():
+        raise RuntimeError("Missing 'private_positions_sheet_url' in [sheets].")
+
+    worksheet_name = str(sheets_cfg.get("private_positions_worksheet", "private_positions")).strip()
+    sheet_url = str(sheets_cfg["private_positions_sheet_url"]).strip()
+
+    private_key = str(gcp_cfg["private_key"])
+    if "\\n" in private_key:
+        gcp_cfg["private_key"] = private_key.replace("\\n", "\n")
+
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
     ]
 
-    creds = Credentials.from_service_account_info(
-        dict(st.secrets["gcp_service_account"]),
-        scopes=scopes,
-    )
+    try:
+        creds = Credentials.from_service_account_info(gcp_cfg, scopes=scopes)
+    except Exception as e:
+        raise RuntimeError(f"Invalid Google service account credentials: {e}") from e
 
-    client = gspread.authorize(creds)
+    try:
+        client = gspread.authorize(creds)
+    except Exception as e:
+        raise RuntimeError(f"Google authorization failed: {e}") from e
 
-    sheets_cfg = dict(st.secrets["sheets"])
-    sheet_url = sheets_cfg["private_positions_sheet_url"]
-    worksheet_name = sheets_cfg.get("private_positions_worksheet", "private_positions")
-
-    spreadsheet = client.open_by_url(sheet_url)
+    try:
+        spreadsheet = client.open_by_url(sheet_url)
+    except Exception as e:
+        raise RuntimeError(
+            "Could not open Google Sheet. Check the URL and make sure the sheet is shared with the service account email."
+        ) from e
 
     try:
         ws = spreadsheet.worksheet(worksheet_name)
     except gspread.WorksheetNotFound:
-        ws = spreadsheet.add_worksheet(title=worksheet_name, rows=500, cols=3)
+        try:
+            ws = spreadsheet.add_worksheet(title=worksheet_name, rows=500, cols=3)
+        except Exception as e:
+            raise RuntimeError(f"Could not create worksheet '{worksheet_name}': {e}") from e
 
     expected_header = ["Ticker", "Name", "Shares"]
-    current_header = ws.row_values(1)
+
+    try:
+        current_header = ws.row_values(1)
+    except Exception:
+        current_header = []
 
     if current_header != expected_header:
-        ws.clear()
-        ws.update(values=[expected_header], range_name="A1:C1")
+        try:
+            ws.clear()
+            ws.update(range_name="A1:C1", values=[expected_header])
+        except Exception as e:
+            raise RuntimeError(f"Could not initialize worksheet header: {e}") from e
 
     return ws
 
@@ -322,7 +392,7 @@ def save_private_positions_to_sheets(positions: dict):
         rows.append([ticker, meta["name"], float(meta["shares"])])
 
     ws.clear()
-    ws.update(values=rows, range_name="A1")
+    ws.update(range_name="A1", values=rows)
 
 
 def build_private_portfolio_for_save(portfolio_data: dict, prefix: str):
@@ -963,20 +1033,23 @@ def compute_rolling_metrics(portfolio_returns: pd.Series, benchmark_returns: pd.
 # =========================
 private_available = True
 positions_sheet_available = True
+positions_sheet_error = ""
 private_portfolio = {}
 private_sheet_positions = {}
 
 try:
     base_private_portfolio = load_private_portfolio()
-except Exception:
+except Exception as e:
     private_available = False
     base_private_portfolio = {}
+    positions_sheet_error = f"Private base portfolio error: {e}"
 
 if private_available:
     try:
         private_sheet_positions = load_private_positions_from_sheets()
-    except Exception:
+    except Exception as e:
         positions_sheet_available = False
+        positions_sheet_error = str(e)
         private_sheet_positions = {}
 
     private_portfolio = merge_private_portfolios(
@@ -1017,7 +1090,12 @@ if mode == "Private" and authenticated:
     )
 
     if not positions_sheet_available:
-        st.sidebar.warning("Google Sheets connection is not available.")
+        st.sidebar.error("Google Sheets connection is not available.")
+        if positions_sheet_error:
+            st.sidebar.caption(positions_sheet_error)
+
+        if st.sidebar.button("Retry Google Sheets"):
+            st.rerun()
     else:
         manager_password_input = st.sidebar.text_input(
             "Manager Password",
@@ -1242,7 +1320,13 @@ df, total_value = build_portfolio_df(
     base_currency=base_currency,
 )
 
-st.markdown('<div class="bb-topline">PX_LAST · FX · WGT · RISK · OPTIMIZATION · COSTS</div>', unsafe_allow_html=True)
+render_status_bar(
+    mode=mode,
+    base_currency=base_currency,
+    profile=profile,
+    tc_model=tc_model,
+    sheets_ok=(positions_sheet_available if mode == "Private" else True),
+)
 
 info_section("Portfolio", f"Snapshot of current positions in {base_currency}, including FX conversion, current weights, target weights, and deviations.")
 
