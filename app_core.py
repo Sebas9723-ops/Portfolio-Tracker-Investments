@@ -369,11 +369,33 @@ def render_market_clocks():
     ]
 
     component = f"""
-    <div id="clock-wrapper" style="border:1px solid #2b3340; border-left:4px solid #f3a712; border-radius:6px; padding:12px; background:#111821;">
-      <div style="color:#f3a712; font-weight:800; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:10px;">
+    <div id="clock-wrapper" style="
+        border:1px solid #2b3340;
+        border-left:4px solid #f3a712;
+        border-radius:6px;
+        padding:12px;
+        background:#111821;
+        box-sizing:border-box;
+        width:100%;
+        overflow:hidden;
+    ">
+      <div id="clock-title" style="
+          color:#f3a712;
+          font-weight:800;
+          text-transform:uppercase;
+          letter-spacing:0.5px;
+          margin-bottom:10px;
+          font-size:15px;
+      ">
         Live Market Clocks
       </div>
-      <div id="clock-grid" style="display:grid; gap:10px;"></div>
+
+      <div id="clock-grid" style="
+          display:grid;
+          gap:10px;
+          width:100%;
+          box-sizing:border-box;
+      "></div>
     </div>
 
     <script>
@@ -383,13 +405,58 @@ def render_market_clocks():
 
       function getCols() {{
         const w = window.innerWidth;
-        if (w <= 430) return 1;
-        if (w <= 900) return 2;
-        return 3;
+        if (w <= 520) return 1;   // iPhone
+        if (w <= 900) return 2;   // tablet
+        return 3;                 // desktop
+      }}
+
+      function getCardConfig() {{
+        const w = window.innerWidth;
+
+        if (w <= 520) {{
+          return {{
+            padding: "10px 12px",
+            minHeight: 74,
+            titleSize: "13px",
+            exchSize: "10px",
+            timeSize: "16px",
+            dateSize: "10px",
+            timeMarginTop: "6px",
+            headerExtra: 58,
+            gap: 10
+          }};
+        }}
+
+        if (w <= 900) {{
+          return {{
+            padding: "10px",
+            minHeight: 90,
+            titleSize: "13px",
+            exchSize: "11px",
+            timeSize: "17px",
+            dateSize: "11px",
+            timeMarginTop: "7px",
+            headerExtra: 62,
+            gap: 10
+          }};
+        }}
+
+        return {{
+          padding: "10px",
+          minHeight: 98,
+          titleSize: "13px",
+          exchSize: "11px",
+          timeSize: "18px",
+          dateSize: "11px",
+          timeMarginTop: "8px",
+          headerExtra: 64,
+          gap: 10
+        }};
       }}
 
       function formatTime(tz) {{
         const now = new Date();
+
         const time = new Intl.DateTimeFormat("en-GB", {{
           timeZone: tz,
           hour: "2-digit",
@@ -408,14 +475,13 @@ def render_market_clocks():
         return {{ time, date }};
       }}
 
-      function setFrameHeight() {{
-        const extra = 8;
-        const h = Math.ceil(wrapper.getBoundingClientRect().height + extra);
+      function setFrameHeight(targetHeight = null) {{
+        const measured = Math.ceil(targetHeight || wrapper.getBoundingClientRect().height || document.body.scrollHeight);
         window.parent.postMessage(
           {{
             isStreamlitMessage: true,
             type: "streamlit:setFrameHeight",
-            height: h
+            height: measured + 8
           }},
           "*"
         );
@@ -423,30 +489,51 @@ def render_market_clocks():
 
       function renderClocks() {{
         const cols = getCols();
-        grid.style.gridTemplateColumns = `repeat(${{cols}}, minmax(0, 1fr))`;
-        grid.innerHTML = "";
+        const cfg = getCardConfig();
 
-        const isPhone = cols === 1;
+        grid.style.gridTemplateColumns = `repeat(${{cols}}, minmax(0, 1fr))`;
+        grid.style.gap = `${{cfg.gap}}px`;
+        grid.innerHTML = "";
 
         markets.forEach((m) => {{
           const t = formatTime(m.tz);
+
           const card = document.createElement("div");
           card.style.background = "#0f141b";
           card.style.border = "1px solid #2d3642";
           card.style.borderRadius = "6px";
-          card.style.padding = isPhone ? "10px 12px" : "10px";
-          card.style.minHeight = isPhone ? "88px" : "98px";
+          card.style.padding = cfg.padding;
+          card.style.minHeight = `${{cfg.minHeight}}px`;
+          card.style.boxSizing = "border-box";
+          card.style.width = "100%";
+
           card.innerHTML = `
-            <div style="color:#f3a712; font-weight:800; font-size:${{isPhone ? "14px" : "13px"}}; text-transform:uppercase;">${{m.label}}</div>
-            <div style="color:#9fb0c3; font-size:11px; margin-top:2px;">${{m.exchange}}</div>
-            <div style="color:#f8f8f8; font-size:${{isPhone ? "19px" : "18px"}}; font-weight:800; margin-top:${{isPhone ? "7px" : "8px"}};">${{t.time}}</div>
-            <div style="color:#7fb3ff; font-size:11px; margin-top:4px;">${{t.date}}</div>
+            <div style="color:#f3a712; font-weight:800; font-size:${{cfg.titleSize}}; text-transform:uppercase; line-height:1.15;">
+              ${{m.label}}
+            </div>
+            <div style="color:#9fb0c3; font-size:${{cfg.exchSize}}; margin-top:2px; line-height:1.1;">
+              ${{m.exchange}}
+            </div>
+            <div style="color:#f8f8f8; font-size:${{cfg.timeSize}}; font-weight:800; margin-top:${{cfg.timeMarginTop}}; line-height:1.1;">
+              ${{t.time}}
+            </div>
+            <div style="color:#7fb3ff; font-size:${{cfg.dateSize}}; margin-top:4px; line-height:1.1;">
+              ${{t.date}}
+            </div>
           `;
           grid.appendChild(card);
         }});
 
+        const rows = Math.ceil(markets.length / cols);
+        const totalHeight =
+          cfg.headerExtra +
+          (rows * cfg.minHeight) +
+          ((rows - 1) * cfg.gap);
+
+        wrapper.style.minHeight = `${{totalHeight}}px`;
+
         requestAnimationFrame(() => {{
-          setTimeout(setFrameHeight, 60);
+          setTimeout(() => setFrameHeight(totalHeight + 24), 60);
         }});
       }}
 
@@ -459,13 +546,12 @@ def render_market_clocks():
       }});
       ro.observe(wrapper);
 
-      setTimeout(setFrameHeight, 120);
-      setTimeout(setFrameHeight, 250);
-      setTimeout(setFrameHeight, 500);
+      setTimeout(renderClocks, 120);
+      setTimeout(renderClocks, 300);
+      setTimeout(renderClocks, 700);
     </script>
     """
-    components_html(component, height=460, scrolling=False)
-
+    components_html(component, height=980, scrolling=False)
 
 # =========================
 # INVESTMENT HORIZON
