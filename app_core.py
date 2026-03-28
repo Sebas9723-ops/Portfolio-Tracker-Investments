@@ -373,15 +373,17 @@ def render_market_clocks():
       <div style="color:#f3a712; font-weight:800; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:10px;">
         Live Market Clocks
       </div>
-      <div id="clock-grid" style="display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:10px;"></div>
+      <div id="clock-grid" style="display:grid; gap:10px;"></div>
     </div>
 
     <script>
       const markets = {json.dumps(markets)};
+      const wrapper = document.getElementById("clock-wrapper");
+      const grid = document.getElementById("clock-grid");
 
       function getCols() {{
         const w = window.innerWidth;
-        if (w <= 520) return 1;
+        if (w <= 430) return 1;
         if (w <= 900) return 2;
         return 3;
       }}
@@ -407,19 +409,24 @@ def render_market_clocks():
       }}
 
       function setFrameHeight() {{
-        const height = document.documentElement.scrollHeight;
-        window.parent.postMessage({{
-          isStreamlitMessage: true,
-          type: "streamlit:setFrameHeight",
-          height: height
-        }}, "*");
+        const extra = 8;
+        const h = Math.ceil(wrapper.getBoundingClientRect().height + extra);
+        window.parent.postMessage(
+          {{
+            isStreamlitMessage: true,
+            type: "streamlit:setFrameHeight",
+            height: h
+          }},
+          "*"
+        );
       }}
 
       function renderClocks() {{
-        const grid = document.getElementById("clock-grid");
         const cols = getCols();
         grid.style.gridTemplateColumns = `repeat(${{cols}}, minmax(0, 1fr))`;
         grid.innerHTML = "";
+
+        const isPhone = cols === 1;
 
         markets.forEach((m) => {{
           const t = formatTime(m.tz);
@@ -427,24 +434,34 @@ def render_market_clocks():
           card.style.background = "#0f141b";
           card.style.border = "1px solid #2d3642";
           card.style.borderRadius = "6px";
-          card.style.padding = "10px";
-          card.style.minHeight = "98px";
+          card.style.padding = isPhone ? "10px 12px" : "10px";
+          card.style.minHeight = isPhone ? "88px" : "98px";
           card.innerHTML = `
-            <div style="color:#f3a712; font-weight:800; font-size:13px; text-transform:uppercase;">${{m.label}}</div>
+            <div style="color:#f3a712; font-weight:800; font-size:${{isPhone ? "14px" : "13px"}}; text-transform:uppercase;">${{m.label}}</div>
             <div style="color:#9fb0c3; font-size:11px; margin-top:2px;">${{m.exchange}}</div>
-            <div style="color:#f8f8f8; font-size:18px; font-weight:800; margin-top:8px;">${{t.time}}</div>
+            <div style="color:#f8f8f8; font-size:${{isPhone ? "19px" : "18px"}}; font-weight:800; margin-top:${{isPhone ? "7px" : "8px"}};">${{t.time}}</div>
             <div style="color:#7fb3ff; font-size:11px; margin-top:4px;">${{t.date}}</div>
           `;
           grid.appendChild(card);
         }});
 
-        setTimeout(setFrameHeight, 80);
+        requestAnimationFrame(() => {{
+          setTimeout(setFrameHeight, 60);
+        }});
       }}
 
       renderClocks();
       setInterval(renderClocks, 1000);
       window.addEventListener("resize", renderClocks);
+
+      const ro = new ResizeObserver(() => {{
+        setFrameHeight();
+      }});
+      ro.observe(wrapper);
+
       setTimeout(setFrameHeight, 120);
+      setTimeout(setFrameHeight, 250);
+      setTimeout(setFrameHeight, 500);
     </script>
     """
     components_html(component, height=460, scrolling=False)
@@ -1038,7 +1055,21 @@ def convert_historical_to_base(asset_hist_native: pd.DataFrame, tickers: list, b
             missing_fx.append(f"{from_ccy}->{base_currency}")
             continue
 
-        aligned = pd.concat([native_series.rename("asset"), fx_series.rename("fx")], axis=1).dropna()
+        fx_series = pd.to_numeric(fx_series, errors="coerce").dropna()
+        if fx_series.empty:
+            missing_fx.append(f"{from_ccy}->{base_currency}")
+            continue
+
+        aligned = (
+            pd.concat(
+                [native_series.rename("asset"), fx_series.rename("fx")],
+                axis=1,
+            )
+            .sort_index()
+            .ffill()
+            .dropna()
+        )
+
         if not aligned.empty:
             converted[ticker] = (aligned["asset"] * aligned["fx"]).rename(ticker)
 
@@ -1050,6 +1081,68 @@ def convert_historical_to_base(asset_hist_native: pd.DataFrame, tickers: list, b
     out = out.sort_index().ffill().dropna(how="all")
 
     return out, sorted(set(missing_fx))
+
+
+def backfill_missing_proxy_history(
+    historical_base: pd.DataFrame,
+    asset_hist_native: pd.DataFrame,
+    tickers: list,
+    base_currency: str,
+    fx_hist: pd.DataFrame,
+    period: str = "2y",
+):
+    out = historical_base.copy()
+
+    for ticker in tickers:
+        already_ok = False
+        if ticker in out.columns:
+            s = pd.to_numeric(out[ticker], errors="coerce").dropna()
+            if not s.empty:
+                already_ok = True
+
+        if already_ok:
+            continue
+
+        proxy = PROXY_TICKER_MAP.get(ticker)
+        if not proxy:
+            continue
+
+        proxy_hist = get_historical_data([proxy], period=period)
+        if proxy_hist is None or proxy_hist.empty or proxy not in proxy_hist.columns:
+            continue
+
+        native_series = pd.to_numeric(proxy_hist[proxy], errors="coerce").dropna()
+        if native_series.empty:
+            continue
+
+        from_ccy = asset_currency(proxy)
+
+        if from_ccy == base_currency:
+            out[ticker] = native_series
+            continue
+
+        fx_series = get_fx_series(from_ccy, base_currency, fx_hist)
+        if fx_series is None:
+            continue
+
+        fx_series = pd.to_numeric(fx_series, errors="coerce").dropna()
+        if fx_series.empty:
+            continue
+
+        aligned = (
+            pd.concat(
+                [native_series.rename("asset"), fx_series.rename("fx")],
+                axis=1,
+            )
+            .sort_index()
+            .ffill()
+            .dropna()
+        )
+
+        if not aligned.empty:
+            out[ticker] = aligned["asset"] * aligned["fx"]
+
+    return out
 
 
 def get_safe_native_price(ticker: str, live_prices: dict, asset_hist_native: pd.DataFrame):
@@ -1690,7 +1783,16 @@ def build_app_context():
     fx_prices, fx_hist, _ = build_fx_data(tickers, base_currency, period="2y")
     historical_base, missing_fx = convert_historical_to_base(asset_hist_native, tickers, base_currency, fx_hist)
 
-    if historical_base.empty:
+    historical_base = backfill_missing_proxy_history(
+        historical_base=historical_base,
+        asset_hist_native=asset_hist_native,
+        tickers=tickers,
+        base_currency=base_currency,
+        fx_hist=fx_hist,
+        period="2y",
+    )
+
+    if historical_base.empty or historical_base.dropna(how="all").empty:
         st.error("Could not build base-currency historical series.")
         st.stop()
 
@@ -1704,7 +1806,9 @@ def build_app_context():
                 missing_hist.append(ticker)
 
     if missing_hist:
-        st.warning(f"No converted historical data for: {', '.join(missing_hist)}")
+        filtered_missing = [t for t in missing_hist if t not in PROXY_TICKER_MAP]
+        if filtered_missing:
+            st.warning(f"No converted historical data for: {', '.join(filtered_missing)}")
 
     if missing_fx:
         st.warning(f"Missing FX history for: {', '.join(missing_fx)}")
