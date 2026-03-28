@@ -28,7 +28,13 @@ def render_transactions_page(ctx):
 
     tx_tickers = []
     if not ctx["transactions_df"].empty and "ticker" in ctx["transactions_df"].columns:
-        tx_tickers = ctx["transactions_df"]["ticker"].dropna().astype(str).str.upper().tolist()
+        tx_tickers = (
+            ctx["transactions_df"]["ticker"]
+            .dropna()
+            .astype(str)
+            .str.upper()
+            .tolist()
+        )
 
     current_tickers = sorted(set(ctx["portfolio_data"].keys()) | set(tx_tickers))
     ticker_options = current_tickers + ["OTHER"]
@@ -42,9 +48,27 @@ def render_transactions_page(ctx):
             tx_type = st.selectbox("Type", ["BUY", "SELL"])
 
         with c2:
-            shares = st.number_input("Shares", min_value=0.0, value=0.0, step=0.0001, format="%.4f")
-            price = st.number_input("Price", min_value=0.0, value=0.0, step=0.01, format="%.4f")
-            fees = st.number_input("Fees", min_value=0.0, value=0.0, step=0.01, format="%.4f")
+            shares = st.number_input(
+                "Shares",
+                min_value=0.0,
+                value=0.0,
+                step=0.0001,
+                format="%.4f",
+            )
+            price = st.number_input(
+                "Price",
+                min_value=0.0,
+                value=0.0,
+                step=0.01,
+                format="%.4f",
+            )
+            fees = st.number_input(
+                "Fees",
+                min_value=0.0,
+                value=0.0,
+                step=0.01,
+                format="%.4f",
+            )
 
         with c3:
             manual_ticker = st.text_input("Manual Ticker (only if OTHER)").strip().upper()

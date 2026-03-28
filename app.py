@@ -10,6 +10,7 @@ from pages_app.risk import render_risk_page
 from pages_app.investment_horizon import render_investment_horizon_page
 from pages_app.private_manager import render_private_manager_page
 from pages_app.transactions import render_transactions_page
+from pages_app.income import render_income_page
 
 
 st.set_page_config(page_title="Portfolio Dashboard", layout="wide")
@@ -21,45 +22,43 @@ pages = [
     st.Page(
         lambda: render_dashboard(ctx),
         title="Dashboard",
-        icon=":material/dashboard:",
         url_path="dashboard",
         default=True,
     ),
     st.Page(
         lambda: render_portfolio_page(ctx),
         title="Portfolio",
-        icon=":material/account_balance_wallet:",
         url_path="portfolio",
     ),
     st.Page(
         lambda: render_analytics_page(ctx),
         title="Analytics",
-        icon=":material/analytics:",
         url_path="analytics",
     ),
     st.Page(
         lambda: render_optimization_page(ctx),
         title="Optimization",
-        icon=":material/show_chart:",
         url_path="optimization",
     ),
     st.Page(
         lambda: render_rebalancing_page(ctx),
         title="Rebalancing",
-        icon=":material/swap_horiz:",
         url_path="rebalancing",
     ),
     st.Page(
         lambda: render_risk_page(ctx),
         title="Risk",
-        icon=":material/warning:",
         url_path="risk",
     ),
     st.Page(
         lambda: render_investment_horizon_page(ctx),
         title="Investment Horizon",
-        icon=":material/timeline:",
         url_path="investment-horizon",
+    ),
+    st.Page(
+        lambda: render_income_page(ctx),
+        title="Income",
+        url_path="income",
     ),
 ]
 
@@ -68,7 +67,6 @@ if ctx["mode"] == "Private" and ctx["authenticated"]:
         st.Page(
             lambda: render_transactions_page(ctx),
             title="Transactions",
-            icon=":material/receipt_long:",
             url_path="transactions",
         )
     )
@@ -77,7 +75,6 @@ if ctx["mode"] == "Private" and ctx["authenticated"]:
         st.Page(
             lambda: render_private_manager_page(ctx),
             title="Private Manager",
-            icon=":material/lock:",
             url_path="private-manager",
         )
     )

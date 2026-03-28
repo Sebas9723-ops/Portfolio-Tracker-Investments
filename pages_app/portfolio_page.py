@@ -7,32 +7,12 @@ def render_portfolio_page(ctx):
     render_page_title("Portfolio")
 
     m1, m2, m3, m4 = st.columns(4)
-    info_metric(
-        m1,
-        "Total Portfolio",
-        f"{ctx['base_currency']} {ctx['total_portfolio_value']:,.2f}",
-        "Total value of invested assets plus cash."
-    )
-    info_metric(
-        m2,
-        "Invested Capital",
-        f"{ctx['base_currency']} {ctx['invested_capital']:,.2f}",
-        "Estimated capital currently invested in open positions."
-    )
-    info_metric(
-        m3,
-        "Unrealized P&L",
-        f"{ctx['base_currency']} {ctx['unrealized_pnl']:,.2f}",
-        "Profit or loss on open positions."
-    )
-    info_metric(
-        m4,
-        "Realized P&L",
-        f"{ctx['base_currency']} {ctx['realized_pnl']:,.2f}",
-        "Profit or loss already realized through sell transactions."
-    )
+    info_metric(m1, "Total Portfolio", f"{ctx['base_currency']} {ctx['total_portfolio_value']:,.2f}", "Total value of invested assets plus cash.")
+    info_metric(m2, "Invested Capital", f"{ctx['base_currency']} {ctx['invested_capital']:,.2f}", "Estimated capital currently invested in open positions.")
+    info_metric(m3, "Unrealized PnL", f"{ctx['base_currency']} {ctx['unrealized_pnl']:,.2f}", "Profit or loss on open positions.")
+    info_metric(m4, "Realized PnL", f"{ctx['base_currency']} {ctx['realized_pnl']:,.2f}", "Profit or loss realized through sales.")
 
-    info_section("Portfolio Snapshot", "Current holdings with average cost, invested capital, and P&L.")
+    info_section("Portfolio Snapshot", "Current holdings with average cost, invested capital, and PnL.")
     st.dataframe(
         ctx["display_df"][
             [
@@ -65,7 +45,7 @@ def render_portfolio_page(ctx):
         st.plotly_chart(ctx["fig_pie"], use_container_width=True)
 
     with c2:
-        info_section("Weights vs Target", "Current weights compared with target weights from the starting portfolio snapshot.")
+        info_section("Weights vs Target", "Current weights compared with target weights.")
         st.plotly_chart(ctx["fig_bar"], use_container_width=True)
 
     if ctx["mode"] == "Private":

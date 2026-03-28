@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import json
 import html
 from pathlib import Path
+from datetime import date, datetime, timedelta
 
 import gspread
 import numpy as np
@@ -13,13 +16,13 @@ from google.oauth2.service_account import Credentials
 from streamlit.components.v1 import html as components_html
 
 from portfolio import public_portfolio
-from utils import get_prices, get_historical_data
+from utils import get_prices, get_historical_data, get_market_times
 
 
 DEFAULT_RISK_FREE_RATE = 0.02
 N_SIMULATIONS = 8000
 SUPPORTED_BASE_CCY = ["USD", "EUR", "GBP", "COP", "CHF", "AUD"]
-PUBLIC_DEFAULTS_VERSION = "public_defaults_v10_each_20260328"
+PUBLIC_DEFAULTS_VERSION = "public_defaults_v12_phase2"
 
 PROXY_TICKER_MAP = {
     "IWDA.AS": "EUNL.DE",
@@ -28,35 +31,38 @@ PROXY_TICKER_MAP = {
 PRIVATE_POSITIONS_HEADERS = ["Ticker", "Name", "Shares"]
 TRANSACTIONS_HEADERS = ["date", "ticker", "type", "shares", "price", "fees", "notes"]
 CASH_BALANCES_HEADERS = ["currency", "amount"]
+DIVIDENDS_HEADERS = ["date", "ticker", "amount", "currency", "notes"]
+
+DIVIDEND_META = {
+    "VOO": {"yield": 0.015, "months": [3, 6, 9, 12], "frequency": "Quarterly"},
+    "SCHD": {"yield": 0.035, "months": [3, 6, 9, 12], "frequency": "Quarterly"},
+    "BND": {"yield": 0.032, "months": list(range(1, 13)), "frequency": "Monthly"},
+    "GLD": {"yield": 0.0, "months": [], "frequency": "None"},
+    "IGLN.L": {"yield": 0.0, "months": [], "frequency": "None"},
+    "IWDA.AS": {"yield": 0.0, "months": [], "frequency": "Accumulating"},
+    "VWCE.DE": {"yield": 0.0, "months": [], "frequency": "Accumulating"},
+    "EUNL.DE": {"yield": 0.0, "months": [], "frequency": "Accumulating"},
+}
 
 
 # =========================
-# THEME / UI HELPERS
+# UI
 # =========================
 def apply_bloomberg_style():
     st.markdown(
         """
         <style>
-        html, body, [class*="css"]  {
+        html, body, [class*="css"] {
             font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace !important;
         }
 
         .stApp {
             background-color: #0b0f14;
             color: #e6e6e6;
-            -webkit-tap-highlight-color: transparent;
         }
 
         [data-testid="stAppViewContainer"] {
             background-color: #0b0f14;
-        }
-
-        .block-container {
-            padding-top: calc(1.8rem + env(safe-area-inset-top)) !important;
-            padding-right: 1.1rem !important;
-            padding-left: 1.1rem !important;
-            padding-bottom: 2rem !important;
-            max-width: 1500px;
         }
 
         [data-testid="stSidebar"] {
@@ -68,9 +74,12 @@ def apply_bloomberg_style():
             background: #0b0f14;
         }
 
-        h1, h2, h3, h4 {
-            color: #f3a712 !important;
-            letter-spacing: 0.5px;
+        .block-container {
+            padding-top: 1.8rem !important;
+            padding-left: 1.1rem !important;
+            padding-right: 1.1rem !important;
+            padding-bottom: 2rem !important;
+            max-width: 1500px;
         }
 
         .bb-title {
@@ -86,7 +95,6 @@ def apply_bloomberg_style():
             border-bottom: 2px solid #f3a712;
             text-transform: uppercase;
             display: block;
-            overflow: visible !important;
         }
 
         .bb-section {
@@ -96,7 +104,6 @@ def apply_bloomberg_style():
             border-radius: 6px;
             padding: 0.85rem 1rem 0.9rem 1rem;
             margin: 0.65rem 0 1rem 0;
-            box-shadow: 0 0 0 1px rgba(243,167,18,0.05) inset;
         }
 
         .bb-section-title {
@@ -132,7 +139,7 @@ def apply_bloomberg_style():
 
         [data-testid="stMetricValue"] {
             color: #f8f8f8 !important;
-            font-size: 1.45rem !important;
+            font-size: 1.35rem !important;
             font-weight: 800 !important;
         }
 
@@ -153,24 +160,15 @@ def apply_bloomberg_style():
             border-color: #f3a712;
         }
 
-        .stSelectbox label, .stNumberInput label, .stTextInput label, .stMarkdown, .stCaption {
-            color: #cbd5df !important;
-        }
-
         .stTextInput > div > div > input,
         .stNumberInput input,
-        .stSelectbox div[data-baseweb="select"] > div {
+        .stSelectbox div[data-baseweb="select"] > div,
+        .stDateInput input {
             background-color: #0f141b !important;
             color: #f2f2f2 !important;
             border: 1px solid #394250 !important;
             border-radius: 4px !important;
             min-height: 42px !important;
-        }
-
-        .stExpander {
-            border: 1px solid #2d3642 !important;
-            border-radius: 6px !important;
-            background: #0f141b !important;
         }
 
         div[data-testid="stDataFrame"] {
@@ -201,28 +199,17 @@ def apply_bloomberg_style():
 
         @media (max-width: 900px) {
             .block-container {
-                padding-top: calc(3.8rem + env(safe-area-inset-top)) !important;
-                padding-right: 0.7rem !important;
+                padding-top: 3.2rem !important;
                 padding-left: 0.7rem !important;
-                padding-bottom: 1.5rem !important;
+                padding-right: 0.7rem !important;
             }
 
             .bb-title {
                 font-size: 1.55rem;
-                line-height: 1.15;
-                padding-top: 0.15rem;
-                padding-bottom: 0.55rem;
-                margin-top: 0.6rem;
-                margin-bottom: 0.8rem;
-            }
-
-            .bb-section {
-                padding: 0.65rem 0.75rem 0.7rem 0.75rem;
-                margin: 0.45rem 0 0.8rem 0;
             }
 
             [data-testid="stMetricValue"] {
-                font-size: 1.15rem !important;
+                font-size: 1.1rem !important;
             }
 
             [data-testid="stHorizontalBlock"] {
@@ -235,10 +222,6 @@ def apply_bloomberg_style():
                 flex: 1 1 100% !important;
                 width: 100% !important;
             }
-
-            div[data-testid="stDataFrame"] {
-                font-size: 12px !important;
-            }
         }
         </style>
         """,
@@ -249,7 +232,6 @@ def apply_bloomberg_style():
 def render_page_title(title: str):
     st.markdown(
         f"""
-        <div style="height: 0.2rem;"></div>
         <div class="bb-title">{html.escape(title)}</div>
         """,
         unsafe_allow_html=True,
@@ -279,17 +261,17 @@ def render_private_dashboard_logo(mode: str, authenticated: bool):
     c1, c2 = st.columns([1, 5])
 
     with c1:
-        st.image(logo_path, width=110)
+        st.image(logo_path, width=105)
 
     with c2:
         st.markdown(
             """
             <div style="padding-top:0.35rem;">
-                <div style="font-size:1.05rem; font-weight:800; color:#f3a712; text-transform:uppercase; letter-spacing:0.6px;">
+                <div style="font-size:1.02rem; font-weight:800; color:#f3a712; text-transform:uppercase; letter-spacing:0.6px;">
                     Private Portfolio
                 </div>
                 <div style="font-size:0.82rem; color:#cbd5df; margin-top:0.2rem;">
-                    Portfolio Management SA · Sebastian Aguilar
+                    Portfolio Management SA
                 </div>
             </div>
             """,
@@ -327,7 +309,7 @@ def info_metric(container, label: str, value: str, help_text: str):
 
 
 def render_status_bar(mode: str, base_currency: str, profile: str, tc_model: str, sheets_ok: bool):
-    sheets_text = "SHEETS OK" if sheets_ok else "SHEETS OFF"
+    sheets_text = "Sheets OK" if sheets_ok else "Sheets Off"
     sheets_color = "#22c55e" if sheets_ok else "#ef4444"
 
     st.markdown(
@@ -349,7 +331,7 @@ def render_status_bar(mode: str, base_currency: str, profile: str, tc_model: str
             color:#cbd5df;
         ">
             <span><b>Mode:</b> {mode}</span>
-            <span><b>Base CCY:</b> {base_currency}</span>
+            <span><b>Base Ccy:</b> {base_currency}</span>
             <span><b>Profile:</b> {profile}</span>
             <span><b>TC Model:</b> {tc_model}</span>
             <span><b>Private Sync:</b> <span style="color:{sheets_color}; font-weight:800;">{sheets_text}</span></span>
@@ -360,17 +342,7 @@ def render_status_bar(mode: str, base_currency: str, profile: str, tc_model: str
 
 
 def render_market_clocks():
-    markets = [
-        {"label": "New York", "exchange": "NYSE / Nasdaq", "tz": "America/New_York"},
-        {"label": "London", "exchange": "LSE", "tz": "Europe/London"},
-        {"label": "Frankfurt", "exchange": "Xetra", "tz": "Europe/Berlin"},
-        {"label": "Zurich", "exchange": "SIX", "tz": "Europe/Zurich"},
-        {"label": "Tokyo", "exchange": "TSE", "tz": "Asia/Tokyo"},
-        {"label": "Shanghai", "exchange": "SSE", "tz": "Asia/Shanghai"},
-        {"label": "Singapore", "exchange": "SGX", "tz": "Asia/Singapore"},
-        {"label": "Bogotá", "exchange": "BVC", "tz": "America/Bogota"},
-        {"label": "Sydney", "exchange": "ASX", "tz": "Australia/Sydney"},
-    ]
+    markets = get_market_times()
 
     component = f"""
     <div id="clock-wrapper" style="
@@ -391,11 +363,12 @@ def render_market_clocks():
           margin-bottom:10px;
           font-size:15px;
       ">
-        Live Market Clocks
+        Market Clocks
       </div>
 
       <div id="clock-grid" style="
           display:grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
           gap:10px;
           width:100%;
           box-sizing:border-box;
@@ -404,72 +377,41 @@ def render_market_clocks():
 
     <script>
       const markets = {json.dumps(markets)};
-      const grid = document.getElementById("clock-grid");
 
-      function getCols() {{
-        const w = window.innerWidth;
-        if (w <= 430) return 1;
-        if (w <= 900) return 2;
-        return 3;
-      }}
-
-      function formatTime(tz) {{
-        const now = new Date();
-
-        const time = new Intl.DateTimeFormat("en-GB", {{
-          timeZone: tz,
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-          hour12: false
-        }}).format(now);
-
-        const date = new Intl.DateTimeFormat("en-GB", {{
-          timeZone: tz,
-          weekday: "short",
-          day: "2-digit",
-          month: "short"
-        }}).format(now);
-
-        return {{ time, date }};
+      function buildCard(name, timeVal, dateVal) {{
+        return `
+          <div style="
+            background:#0f141b;
+            border:1px solid #2d3642;
+            border-radius:6px;
+            padding:10px;
+            min-height:94px;
+            box-sizing:border-box;
+          ">
+            <div style="color:#f3a712;font-weight:800;font-size:13px;text-transform:uppercase;line-height:1.15;">
+              ${name}
+            </div>
+            <div style="color:#f8f8f8;font-size:18px;font-weight:800;margin-top:8px;line-height:1.1;">
+              ${timeVal}
+            </div>
+            <div style="color:#7fb3ff;font-size:11px;margin-top:6px;line-height:1.1;">
+              ${dateVal}
+            </div>
+          </div>
+        `;
       }}
 
       function renderClocks() {{
-        const cols = getCols();
-        grid.style.gridTemplateColumns = `repeat(${{cols}}, minmax(0, 1fr))`;
+        const grid = document.getElementById("clock-grid");
         grid.innerHTML = "";
-
-        const isPhone = cols === 1;
-
-        markets.forEach((m) => {{
-          const t = formatTime(m.tz);
-          const card = document.createElement("div");
-          card.style.background = "#0f141b";
-          card.style.border = "1px solid #2d3642";
-          card.style.borderRadius = "6px";
-          card.style.padding = isPhone ? "10px 12px" : "10px";
-          card.style.minHeight = isPhone ? "88px" : "98px";
-          card.innerHTML = `
-            <div style="color:#f3a712; font-weight:800; font-size:${{isPhone ? "14px" : "13px"}}; text-transform:uppercase; line-height:1.15;">
-              ${{m.label}}
-            </div>
-            <div style="color:#9fb0c3; font-size:11px; margin-top:2px; line-height:1.1;">
-              ${{m.exchange}}
-            </div>
-            <div style="color:#f8f8f8; font-size:${{isPhone ? "19px" : "18px"}}; font-weight:800; margin-top:${{isPhone ? "7px" : "8px"}}; line-height:1.1;">
-              ${{t.time}}
-            </div>
-            <div style="color:#7fb3ff; font-size:11px; margin-top:4px; line-height:1.1;">
-              ${{t.date}}
-            </div>
-          `;
-          grid.appendChild(card);
+        Object.entries(markets).forEach(([name, values]) => {{
+          const timeVal = values[0];
+          const dateVal = values[1];
+          grid.innerHTML += buildCard(name, timeVal, dateVal);
         }});
       }}
 
       renderClocks();
-      setInterval(renderClocks, 1000);
-      window.addEventListener("resize", renderClocks);
     </script>
     """
     components_html(component, height=630, scrolling=False)
@@ -536,7 +478,6 @@ def render_investment_horizon_section(
         value=float(round(default_return * 100, 1)),
         step=0.1,
         format="%.1f",
-        help="Annual return assumption used in the projection, expressed as a percentage.",
     )
     expected_return = expected_return_pct / 100.0
     st.caption(f"Selected expected annual return: {expected_return_pct:.1f}%")
@@ -546,7 +487,6 @@ def render_investment_horizon_section(
         min_value=0.0,
         value=0.0,
         step=100.0,
-        help="Optional monthly contribution added to the portfolio projection.",
     )
 
     scenario_spread_pct = st.slider(
@@ -556,53 +496,20 @@ def render_investment_horizon_section(
         value=3.0,
         step=0.1,
         format="%.1f",
-        help="Difference around the base expected return used to build conservative and optimistic scenarios.",
     )
     scenario_spread = scenario_spread_pct / 100.0
 
     conservative_return = max(expected_return - scenario_spread, -0.95)
     optimistic_return = expected_return + scenario_spread
 
-    conservative_df = build_projection_series(
-        initial_value=total_value,
-        annual_return=conservative_return,
-        years=horizon_years,
-        monthly_contribution=monthly_contribution,
-    )
-
-    base_df = build_projection_series(
-        initial_value=total_value,
-        annual_return=expected_return,
-        years=horizon_years,
-        monthly_contribution=monthly_contribution,
-    )
-
-    optimistic_df = build_projection_series(
-        initial_value=total_value,
-        annual_return=optimistic_return,
-        years=horizon_years,
-        monthly_contribution=monthly_contribution,
-    )
+    conservative_df = build_projection_series(total_value, conservative_return, horizon_years, monthly_contribution)
+    base_df = build_projection_series(total_value, expected_return, horizon_years, monthly_contribution)
+    optimistic_df = build_projection_series(total_value, optimistic_return, horizon_years, monthly_contribution)
 
     fig_projection = go.Figure()
-    fig_projection.add_scatter(
-        x=conservative_df["Year"],
-        y=conservative_df["Value"],
-        name=f"Conservative ({conservative_return:.1%})",
-        mode="lines",
-    )
-    fig_projection.add_scatter(
-        x=base_df["Year"],
-        y=base_df["Value"],
-        name=f"Base ({expected_return:.1%})",
-        mode="lines",
-    )
-    fig_projection.add_scatter(
-        x=optimistic_df["Year"],
-        y=optimistic_df["Value"],
-        name=f"Optimistic ({optimistic_return:.1%})",
-        mode="lines",
-    )
+    fig_projection.add_scatter(x=conservative_df["Year"], y=conservative_df["Value"], name=f"Conservative ({conservative_return:.1%})", mode="lines")
+    fig_projection.add_scatter(x=base_df["Year"], y=base_df["Value"], name=f"Base ({expected_return:.1%})", mode="lines")
+    fig_projection.add_scatter(x=optimistic_df["Year"], y=optimistic_df["Value"], name=f"Optimistic ({optimistic_return:.1%})", mode="lines")
     fig_projection.update_layout(
         xaxis_title="Years",
         yaxis_title=f"Projected Value ({base_currency})",
@@ -615,45 +522,13 @@ def render_investment_horizon_section(
     st.plotly_chart(fig_projection, use_container_width=True)
 
     c1, c2, c3 = st.columns(3)
-    info_metric(
-        c1,
-        "Conservative Final Value",
-        f"{base_currency} {conservative_df['Value'].iloc[-1]:,.2f}",
-        "Projected final portfolio value under the conservative scenario.",
-    )
-    info_metric(
-        c2,
-        "Base Final Value",
-        f"{base_currency} {base_df['Value'].iloc[-1]:,.2f}",
-        "Projected final portfolio value under the base scenario.",
-    )
-    info_metric(
-        c3,
-        "Optimistic Final Value",
-        f"{base_currency} {optimistic_df['Value'].iloc[-1]:,.2f}",
-        "Projected final portfolio value under the optimistic scenario.",
-    )
-
-    projection_table = pd.DataFrame(
-        {
-            "Scenario": ["Conservative", "Base", "Optimistic"],
-            "Annual Return %": [
-                round(conservative_return * 100, 2),
-                round(expected_return * 100, 2),
-                round(optimistic_return * 100, 2),
-            ],
-            "Final Value": [
-                round(conservative_df["Value"].iloc[-1], 2),
-                round(base_df["Value"].iloc[-1], 2),
-                round(optimistic_df["Value"].iloc[-1], 2),
-            ],
-        }
-    )
-    st.dataframe(projection_table, use_container_width=True)
+    info_metric(c1, "Conservative Final Value", f"{base_currency} {conservative_df['Value'].iloc[-1]:,.2f}", "Projected final value in the conservative scenario.")
+    info_metric(c2, "Base Final Value", f"{base_currency} {base_df['Value'].iloc[-1]:,.2f}", "Projected final value in the base scenario.")
+    info_metric(c3, "Optimistic Final Value", f"{base_currency} {optimistic_df['Value'].iloc[-1]:,.2f}", "Projected final value in the optimistic scenario.")
 
 
 # =========================
-# GOOGLE SHEETS / STORAGE
+# SHEETS
 # =========================
 def _get_gcp_cfg():
     try:
@@ -703,7 +578,7 @@ def _get_spreadsheet():
     return client.open_by_url(sheet_url)
 
 
-def _connect_named_worksheet(worksheet_name: str, headers: list[str], default_rows=None):
+def _connect_named_worksheet(worksheet_name, headers, default_rows=None):
     spreadsheet = _get_spreadsheet()
 
     try:
@@ -741,6 +616,10 @@ def connect_cash_balances_worksheet():
     return _connect_named_worksheet("cash_balances", CASH_BALANCES_HEADERS, default_rows=default_rows)
 
 
+def connect_dividends_worksheet():
+    return _connect_named_worksheet("dividends_received", DIVIDENDS_HEADERS)
+
+
 def load_private_positions_from_sheets():
     ws = connect_private_positions_worksheet()
     records = ws.get_all_records()
@@ -756,6 +635,7 @@ def load_private_positions_from_sheets():
                 positions[ticker] = {
                     "name": name,
                     "shares": float(shares),
+                    "base_shares": float(shares),
                 }
             except Exception:
                 continue
@@ -879,27 +759,61 @@ def adjust_cash_balance(currency: str, delta: float):
         cash_df.loc[cash_df["currency"] == currency, "amount"] += float(delta)
     else:
         cash_df = pd.concat(
-            [
-                cash_df,
-                pd.DataFrame({"currency": [currency], "amount": [float(delta)]}),
-            ],
+            [cash_df, pd.DataFrame({"currency": [currency], "amount": [float(delta)]})],
             ignore_index=True,
         )
 
     save_cash_balances_to_sheets(cash_df)
 
 
+def load_dividends_from_sheets():
+    ws = connect_dividends_worksheet()
+    records = ws.get_all_records()
+
+    if not records:
+        return pd.DataFrame(columns=DIVIDENDS_HEADERS)
+
+    df = pd.DataFrame(records)
+    df.columns = [str(c).strip().lower() for c in df.columns]
+
+    for col in DIVIDENDS_HEADERS:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["ticker"] = df["ticker"].astype(str).str.strip().str.upper()
+    df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
+    df["currency"] = df["currency"].astype(str).str.strip().str.upper()
+    df["notes"] = df["notes"].fillna("").astype(str)
+
+    df = df.dropna(subset=["date"])
+    df = df[df["ticker"] != ""].sort_values("date").reset_index(drop=True)
+    return df[DIVIDENDS_HEADERS]
+
+
+def append_dividend_to_sheets(div_tx: dict):
+    ws = connect_dividends_worksheet()
+    row = [
+        str(div_tx["date"]),
+        str(div_tx["ticker"]).upper().strip(),
+        float(div_tx["amount"]),
+        str(div_tx["currency"]).upper().strip(),
+        str(div_tx.get("notes", "")).strip(),
+    ]
+    ws.append_row(row, value_input_option="USER_ENTERED")
+
+
 # =========================
-# PORTFOLIO / TRANSACTIONS
+# PORTFOLIO
 # =========================
 def load_private_portfolio():
     p = st.secrets["private_portfolio"]
     return {
-        "SCHD": {"name": "Dividend ETF", "shares": float(p["SCHD"])},
-        "VOO": {"name": "S&P 500", "shares": float(p["VOO"])},
-        "VWCE.DE": {"name": "All World", "shares": float(p["VWCE_DE"])},
-        "IGLN.L": {"name": "Gold", "shares": float(p["IGLN_L"])},
-        "BND": {"name": "Bonds", "shares": float(p["BND"])},
+        "SCHD": {"name": "Dividend ETF", "shares": float(p["SCHD"]), "base_shares": float(p["SCHD"])},
+        "VOO": {"name": "S&P 500", "shares": float(p["VOO"]), "base_shares": float(p["VOO"])},
+        "VWCE.DE": {"name": "All World", "shares": float(p["VWCE_DE"]), "base_shares": float(p["VWCE_DE"])},
+        "IGLN.L": {"name": "Gold", "shares": float(p["IGLN_L"]), "base_shares": float(p["IGLN_L"])},
+        "BND": {"name": "Bonds", "shares": float(p["BND"]), "base_shares": float(p["BND"])},
     }
 
 
@@ -910,11 +824,17 @@ def get_manage_password():
 
 def merge_private_portfolios(base_private: dict, custom_private: dict):
     merged = dict(base_private)
-    merged.update(custom_private)
+    for ticker, meta in custom_private.items():
+        if ticker in merged:
+            merged[ticker]["shares"] = meta["shares"]
+            merged[ticker]["base_shares"] = meta.get("base_shares", meta["shares"])
+            merged[ticker]["name"] = meta["name"]
+        else:
+            merged[ticker] = dict(meta)
     return merged
 
 
-def build_transaction_positions(transactions_df: pd.DataFrame, name_map: dict):
+def build_transaction_positions(transactions_df: pd.DataFrame, name_map: dict, base_shares_map: dict):
     state = {}
 
     if transactions_df is None or transactions_df.empty:
@@ -945,12 +865,7 @@ def build_transaction_positions(transactions_df: pd.DataFrame, name_map: dict):
 
         elif tx_type == "SELL":
             current_shares = float(s["shares"])
-            avg_cost = (
-                float(s["invested_capital_native"]) / current_shares
-                if current_shares > 0
-                else price
-            )
-
+            avg_cost = (float(s["invested_capital_native"]) / current_shares) if current_shares > 0 else price
             proceeds = shares * price - fees
             cost_removed = min(shares, current_shares) * avg_cost
 
@@ -979,6 +894,7 @@ def build_transaction_positions(transactions_df: pd.DataFrame, name_map: dict):
         positions[ticker] = {
             "name": name_map.get(ticker, ticker),
             "shares": shares,
+            "base_shares": base_shares_map.get(ticker, shares),
         }
 
     return positions, stats
@@ -989,34 +905,17 @@ def build_private_portfolio_for_save(portfolio_data: dict, prefix: str):
 
     for ticker, meta in portfolio_data.items():
         widget_key = f"{prefix}_shares_{ticker}"
+        shares_val = float(st.session_state.get(widget_key, meta["shares"]))
         saved[ticker] = {
             "name": meta["name"],
-            "shares": float(st.session_state.get(widget_key, meta["shares"])),
+            "shares": shares_val,
         }
 
     return saved
 
 
-def update_selected_private_position(updated_portfolio: dict, prefix: str, selected_ticker: str, new_shares: float):
-    payload = {}
-
-    for ticker, meta in updated_portfolio.items():
-        payload[ticker] = {
-            "name": meta["name"],
-            "shares": float(st.session_state.get(f"{prefix}_shares_{ticker}", meta["shares"])),
-        }
-
-    if selected_ticker not in payload:
-        raise ValueError(f"{selected_ticker} not found in private portfolio.")
-
-    payload[selected_ticker]["shares"] = float(new_shares)
-    st.session_state[f"{prefix}_shares_{selected_ticker}"] = float(new_shares)
-
-    save_private_positions_to_sheets(payload)
-
-
 # =========================
-# MODE / SIDEBAR
+# SIDEBAR
 # =========================
 def get_active_portfolio(mode: str, authenticated: bool, private_portfolio: dict):
     if mode == "Private" and authenticated:
@@ -1054,23 +953,20 @@ def build_current_portfolio(portfolio_data: dict, prefix: str, mode: str, disabl
             format="%.4f",
             key=widget_key,
             disabled=disable_inputs,
-            help=(
-                "Number of shares currently held for this asset. "
-                "Public mode changes with step 1. Private mode changes with step 0.0001."
-            ),
         )
 
         updated[ticker] = {
             "name": meta["name"],
             "shares": float(st.session_state[widget_key]),
-            "base_shares": float(meta["shares"]),
+            "base_shares": float(meta.get("base_shares", meta["shares"])),
+            "target_weight": meta.get("target_weight"),
         }
 
     return updated
 
 
 # =========================
-# FX / PRICE HELPERS
+# FX / PRICES
 # =========================
 def asset_currency(ticker: str) -> str:
     ticker = str(ticker).upper().strip()
@@ -1094,7 +990,7 @@ def asset_market_group(ticker: str) -> str:
     return "US"
 
 
-def build_fx_data(tickers: list, base_currency: str, period: str = "2y"):
+def build_fx_data(tickers: list[str], base_currency: str, period: str = "2y"):
     needed_ccy = set(asset_currency(t) for t in tickers)
     needed_ccy.add(base_currency)
     needed_ccy.add("USD")
@@ -1112,7 +1008,7 @@ def build_fx_data(tickers: list, base_currency: str, period: str = "2y"):
     return fx_prices, fx_hist, fx_tickers
 
 
-def load_market_data_with_proxies(tickers: list, period: str = "2y"):
+def load_market_data_with_proxies(tickers: list[str], period: str = "2y"):
     source_tickers = []
     seen = set()
 
@@ -1230,7 +1126,7 @@ def get_fx_series(from_ccy: str, to_ccy: str, fx_hist: pd.DataFrame):
     return None
 
 
-def convert_historical_to_base(asset_hist_native: pd.DataFrame, tickers: list, base_currency: str, fx_hist: pd.DataFrame):
+def convert_historical_to_base(asset_hist_native: pd.DataFrame, tickers: list[str], base_currency: str, fx_hist: pd.DataFrame):
     converted = {}
     missing_fx = []
 
@@ -1259,10 +1155,7 @@ def convert_historical_to_base(asset_hist_native: pd.DataFrame, tickers: list, b
             continue
 
         aligned = (
-            pd.concat(
-                [native_series.rename("asset"), fx_series.rename("fx")],
-                axis=1,
-            )
+            pd.concat([native_series.rename("asset"), fx_series.rename("fx")], axis=1)
             .sort_index()
             .ffill()
             .dropna()
@@ -1283,8 +1176,7 @@ def convert_historical_to_base(asset_hist_native: pd.DataFrame, tickers: list, b
 
 def backfill_missing_proxy_history(
     historical_base: pd.DataFrame,
-    asset_hist_native: pd.DataFrame,
-    tickers: list,
+    tickers: list[str],
     base_currency: str,
     fx_hist: pd.DataFrame,
     period: str = "2y",
@@ -1328,10 +1220,7 @@ def backfill_missing_proxy_history(
             continue
 
         aligned = (
-            pd.concat(
-                [native_series.rename("asset"), fx_series.rename("fx")],
-                axis=1,
-            )
+            pd.concat([native_series.rename("asset"), fx_series.rename("fx")], axis=1)
             .sort_index()
             .ffill()
             .dropna()
@@ -1360,7 +1249,7 @@ def get_safe_native_price(ticker: str, live_prices: dict, asset_hist_native: pd.
 
 
 # =========================
-# DATAFRAMES / RETURNS
+# DATAFRAMES
 # =========================
 def build_cash_display_df(cash_balances_df: pd.DataFrame, base_currency: str, fx_prices: dict, fx_hist: pd.DataFrame):
     rows = []
@@ -1414,19 +1303,20 @@ def build_portfolio_df(
         price = native_price * fx_rate
 
         shares = float(meta["shares"])
-        base_shares = float(meta["base_shares"])
+        base_shares = float(meta.get("base_shares", meta["shares"]))
+        target_weight_override = meta.get("target_weight")
 
         tx_stat = tx_stats_map.get(ticker)
         if tx_stat and tx_stat.get("tracked", False):
             avg_cost_native = float(tx_stat["avg_cost_native"])
             invested_native = float(tx_stat["invested_capital_native"])
             realized_native = float(tx_stat["realized_pnl_native"])
-            tracked = "Transactions"
+            source = "Transactions"
         else:
             avg_cost_native = native_price if shares > 0 else 0.0
             invested_native = shares * native_price
             realized_native = 0.0
-            tracked = "Snapshot"
+            source = "Snapshot"
 
         avg_cost_base = avg_cost_native * fx_rate
         invested_base = invested_native * fx_rate
@@ -1447,7 +1337,7 @@ def build_portfolio_df(
             {
                 "Ticker": ticker,
                 "Name": meta["name"],
-                "Source": tracked,
+                "Source": source,
                 "Market": asset_market_group(ticker),
                 "Native Currency": native_currency,
                 "Shares": round(shares, 4),
@@ -1462,6 +1352,7 @@ def build_portfolio_df(
                 "Realized PnL": round(realized_base, 2),
                 "Base Shares": round(base_shares, 4),
                 "Base Value": round(base_value, 2),
+                "Target Weight Override": target_weight_override,
             }
         )
 
@@ -1472,10 +1363,18 @@ def build_portfolio_df(
     else:
         df["Weight"] = 0.0
 
-    if base_total_value > 0:
-        df["Target Weight"] = df["Base Value"] / base_total_value
+    if "Target Weight Override" in df.columns and df["Target Weight Override"].notna().any():
+        df["Target Weight"] = df["Target Weight Override"].fillna(0.0)
+        total_tw = df["Target Weight"].sum()
+        if total_tw > 0:
+            df["Target Weight"] = df["Target Weight"] / total_tw
+        else:
+            df["Target Weight"] = 0.0
     else:
-        df["Target Weight"] = 0.0
+        if base_total_value > 0:
+            df["Target Weight"] = df["Base Value"] / base_total_value
+        else:
+            df["Target Weight"] = 0.0
 
     df["Weight %"] = (df["Weight"] * 100).round(2)
     df["Target %"] = (df["Target Weight"] * 100).round(2)
@@ -1538,6 +1437,158 @@ def build_benchmark_returns(base_currency: str, fx_hist: pd.DataFrame):
 
 
 # =========================
+# DIVIDENDS / CONTRIBUTIONS
+# =========================
+def build_dividend_insights(
+    df: pd.DataFrame,
+    dividends_df: pd.DataFrame,
+    base_currency: str,
+    fx_prices: dict,
+    fx_hist: pd.DataFrame,
+):
+    annual_rows = []
+    calendar_rows = []
+    estimated_annual_total = 0.0
+
+    today = date.today()
+    one_year_out = today + timedelta(days=365)
+
+    for _, row in df.iterrows():
+        ticker = row["Ticker"]
+        name = row["Name"]
+        value = float(row["Value"])
+        meta = DIVIDEND_META.get(ticker, {"yield": 0.0, "months": [], "frequency": "None"})
+
+        annual_est = value * float(meta["yield"])
+        estimated_annual_total += annual_est
+
+        annual_rows.append(
+            {
+                "Ticker": ticker,
+                "Name": name,
+                "Estimated Yield %": round(float(meta["yield"]) * 100, 2),
+                "Estimated Annual Dividend": round(annual_est, 2),
+                "Frequency": meta["frequency"],
+            }
+        )
+
+        months = meta.get("months", [])
+        if annual_est > 0 and months:
+            payments_per_year = len(months)
+            payment_amount = annual_est / payments_per_year if payments_per_year > 0 else 0.0
+
+            for offset in range(13):
+                candidate = today + timedelta(days=30 * offset)
+                if candidate.month in months:
+                    pay_date = date(candidate.year, candidate.month, 15)
+                    if today <= pay_date <= one_year_out:
+                        calendar_rows.append(
+                            {
+                                "Pay Date": pay_date,
+                                "Ticker": ticker,
+                                "Name": name,
+                                f"Estimated Amount ({base_currency})": round(payment_amount, 2),
+                            }
+                        )
+
+    annual_df = pd.DataFrame(annual_rows)
+    if calendar_rows:
+        calendar_df = pd.DataFrame(calendar_rows).drop_duplicates().sort_values("Pay Date").reset_index(drop=True)
+    else:
+        calendar_df = pd.DataFrame(columns=["Pay Date", "Ticker", "Name", f"Estimated Amount ({base_currency})"])
+
+    collected_df = dividends_df.copy()
+    if collected_df.empty:
+        collected_display_df = pd.DataFrame(columns=["Date", "Ticker", "Amount", "Currency", f"Amount ({base_currency})", "Notes"])
+        return annual_df, calendar_df, collected_display_df, estimated_annual_total, 0.0, 0.0
+
+    amounts_base = []
+    for _, row in collected_df.iterrows():
+        ccy = str(row["currency"]).upper().strip()
+        fx_rate = get_fx_rate_current(ccy, base_currency, fx_prices, fx_hist)
+        if pd.isna(fx_rate):
+            fx_rate = 0.0
+        amounts_base.append(float(row["amount"]) * fx_rate)
+
+    collected_df[f"amount_{base_currency.lower()}"] = amounts_base
+
+    current_year = datetime.today().year
+    dividends_ytd = float(collected_df[collected_df["date"].dt.year == current_year][f"amount_{base_currency.lower()}"].sum())
+    dividends_total = float(collected_df[f"amount_{base_currency.lower()}"].sum())
+
+    collected_display_df = collected_df.copy()
+    collected_display_df["date"] = pd.to_datetime(collected_display_df["date"]).dt.date
+    collected_display_df = collected_display_df.rename(
+        columns={
+            "date": "Date",
+            "ticker": "Ticker",
+            "amount": "Amount",
+            "currency": "Currency",
+            "notes": "Notes",
+            f"amount_{base_currency.lower()}": f"Amount ({base_currency})",
+        }
+    )
+    collected_display_df = collected_display_df[["Date", "Ticker", "Amount", "Currency", f"Amount ({base_currency})", "Notes"]]
+    collected_display_df = collected_display_df.sort_values("Date", ascending=False).reset_index(drop=True)
+
+    return annual_df, calendar_df, collected_display_df, estimated_annual_total, dividends_ytd, dividends_total
+
+
+def build_contribution_suggestion(df: pd.DataFrame, contribution_amount: float):
+    if contribution_amount <= 0 or df.empty:
+        return pd.DataFrame(columns=[
+            "Ticker", "Name", "Current Value", "Target Value After Contribution",
+            "Suggested Buy Value", "Price", "Suggested Shares"
+        ])
+
+    work = df.copy()
+    total_after = float(work["Value"].sum()) + float(contribution_amount)
+
+    work["Target Value After Contribution"] = work["Target Weight"] * total_after
+    work["Gap"] = work["Target Value After Contribution"] - work["Value"]
+    work["Positive Gap"] = work["Gap"].clip(lower=0.0)
+
+    if float(work["Positive Gap"].sum()) <= 0:
+        work["Positive Gap"] = work["Target Weight"]
+
+    positive_total = float(work["Positive Gap"].sum())
+    if positive_total <= 0:
+        work["Suggested Buy Value"] = 0.0
+    else:
+        work["Suggested Buy Value"] = contribution_amount * work["Positive Gap"] / positive_total
+
+    work["Suggested Shares"] = np.where(
+        work["Price"] > 0,
+        work["Suggested Buy Value"] / work["Price"],
+        0.0,
+    )
+
+    out = work[[
+        "Ticker",
+        "Name",
+        "Value",
+        "Target Value After Contribution",
+        "Suggested Buy Value",
+        "Price",
+        "Suggested Shares",
+    ]].copy()
+
+    out = out.rename(columns={"Value": "Current Value"})
+    out = out.sort_values("Suggested Buy Value", ascending=False).reset_index(drop=True)
+
+    for col in ["Current Value", "Target Value After Contribution", "Suggested Buy Value", "Price", "Suggested Shares"]:
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+
+    out["Current Value"] = out["Current Value"].round(2)
+    out["Target Value After Contribution"] = out["Target Value After Contribution"].round(2)
+    out["Suggested Buy Value"] = out["Suggested Buy Value"].round(2)
+    out["Price"] = out["Price"].round(2)
+    out["Suggested Shares"] = out["Suggested Shares"].round(4)
+
+    return out
+
+
+# =========================
 # OPTIMIZATION
 # =========================
 def get_default_constraints(profile: str):
@@ -1570,7 +1621,7 @@ def bucket_for_ticker(ticker: str):
 
 def simulate_constrained_efficient_frontier(
     asset_returns: pd.DataFrame,
-    asset_names: list,
+    asset_names: list[str],
     constraints: dict,
     risk_free_rate: float = 0.02,
     n_portfolios: int = 8000,
@@ -1679,7 +1730,7 @@ def build_recommended_shares_table(weight_array, asset_names, df_current):
 
 
 # =========================
-# COSTS / RISK
+# REBALANCING / RISK
 # =========================
 def estimate_transaction_cost(
     ticker: str,
@@ -1690,12 +1741,7 @@ def estimate_transaction_cost(
     params: dict,
 ):
     if trade_value <= 0:
-        return {
-            "Commission": 0.0,
-            "Slippage": 0.0,
-            "FX Cost": 0.0,
-            "Total Cost": 0.0,
-        }
+        return {"Commission": 0.0, "Slippage": 0.0, "FX Cost": 0.0, "Total Cost": 0.0}
 
     market = asset_market_group(ticker)
 
@@ -1725,13 +1771,7 @@ def estimate_transaction_cost(
         fx_cost = trade_value * params["fx_bps"] / 10000 if native_currency != base_currency else 0.0
 
     total_cost = commission + slippage + fx_cost
-
-    return {
-        "Commission": commission,
-        "Slippage": slippage,
-        "FX Cost": fx_cost,
-        "Total Cost": total_cost,
-    }
+    return {"Commission": commission, "Slippage": slippage, "FX Cost": fx_cost, "Total Cost": total_cost}
 
 
 def build_rebalancing_table(
@@ -1867,11 +1907,7 @@ def compute_rolling_metrics(portfolio_returns: pd.Series, benchmark_returns: pd.
     df_roll["Rolling Drawdown"] = rolling_drawdown
 
     if not benchmark_returns.empty:
-        aligned = pd.concat(
-            [portfolio_returns.rename("Portfolio"), benchmark_returns.rename("Benchmark")],
-            axis=1
-        ).dropna()
-
+        aligned = pd.concat([portfolio_returns.rename("Portfolio"), benchmark_returns.rename("Benchmark")], axis=1).dropna()
         if not aligned.empty:
             rolling_cov = aligned["Portfolio"].rolling(window).cov(aligned["Benchmark"])
             rolling_var = aligned["Benchmark"].rolling(window).var()
@@ -1882,7 +1918,7 @@ def compute_rolling_metrics(portfolio_returns: pd.Series, benchmark_returns: pd.
 
 
 # =========================
-# APP CONTEXT
+# CONTEXT
 # =========================
 def build_app_context():
     private_available = True
@@ -1893,6 +1929,7 @@ def build_app_context():
     tx_stats_map = {}
     transactions_df = pd.DataFrame(columns=TRANSACTIONS_HEADERS)
     cash_balances_df = pd.DataFrame(columns=CASH_BALANCES_HEADERS)
+    dividends_df = pd.DataFrame(columns=DIVIDENDS_HEADERS)
 
     try:
         base_private_portfolio = load_private_portfolio()
@@ -1919,13 +1956,23 @@ def build_app_context():
         except Exception:
             cash_balances_df = pd.DataFrame({"currency": SUPPORTED_BASE_CCY, "amount": [0.0] * len(SUPPORTED_BASE_CCY)})
 
+        try:
+            dividends_df = load_dividends_from_sheets()
+        except Exception:
+            dividends_df = pd.DataFrame(columns=DIVIDENDS_HEADERS)
+
         snapshot_private = merge_private_portfolios(base_private_portfolio, private_sheet_positions)
-
         name_map = {t: meta["name"] for t, meta in snapshot_private.items()}
-        tx_positions, tx_stats_map = build_transaction_positions(transactions_df, name_map)
+        base_shares_map = {t: meta.get("base_shares", meta["shares"]) for t, meta in snapshot_private.items()}
 
-        private_portfolio = dict(snapshot_private)
-        private_portfolio.update(tx_positions)
+        tx_positions, tx_stats_map = build_transaction_positions(transactions_df, name_map, base_shares_map)
+
+        private_portfolio = {ticker: dict(meta) for ticker, meta in snapshot_private.items()}
+        for ticker, meta in tx_positions.items():
+            if ticker in private_portfolio:
+                private_portfolio[ticker]["shares"] = meta["shares"]
+            else:
+                private_portfolio[ticker] = dict(meta)
 
     mode = st.sidebar.selectbox("View Mode", ["Public", "Private"])
     authenticated = False
@@ -1946,12 +1993,7 @@ def build_app_context():
 
         authenticated = True
 
-    base_currency = st.sidebar.selectbox(
-        "Base Currency",
-        SUPPORTED_BASE_CCY,
-        index=0,
-        help="Reference currency used to convert all positions, weights, returns, and rebalancing calculations.",
-    )
+    base_currency = st.sidebar.selectbox("Base Currency", SUPPORTED_BASE_CCY, index=0)
 
     portfolio_data = get_active_portfolio(mode, authenticated, private_portfolio)
     prefix = get_mode_prefix(mode)
@@ -1962,13 +2004,13 @@ def build_app_context():
         reset_mode_state(portfolio_data, prefix)
         st.session_state["public_defaults_version"] = PUBLIC_DEFAULTS_VERSION
 
-    if st.sidebar.button("Reset Portfolio", help="Restore the original share quantities defined for the active mode."):
+    if st.sidebar.button("Reset Portfolio"):
         reset_mode_state(portfolio_data, prefix)
         st.rerun()
 
     has_transactions = bool(mode == "Private" and authenticated and not transactions_df.empty)
     if has_transactions:
-        st.sidebar.info("Private shares are locked because they are now derived from the Transactions sheet.")
+        st.sidebar.info("Private shares are derived from the Transactions sheet.")
 
     st.sidebar.header("Portfolio Inputs")
     updated_portfolio = build_current_portfolio(
@@ -1995,11 +2037,7 @@ def build_app_context():
     }
 
     st.sidebar.header("Transaction Cost Model")
-    tc_model = st.sidebar.selectbox(
-        "Model",
-        ["Broker Profile", "Simple Bps", "Manual Override"],
-        help="Automated cost estimation model used in the rebalancing engine.",
-    )
+    tc_model = st.sidebar.selectbox("Model", ["Broker Profile", "Simple Bps", "Manual Override"])
 
     with st.sidebar.expander("Transaction Cost Parameters", expanded=False):
         if tc_model == "Broker Profile":
@@ -2049,18 +2087,11 @@ def build_app_context():
     gold_shock = st.sidebar.number_input("Gold Shock", -1.00, 1.00, 0.05, 0.01, format="%.2f")
     rolling_window = st.sidebar.slider("Rolling Window (days)", 21, 252, 63, 21)
 
-    stress_shocks = {
-        "Equities": equity_shock,
-        "Bonds": bonds_shock,
-        "Gold": gold_shock,
-    }
+    stress_shocks = {"Equities": equity_shock, "Bonds": bonds_shock, "Gold": gold_shock}
 
     tickers = list(updated_portfolio.keys())
 
-    live_prices_native, asset_hist_native = load_market_data_with_proxies(
-        tickers=tickers,
-        period="2y",
-    )
+    live_prices_native, asset_hist_native = load_market_data_with_proxies(tickers=tickers, period="2y")
 
     if asset_hist_native is None or asset_hist_native.empty or asset_hist_native.dropna(how="all").empty:
         st.error("Could not load historical data.")
@@ -2068,15 +2099,7 @@ def build_app_context():
 
     fx_prices, fx_hist, _ = build_fx_data(tickers, base_currency, period="2y")
     historical_base, missing_fx = convert_historical_to_base(asset_hist_native, tickers, base_currency, fx_hist)
-
-    historical_base = backfill_missing_proxy_history(
-        historical_base=historical_base,
-        asset_hist_native=asset_hist_native,
-        tickers=tickers,
-        base_currency=base_currency,
-        fx_hist=fx_hist,
-        period="2y",
-    )
+    historical_base = backfill_missing_proxy_history(historical_base, tickers, base_currency, fx_hist, period="2y")
 
     if historical_base.empty or historical_base.dropna(how="all").empty:
         st.error("Could not build base-currency historical series.")
@@ -2135,23 +2158,14 @@ def build_app_context():
 
     alloc_df = df[df["Value"] > 0][["Name", "Value"]].copy()
     if cash_total_value > 0:
-        alloc_df = pd.concat(
-            [alloc_df, pd.DataFrame([{"Name": "Cash", "Value": cash_total_value}])],
-            ignore_index=True,
-        )
+        alloc_df = pd.concat([alloc_df, pd.DataFrame([{"Name": "Cash", "Value": cash_total_value}])], ignore_index=True)
 
     if not alloc_df.empty:
         fig_pie = px.pie(alloc_df, names="Name", values="Value", hole=0.45)
         fig_pie.update_traces(textposition="inside", textinfo="percent+label")
     else:
         fig_pie = go.Figure()
-        fig_pie.add_annotation(
-            text="No portfolio value to display",
-            x=0.5,
-            y=0.5,
-            showarrow=False,
-            font=dict(size=18, color="#cbd5df"),
-        )
+        fig_pie.add_annotation(text="No portfolio value to display", x=0.5, y=0.5, showarrow=False, font=dict(size=18, color="#cbd5df"))
 
     fig_pie.update_layout(
         paper_bgcolor="#0b0f14",
@@ -2193,7 +2207,6 @@ def build_app_context():
         portfolio_cum = (1 + portfolio_returns).cumprod()
         total_return = float(portfolio_cum.iloc[-1] - 1)
         volatility = float(portfolio_returns.std() * np.sqrt(252))
-
         if volatility > 0:
             sharpe = float((portfolio_returns.mean() * 252 - risk_free_rate) / volatility)
 
@@ -2202,14 +2215,10 @@ def build_app_context():
         max_drawdown = float(drawdown.min())
 
     if not portfolio_returns.empty and not benchmark_returns.empty:
-        aligned = pd.concat(
-            [portfolio_returns.rename("Portfolio"), benchmark_returns.rename("Benchmark")],
-            axis=1
-        ).dropna()
+        aligned = pd.concat([portfolio_returns.rename("Portfolio"), benchmark_returns.rename("Benchmark")], axis=1).dropna()
 
         if not aligned.empty:
             benchmark_cum = (1 + aligned["Benchmark"]).cumprod()
-
             bench_var = aligned["Benchmark"].var()
             if bench_var > 0:
                 beta = float(aligned.cov().loc["Portfolio", "Benchmark"] / bench_var)
@@ -2220,7 +2229,6 @@ def build_app_context():
 
             excess = aligned["Portfolio"] - aligned["Benchmark"]
             tracking_error = float(excess.std() * np.sqrt(252))
-
             if tracking_error > 0:
                 information_ratio = float((excess.mean() * 252) / tracking_error)
 
@@ -2237,33 +2245,11 @@ def build_app_context():
         portfolio_last_y = portfolio_cum.iloc[-1]
         portfolio_cum_return = float(portfolio_last_y - 1)
 
-        fig_perf.add_annotation(
-            x=portfolio_last_x,
-            y=portfolio_last_y,
-            text=f"Portfolio: {portfolio_cum_return:.2%}",
-            showarrow=True,
-            arrowhead=2,
-            ax=20,
-            ay=-20,
-        )
-
         if not benchmark_cum.empty:
             fig_perf.add_scatter(x=benchmark_cum.index, y=benchmark_cum, name="VOO")
-
-            benchmark_last_x = benchmark_cum.index[-1]
             benchmark_last_y = benchmark_cum.iloc[-1]
             benchmark_cum_return = float(benchmark_last_y - 1)
             excess_vs_benchmark = float(portfolio_cum_return - benchmark_cum_return)
-
-            fig_perf.add_annotation(
-                x=benchmark_last_x,
-                y=benchmark_last_y,
-                text=f"VOO: {benchmark_cum_return:.2%}",
-                showarrow=True,
-                arrowhead=2,
-                ax=20,
-                ay=20,
-            )
 
         fig_perf.update_layout(
             paper_bgcolor="#0b0f14",
@@ -2322,58 +2308,14 @@ def build_app_context():
                 x=frontier["Volatility"],
                 y=frontier["Return"],
                 mode="markers",
-                marker=dict(
-                    size=5,
-                    color=frontier["Sharpe"],
-                    colorscale="Viridis",
-                    showscale=True,
-                    colorbar=dict(title="Sharpe"),
-                ),
+                marker=dict(size=5, color=frontier["Sharpe"], colorscale="Viridis", showscale=True, colorbar=dict(title="Sharpe")),
                 name="Simulated Portfolios",
-                hovertemplate="Volatility: %{x:.2%}<br>Expected Return: %{y:.2%}<br>Sharpe: %{marker.color:.2f}<extra></extra>",
             )
         )
-        fig_frontier.add_trace(
-            go.Scatter(
-                x=cml_x,
-                y=cml_y,
-                mode="lines",
-                name="Capital Market Line",
-            )
-        )
-        fig_frontier.add_trace(
-            go.Scatter(
-                x=[current_vol],
-                y=[current_return],
-                mode="markers+text",
-                text=["Current"],
-                textposition="top center",
-                marker=dict(size=12, symbol="x"),
-                name="Current Portfolio",
-            )
-        )
-        fig_frontier.add_trace(
-            go.Scatter(
-                x=[max_sharpe_row["Volatility"]],
-                y=[max_sharpe_row["Return"]],
-                mode="markers+text",
-                text=["Max Sharpe"],
-                textposition="top center",
-                marker=dict(size=12, symbol="diamond"),
-                name="Max Sharpe",
-            )
-        )
-        fig_frontier.add_trace(
-            go.Scatter(
-                x=[min_vol_row["Volatility"]],
-                y=[min_vol_row["Return"]],
-                mode="markers+text",
-                text=["Min Vol"],
-                textposition="bottom center",
-                marker=dict(size=12, symbol="circle"),
-                name="Min Volatility",
-            )
-        )
+        fig_frontier.add_trace(go.Scatter(x=cml_x, y=cml_y, mode="lines", name="Capital Market Line"))
+        fig_frontier.add_trace(go.Scatter(x=[current_vol], y=[current_return], mode="markers+text", text=["Current"], textposition="top center", marker=dict(size=12, symbol="x"), name="Current Portfolio"))
+        fig_frontier.add_trace(go.Scatter(x=[max_sharpe_row["Volatility"]], y=[max_sharpe_row["Return"]], mode="markers+text", text=["Max Sharpe"], textposition="top center", marker=dict(size=12, symbol="diamond"), name="Max Sharpe"))
+        fig_frontier.add_trace(go.Scatter(x=[min_vol_row["Volatility"]], y=[min_vol_row["Return"]], mode="markers+text", text=["Min Vol"], textposition="bottom center", marker=dict(size=12, symbol="circle"), name="Min Volatility"))
         fig_frontier.update_layout(
             xaxis_title="Volatility",
             yaxis_title="Expected Return",
@@ -2402,6 +2344,14 @@ def build_app_context():
 
     rolling_df = compute_rolling_metrics(portfolio_returns, benchmark_returns, risk_free_rate, rolling_window)
 
+    annual_dividend_df, dividend_calendar_df, collected_dividends_df, estimated_annual_dividends, dividends_ytd, dividends_total = build_dividend_insights(
+        df=df,
+        dividends_df=dividends_df,
+        base_currency=base_currency,
+        fx_prices=fx_prices,
+        fx_hist=fx_hist,
+    )
+
     return {
         "mode": mode,
         "authenticated": authenticated,
@@ -2419,6 +2369,13 @@ def build_app_context():
         "transactions_df": transactions_df,
         "cash_balances_df": cash_balances_df,
         "cash_display_df": cash_display_df,
+        "dividends_df": dividends_df,
+        "collected_dividends_df": collected_dividends_df,
+        "annual_dividend_df": annual_dividend_df,
+        "dividend_calendar_df": dividend_calendar_df,
+        "estimated_annual_dividends": estimated_annual_dividends,
+        "dividends_ytd": dividends_ytd,
+        "dividends_total": dividends_total,
         "has_transactions": has_transactions,
         "holdings_value": pnl_totals["holdings_value"],
         "cash_total_value": cash_total_value,
@@ -2462,4 +2419,6 @@ def build_app_context():
         "stress_return": stress_return,
         "fig_stress": fig_stress,
         "rolling_df": rolling_df,
+        "fx_prices": fx_prices,
+        "fx_hist": fx_hist,
     }
