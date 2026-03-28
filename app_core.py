@@ -389,43 +389,57 @@ def render_market_clocks():
         const wrapper = document.getElementById("clock-wrapper");
         const grid = document.getElementById("market-clock-grid");
 
-        function getCols() {
+        function getLayoutConfig() {
             const w = window.innerWidth;
-            if (w <= 520) return 1;
-            if (w <= 900) return 2;
-            return 3;
-        }
 
-        function getCardStyle() {
-            const w = window.innerWidth;
+            if (w <= 380) {
+                return {
+                    cols: 1,
+                    gap: 8,
+                    minHeight: 78,
+                    padding: "8px 10px",
+                    titleSize: "13px",
+                    exchangeSize: "10px",
+                    timeSize: "17px",
+                    dateSize: "10px",
+                    timeTop: "6px",
+                    titleTop: "0px"
+                };
+            }
 
             if (w <= 520) {
                 return {
-                    minHeight: 88,
-                    padding: "10px 12px",
-                    titleSize: "14px",
-                    exchangeSize: "11px",
-                    timeSize: "19px",
-                    dateSize: "11px",
-                    timeTop: "7px",
-                    gap: 10
+                    cols: 2,
+                    gap: 8,
+                    minHeight: 82,
+                    padding: "8px 10px",
+                    titleSize: "12px",
+                    exchangeSize: "10px",
+                    timeSize: "16px",
+                    dateSize: "10px",
+                    timeTop: "6px",
+                    titleTop: "0px"
                 };
             }
 
             if (w <= 900) {
                 return {
-                    minHeight: 94,
-                    padding: "10px",
+                    cols: 3,
+                    gap: 10,
+                    minHeight: 88,
+                    padding: "9px 10px",
                     titleSize: "13px",
-                    exchangeSize: "11px",
-                    timeSize: "18px",
-                    dateSize: "11px",
-                    timeTop: "8px",
-                    gap: 10
+                    exchangeSize: "10px",
+                    timeSize: "17px",
+                    dateSize: "10px",
+                    timeTop: "6px",
+                    titleTop: "0px"
                 };
             }
 
             return {
+                cols: 3,
+                gap: 10,
                 minHeight: 94,
                 padding: "10px",
                 titleSize: "13px",
@@ -433,7 +447,7 @@ def render_market_clocks():
                 timeSize: "18px",
                 dateSize: "11px",
                 timeTop: "8px",
-                gap: 10
+                titleTop: "0px"
             };
         }
 
@@ -459,24 +473,24 @@ def render_market_clocks():
         }
 
         function setFrameHeight() {
-            const h = Math.ceil(wrapper.getBoundingClientRect().height) + 8;
+            const height = Math.ceil(wrapper.scrollHeight) + 8;
+
             window.parent.postMessage(
                 {
                     isStreamlitMessage: true,
                     type: "streamlit:setFrameHeight",
-                    height: h
+                    height: height
                 },
                 "*"
             );
         }
 
         function renderGrid() {
-            const cols = getCols();
-            const style = getCardStyle();
+            const cfg = getLayoutConfig();
 
-            grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
-            grid.style.gap = `${style.gap}px`;
             grid.innerHTML = "";
+            grid.style.gridTemplateColumns = `repeat(${cfg.cols}, minmax(0, 1fr))`;
+            grid.style.gap = `${cfg.gap}px`;
 
             markets.forEach((market) => {
                 const vals = getTimeValues(market.tz);
@@ -485,22 +499,57 @@ def render_market_clocks():
                 card.style.background = "#0f141b";
                 card.style.border = "1px solid #2d3642";
                 card.style.borderRadius = "6px";
-                card.style.padding = style.padding;
-                card.style.minHeight = `${style.minHeight}px`;
+                card.style.padding = cfg.padding;
+                card.style.minHeight = `${cfg.minHeight}px`;
                 card.style.boxSizing = "border-box";
                 card.style.width = "100%";
+                card.style.overflow = "hidden";
 
                 card.innerHTML = `
-                    <div style="color:#f3a712;font-weight:800;font-size:${style.titleSize};text-transform:uppercase;line-height:1.15;">
+                    <div style="
+                        color:#f3a712;
+                        font-weight:800;
+                        font-size:${cfg.titleSize};
+                        text-transform:uppercase;
+                        line-height:1.1;
+                        margin-top:${cfg.titleTop};
+                        white-space:nowrap;
+                        overflow:hidden;
+                        text-overflow:ellipsis;
+                    ">
                         ${market.name}
                     </div>
-                    <div style="color:#9fb0c3;font-size:${style.exchangeSize};margin-top:2px;line-height:1.1;">
+
+                    <div style="
+                        color:#9fb0c3;
+                        font-size:${cfg.exchangeSize};
+                        margin-top:2px;
+                        line-height:1.05;
+                        white-space:nowrap;
+                        overflow:hidden;
+                        text-overflow:ellipsis;
+                    ">
                         ${market.exchange}
                     </div>
-                    <div style="color:#f8f8f8;font-size:${style.timeSize};font-weight:800;margin-top:${style.timeTop};line-height:1.1;">
+
+                    <div style="
+                        color:#f8f8f8;
+                        font-size:${cfg.timeSize};
+                        font-weight:800;
+                        margin-top:${cfg.timeTop};
+                        line-height:1.05;
+                        white-space:nowrap;
+                    ">
                         ${vals.timeVal}
                     </div>
-                    <div style="color:#7fb3ff;font-size:${style.dateSize};margin-top:6px;line-height:1.1;">
+
+                    <div style="
+                        color:#7fb3ff;
+                        font-size:${cfg.dateSize};
+                        margin-top:4px;
+                        line-height:1.05;
+                        white-space:nowrap;
+                    ">
                         ${vals.dateVal}
                     </div>
                 `;
@@ -509,7 +558,7 @@ def render_market_clocks():
             });
 
             requestAnimationFrame(() => {
-                setTimeout(setFrameHeight, 40);
+                setTimeout(setFrameHeight, 30);
             });
         }
 
@@ -517,17 +566,18 @@ def render_market_clocks():
         setInterval(renderGrid, 1000);
         window.addEventListener("resize", renderGrid);
 
-        const ro = new ResizeObserver(() => setFrameHeight());
-        ro.observe(wrapper);
+        const resizeObserver = new ResizeObserver(() => setFrameHeight());
+        resizeObserver.observe(wrapper);
 
         setTimeout(setFrameHeight, 150);
-        setTimeout(setFrameHeight, 400);
+        setTimeout(setFrameHeight, 350);
+        setTimeout(setFrameHeight, 700);
     </script>
     """
 
     component = component.replace("__MARKETS_JSON__", json.dumps(markets))
-    components_html(component, height=260, scrolling=False)
-    
+    components_html(component, height=220, scrolling=False)
+        
 # =========================
 # INVESTMENT HORIZON
 # =========================
