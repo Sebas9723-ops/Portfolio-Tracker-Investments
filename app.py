@@ -16,6 +16,7 @@ st.set_page_config(page_title="Portfolio Dashboard", layout="wide")
 
 DEFAULT_RISK_FREE_RATE = 0.02
 N_SIMULATIONS = 8000
+SUPPORTED_BASE_CCY = ["USD", "EUR", "GBP", "COP", "CHF"]
 
 
 # =========================
@@ -462,7 +463,7 @@ def build_current_portfolio(portfolio_data: dict, prefix: str, mode: str):
 
 
 # =========================
-# CURRENCY / FX HELPERS
+# FX HELPERS
 # =========================
 def asset_currency(ticker: str) -> str:
     if ticker.endswith(".DE") or ticker.endswith(".AS"):
@@ -487,34 +488,107 @@ def get_fx_ticker(from_ccy: str, to_ccy: str):
 
 
 def build_fx_data(tickers: list, base_currency: str, period: str = "2y"):
-    currencies = sorted({asset_currency(t) for t in tickers if asset_currency(t) != base_currency})
-    fx_tickers = [get_fx_ticker(ccy, base_currency) for ccy in currencies]
-    fx_tickers = [t for t in fx_tickers if t is not None]
+    needed_ccy = set(asset_currency(t) for t in tickers)
+    needed_ccy.add(base_currency)
+    needed_ccy.add("USD")
 
+    fx_tickers = set()
+    for a in needed_ccy:
+        for b in needed_ccy:
+            if a != b:
+                fx_tickers.add(f"{a}{b}=X")
+
+    fx_tickers = sorted(fx_tickers)
     fx_prices = get_prices(fx_tickers) if fx_tickers else {}
     fx_hist = get_historical_data(fx_tickers, period=period) if fx_tickers else pd.DataFrame()
 
     return fx_prices, fx_hist, fx_tickers
 
 
+def _get_direct_or_inverse_current(from_ccy: str, to_ccy: str, fx_prices: dict, fx_hist: pd.DataFrame):
+    if from_ccy == to_ccy:
+        return 1.0
+
+    direct = f"{from_ccy}{to_ccy}=X"
+    inverse = f"{to_ccy}{from_ccy}=X"
+
+    direct_val = fx_prices.get(direct)
+    if isinstance(direct_val, (int, float)) and pd.notna(direct_val) and direct_val > 0:
+        return float(direct_val)
+
+    inverse_val = fx_prices.get(inverse)
+    if isinstance(inverse_val, (int, float)) and pd.notna(inverse_val) and inverse_val > 0:
+        return 1.0 / float(inverse_val)
+
+    try:
+        if direct in fx_hist.columns:
+            direct_hist = pd.to_numeric(fx_hist[direct], errors="coerce").dropna()
+            if not direct_hist.empty and direct_hist.iloc[-1] > 0:
+                return float(direct_hist.iloc[-1])
+    except Exception:
+        pass
+
+    try:
+        if inverse in fx_hist.columns:
+            inverse_hist = pd.to_numeric(fx_hist[inverse], errors="coerce").dropna()
+            if not inverse_hist.empty and inverse_hist.iloc[-1] > 0:
+                return 1.0 / float(inverse_hist.iloc[-1])
+    except Exception:
+        pass
+
+    return None
+
+
 def get_fx_rate_current(from_ccy: str, to_ccy: str, fx_prices: dict, fx_hist: pd.DataFrame):
     if from_ccy == to_ccy:
         return 1.0
 
-    fx_ticker = get_fx_ticker(from_ccy, to_ccy)
-    rate = fx_prices.get(fx_ticker)
+    direct = _get_direct_or_inverse_current(from_ccy, to_ccy, fx_prices, fx_hist)
+    if direct is not None:
+        return direct
 
-    if isinstance(rate, (int, float)) and pd.notna(rate) and rate > 0:
-        return float(rate)
+    if from_ccy != "USD" and to_ccy != "USD":
+        leg1 = _get_direct_or_inverse_current(from_ccy, "USD", fx_prices, fx_hist)
+        leg2 = _get_direct_or_inverse_current("USD", to_ccy, fx_prices, fx_hist)
+        if leg1 is not None and leg2 is not None:
+            return leg1 * leg2
+
+    return np.nan
+
+
+def get_fx_series(from_ccy: str, to_ccy: str, fx_hist: pd.DataFrame):
+    if from_ccy == to_ccy:
+        return None
+
+    direct = f"{from_ccy}{to_ccy}=X"
+    inverse = f"{to_ccy}{from_ccy}=X"
 
     try:
-        if fx_ticker in fx_hist.columns:
-            last_rate = pd.to_numeric(fx_hist[fx_ticker], errors="coerce").dropna().iloc[-1]
-            return float(last_rate)
+        if direct in fx_hist.columns:
+            s = pd.to_numeric(fx_hist[direct], errors="coerce").dropna()
+            if not s.empty:
+                return s
     except Exception:
         pass
 
-    return np.nan
+    try:
+        if inverse in fx_hist.columns:
+            s = pd.to_numeric(fx_hist[inverse], errors="coerce").dropna()
+            if not s.empty:
+                return 1.0 / s.replace(0, np.nan)
+    except Exception:
+        pass
+
+    if from_ccy != "USD" and to_ccy != "USD":
+        s1 = get_fx_series(from_ccy, "USD", fx_hist)
+        s2 = get_fx_series("USD", to_ccy, fx_hist)
+
+        if s1 is not None and s2 is not None:
+            aligned = pd.concat([s1.rename("leg1"), s2.rename("leg2")], axis=1).dropna()
+            if not aligned.empty:
+                return aligned["leg1"] * aligned["leg2"]
+
+    return None
 
 
 def convert_historical_to_base(asset_hist_native: pd.DataFrame, tickers: list, base_currency: str, fx_hist: pd.DataFrame):
@@ -532,14 +606,13 @@ def convert_historical_to_base(asset_hist_native: pd.DataFrame, tickers: list, b
             converted[ticker] = native_series.rename(ticker)
             continue
 
-        fx_ticker = get_fx_ticker(from_ccy, base_currency)
-        if fx_ticker not in fx_hist.columns:
-            missing_fx.append(fx_ticker)
+        fx_series = get_fx_series(from_ccy, base_currency, fx_hist)
+
+        if fx_series is None:
+            missing_fx.append(f"{from_ccy}->{base_currency}")
             continue
 
-        fx_series = pd.to_numeric(fx_hist[fx_ticker], errors="coerce").dropna()
         aligned = pd.concat([native_series.rename("asset"), fx_series.rename("fx")], axis=1).dropna()
-
         if not aligned.empty:
             converted[ticker] = (aligned["asset"] * aligned["fx"]).rename(ticker)
 
@@ -662,28 +735,21 @@ def build_portfolio_returns(df: pd.DataFrame, historical_base: pd.DataFrame):
     return portfolio_returns, returns
 
 
-def build_benchmark_returns(base_currency: str):
+def build_benchmark_returns(base_currency: str, fx_prices: dict, fx_hist: pd.DataFrame):
     bench_native = get_historical_data(["VOO"], period="2y")
     if bench_native.empty or "VOO" not in bench_native.columns:
         return pd.Series(dtype=float)
 
+    voo_series = pd.to_numeric(bench_native["VOO"], errors="coerce").dropna()
+
     if base_currency == "USD":
-        return bench_native["VOO"].pct_change().dropna()
+        return voo_series.pct_change().dropna()
 
-    fx_hist = get_historical_data([get_fx_ticker("USD", base_currency)], period="2y")
-    fx_ticker = get_fx_ticker("USD", base_currency)
-
-    if fx_hist.empty or fx_ticker not in fx_hist.columns:
+    fx_series = get_fx_series("USD", base_currency, fx_hist)
+    if fx_series is None:
         return pd.Series(dtype=float)
 
-    aligned = pd.concat(
-        [
-            pd.to_numeric(bench_native["VOO"], errors="coerce").rename("VOO"),
-            pd.to_numeric(fx_hist[fx_ticker], errors="coerce").rename("FX"),
-        ],
-        axis=1,
-    ).dropna()
-
+    aligned = pd.concat([voo_series.rename("VOO"), fx_series.rename("FX")], axis=1).dropna()
     if aligned.empty:
         return pd.Series(dtype=float)
 
@@ -1133,28 +1199,41 @@ if mode == "Private" and authenticated:
                 submitted_new_position = st.form_submit_button("Add Private Position")
 
             if submitted_new_position:
+                try:
+                    current_sheet_positions = load_private_positions_from_sheets()
+                except Exception as e:
+                    st.sidebar.error(str(e))
+                    current_sheet_positions = None
+
+                if current_sheet_positions is not None:
+                    if not new_ticker:
+                        st.sidebar.error("Ticker is required.")
+                    elif not new_name:
+                        st.sidebar.error("Position name is required.")
+                    elif new_shares <= 0:
+                        st.sidebar.error("Initial shares must be greater than zero.")
+                    elif new_ticker in private_portfolio:
+                        st.sidebar.error("This ticker already exists in your private portfolio.")
+                    elif not validate_new_ticker(new_ticker):
+                        st.sidebar.error("Ticker validation failed. Check the Yahoo Finance symbol and try again.")
+                    else:
+                        try:
+                            current_sheet_positions[new_ticker] = {
+                                "name": new_name,
+                                "shares": float(new_shares),
+                            }
+                            save_private_positions_to_sheets(current_sheet_positions)
+                            st.sidebar.success(f"{new_ticker} added to private portfolio.")
+                            st.rerun()
+                        except Exception as e:
+                            st.sidebar.error(str(e))
+
+            try:
                 current_sheet_positions = load_private_positions_from_sheets()
+            except Exception as e:
+                current_sheet_positions = {}
+                st.sidebar.error(str(e))
 
-                if not new_ticker:
-                    st.sidebar.error("Ticker is required.")
-                elif not new_name:
-                    st.sidebar.error("Position name is required.")
-                elif new_shares <= 0:
-                    st.sidebar.error("Initial shares must be greater than zero.")
-                elif new_ticker in private_portfolio:
-                    st.sidebar.error("This ticker already exists in your private portfolio.")
-                elif not validate_new_ticker(new_ticker):
-                    st.sidebar.error("Ticker validation failed. Check the Yahoo Finance symbol and try again.")
-                else:
-                    current_sheet_positions[new_ticker] = {
-                        "name": new_name,
-                        "shares": float(new_shares),
-                    }
-                    save_private_positions_to_sheets(current_sheet_positions)
-                    st.sidebar.success(f"{new_ticker} added to private portfolio.")
-                    st.rerun()
-
-            current_sheet_positions = load_private_positions_from_sheets()
             removable_customs = sorted(
                 [t for t in current_sheet_positions.keys() if t not in base_private_portfolio]
             )
@@ -1171,14 +1250,17 @@ if mode == "Private" and authenticated:
                     help="Delete the selected custom position from Google Sheets."
                 ):
                     if removable:
-                        current_sheet_positions.pop(removable, None)
-                        save_private_positions_to_sheets(current_sheet_positions)
-                        st.sidebar.success(f"{removable} removed.")
-                        st.rerun()
+                        try:
+                            current_sheet_positions.pop(removable, None)
+                            save_private_positions_to_sheets(current_sheet_positions)
+                            st.sidebar.success(f"{removable} removed.")
+                            st.rerun()
+                        except Exception as e:
+                            st.sidebar.error(str(e))
 
 base_currency = st.sidebar.selectbox(
     "Base Currency",
-    ["USD", "EUR", "GBP"],
+    SUPPORTED_BASE_CCY,
     index=0,
     help="Reference currency used to convert all positions, weights, returns, and rebalancing calculations.",
 )
@@ -1197,10 +1279,13 @@ if mode == "Private" and authenticated and positions_sheet_available:
         "Save Private Shares",
         help="Save the current private share quantities to Google Sheets so they persist across sessions."
     ):
-        sheet_payload = build_private_portfolio_for_save(portfolio_data, prefix)
-        save_private_positions_to_sheets(sheet_payload)
-        st.sidebar.success("Private shares saved to Google Sheets.")
-        st.rerun()
+        try:
+            sheet_payload = build_private_portfolio_for_save(portfolio_data, prefix)
+            save_private_positions_to_sheets(sheet_payload)
+            st.sidebar.success("Private shares saved to Google Sheets.")
+            st.rerun()
+        except Exception as e:
+            st.sidebar.error(str(e))
 
 st.sidebar.header("Optimization Settings")
 
@@ -1381,7 +1466,7 @@ st.plotly_chart(fig_bar, use_container_width=True)
 # PERFORMANCE
 # =========================
 portfolio_returns, asset_returns = build_portfolio_returns(df, historical_base)
-benchmark_returns = build_benchmark_returns(base_currency)
+benchmark_returns = build_benchmark_returns(base_currency, fx_prices, fx_hist)
 
 total_return = 0.0
 volatility = 0.0
