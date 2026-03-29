@@ -654,6 +654,7 @@ def build_app_context_runtime(app_scope: str):
         "app_scope": app_scope,
         "mode": mode,
         "data_source_info": data_source_info,
+        "tx_stats_map": tx_stats_map,
         "authenticated": authenticated,
         "base_currency": base_currency,
         "profile": profile,

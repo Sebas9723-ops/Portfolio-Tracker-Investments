@@ -1826,6 +1826,7 @@ def bucket_for_ticker(ticker: str):
     return "Equities"
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
 def simulate_constrained_efficient_frontier(
     asset_returns: pd.DataFrame,
     asset_names: list[str],
