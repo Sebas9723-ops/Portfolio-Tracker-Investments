@@ -20,7 +20,7 @@ def _normalize_weight_map(weight_map: dict[str, float], tickers: list[str]) -> d
     return {t: v / total for t, v in clean.items()}
 
 
-def _available_models(ctx, df: pd.DataFrame) -> list[str]:
+def _available_models(ctx) -> list[str]:
     models = ["Strategic Target"]
     if ctx.get("max_sharpe_row") is not None and ctx.get("usable"):
         models.append("Max Sharpe Frontier")
@@ -112,33 +112,35 @@ def _build_monitor_table(
     work["Action"] = work.apply(_action, axis=1)
 
     if holdings_total > 0:
-        work[f"Trade To Target ({base_currency})"] = (
+        work[f"Trade To Recommended ({base_currency})"] = (
             (work["Recommended Weight %"] - work["Weight %"]) / 100.0 * holdings_total
         )
     else:
-        work[f"Trade To Target ({base_currency})"] = 0.0
+        work[f"Trade To Recommended ({base_currency})"] = 0.0
 
     out = work[
         [
             "Ticker",
             "Name",
             "Weight %",
+            "Target %",
             "Recommended Weight %",
             "Gap %",
             "Lower Band %",
             "Upper Band %",
-            f"Trade To Target ({base_currency})",
+            f"Trade To Recommended ({base_currency})",
             "Action",
         ]
     ].copy()
 
     for col in [
         "Weight %",
+        "Target %",
         "Recommended Weight %",
         "Gap %",
         "Lower Band %",
         "Upper Band %",
-        f"Trade To Target ({base_currency})",
+        f"Trade To Recommended ({base_currency})",
     ]:
         out[col] = pd.to_numeric(out[col], errors="coerce").round(2)
 
@@ -166,7 +168,7 @@ def _build_alerts(
         action = str(row["Action"])
 
         if action != "Within Band":
-            level = "Critical" if abs(gap_pct) >= 2 * 3.0 else "Warning"
+            level = "Critical" if abs(gap_pct) >= 6.0 else "Warning"
             alerts.append(
                 {
                     "level": level,
@@ -263,16 +265,24 @@ def _render_alert_cards(alerts: list[dict]):
         )
 
 
-def _build_compare_figure(df: pd.DataFrame, recommended_map: dict[str, float]) -> go.Figure:
+def _build_compare_figure(
+    df: pd.DataFrame,
+    recommended_map: dict[str, float],
+    proposed_weight_map: dict[str, float] | None = None,
+) -> go.Figure:
     tickers = df["Ticker"].tolist()
     current_weights = df["Weight %"].tolist()
-    current_targets = df["Target %"].tolist()
+    policy_targets = df["Target %"].tolist()
     recommended_weights = [float(recommended_map.get(t, 0.0)) * 100.0 for t in tickers]
 
     fig = go.Figure()
     fig.add_bar(x=tickers, y=current_weights, name="Current Weight %")
-    fig.add_bar(x=tickers, y=current_targets, name="Current Policy Target %")
+    fig.add_bar(x=tickers, y=policy_targets, name="Policy Target %")
     fig.add_bar(x=tickers, y=recommended_weights, name="Recommended Weight %")
+
+    if proposed_weight_map is not None:
+        proposed_weights = [float(proposed_weight_map.get(t, 0.0)) * 100.0 for t in tickers]
+        fig.add_bar(x=tickers, y=proposed_weights, name="Proposed Weight %")
 
     fig.update_layout(
         barmode="group",
@@ -440,155 +450,237 @@ def _build_trade_proposal(
     return proposal, proposed_weight_map, turnover, total_cost, net_cash_flow, gap_closed_pct, trade_count
 
 
+def _estimate_contribution_needed_without_selling(
+    df: pd.DataFrame,
+    recommended_map: dict[str, float],
+) -> tuple[float | None, str]:
+    if df.empty:
+        return 0.0, "No holdings data."
+
+    total_current = float(df["Value"].sum())
+    required_contribution = 0.0
+
+    for _, row in df.iterrows():
+        ticker = str(row["Ticker"])
+        current_value = float(row["Value"])
+        recommended_weight = float(recommended_map.get(ticker, 0.0))
+
+        if current_value <= 1e-12:
+            continue
+
+        if recommended_weight <= 1e-12:
+            return None, f"{ticker} has a positive current value but a zero recommended weight."
+
+        contribution_for_ticker = current_value / recommended_weight - total_current
+        required_contribution = max(required_contribution, contribution_for_ticker)
+
+    return max(required_contribution, 0.0), ""
+
+
 def _build_contribution_plan(
     ctx,
     recommended_map: dict[str, float],
     contribution_amount: float,
     min_trade_value: float,
+    allow_sells: bool,
 ):
     df = ctx["df"].copy()
 
     if contribution_amount <= 0 or df.empty:
-        return pd.DataFrame(), {}, 0.0, 0.0, "-", 0.0
+        return pd.DataFrame(), {}, 0.0, 0.0, 0.0, 0.0, "-"
 
     current_value_map = df.set_index("Ticker")["Value"].to_dict()
     current_price_map = df.set_index("Ticker")["Price"].to_dict()
     current_weight_map = df.set_index("Ticker")["Weight %"].to_dict()
+    name_map = df.set_index("Ticker")["Name"].to_dict()
 
     total_current = float(df["Value"].sum())
     total_after = total_current + float(contribution_amount)
 
     rows = []
-    positive_gap_total = 0.0
 
-    for ticker in df["Ticker"].tolist():
-        current_value = float(current_value_map.get(ticker, 0.0))
-        current_weight = float(current_weight_map.get(ticker, 0.0))
-        recommended_weight = float(recommended_map.get(ticker, 0.0)) * 100.0
-        target_value_after = float(recommended_map.get(ticker, 0.0)) * total_after
-        gap_value = target_value_after - current_value
-        positive_gap = max(gap_value, 0.0)
-        positive_gap_total += positive_gap
+    if allow_sells:
+        for ticker in df["Ticker"].tolist():
+            current_value = float(current_value_map.get(ticker, 0.0))
+            recommended_weight = float(recommended_map.get(ticker, 0.0))
+            target_value_after = recommended_weight * total_after
+            trade_value = target_value_after - current_value
+            price = float(current_price_map.get(ticker, 0.0))
+            trade_shares = abs(trade_value) / price if price > 0 else 0.0
 
-        rows.append(
-            {
-                "Ticker": ticker,
-                "Name": str(df.loc[df["Ticker"] == ticker, "Name"].iloc[0]),
-                "Current Weight %": current_weight,
-                "Recommended Weight %": recommended_weight,
-                "Current Value": current_value,
-                "Target Value After Contribution": target_value_after,
-                "Gap Value": gap_value,
-                "Positive Gap": positive_gap,
-                "Price": float(current_price_map.get(ticker, 0.0)),
-            }
-        )
+            if abs(trade_value) < 1e-9:
+                action = "Hold"
+            elif trade_value > 0:
+                action = "Buy"
+            else:
+                action = "Sell"
 
-    suggestion_df = pd.DataFrame(rows)
+            decision = "Execute" if (abs(trade_value) >= min_trade_value and action != "Hold") else "Hold"
 
-    if positive_gap_total <= 0:
-        suggestion_df["Suggested Buy Value"] = contribution_amount * suggestion_df["Recommended Weight %"] / 100.0
+            executed_trade_value = trade_value if decision == "Execute" else 0.0
+            proposed_value = current_value + executed_trade_value
+
+            rows.append(
+                {
+                    "Ticker": ticker,
+                    "Name": str(name_map.get(ticker, ticker)),
+                    "Current Weight %": float(current_weight_map.get(ticker, 0.0)),
+                    "Recommended Weight %": recommended_weight * 100.0,
+                    "Current Value": current_value,
+                    "Target Value After Contribution": target_value_after,
+                    "Action": action,
+                    "Trade Value": trade_value,
+                    "Executed Trade Value": executed_trade_value,
+                    "Reference Price": price,
+                    "Trade Shares": trade_shares if decision == "Execute" else 0.0,
+                    "Decision": decision,
+                    "Proposed Value": proposed_value,
+                }
+            )
+
     else:
-        suggestion_df["Suggested Buy Value"] = contribution_amount * suggestion_df["Positive Gap"] / positive_gap_total
+        positive_gap_total = 0.0
+        temp_rows = []
 
-    suggestion_df["Decision"] = np.where(
-        suggestion_df["Suggested Buy Value"] >= min_trade_value,
-        "Execute",
-        "Hold",
-    )
-    suggestion_df["Executed Buy Value"] = np.where(
-        suggestion_df["Decision"] == "Execute",
-        suggestion_df["Suggested Buy Value"],
-        0.0,
-    )
-    suggestion_df["Executed Shares"] = np.where(
-        suggestion_df["Price"] > 0,
-        suggestion_df["Executed Buy Value"] / suggestion_df["Price"],
-        0.0,
-    )
+        for ticker in df["Ticker"].tolist():
+            current_value = float(current_value_map.get(ticker, 0.0))
+            recommended_weight = float(recommended_map.get(ticker, 0.0))
+            target_value_after = recommended_weight * total_after
+            positive_gap = max(target_value_after - current_value, 0.0)
 
-    proposed_value_map = {}
-    for _, row in suggestion_df.iterrows():
-        ticker = str(row["Ticker"])
-        proposed_value_map[ticker] = float(row["Current Value"]) + float(row["Executed Buy Value"])
+            temp_rows.append(
+                {
+                    "Ticker": ticker,
+                    "Name": str(name_map.get(ticker, ticker)),
+                    "Current Weight %": float(current_weight_map.get(ticker, 0.0)),
+                    "Recommended Weight %": recommended_weight * 100.0,
+                    "Current Value": current_value,
+                    "Target Value After Contribution": target_value_after,
+                    "Positive Gap": positive_gap,
+                    "Reference Price": float(current_price_map.get(ticker, 0.0)),
+                }
+            )
+            positive_gap_total += positive_gap
 
-    total_proposed = float(sum(proposed_value_map.values()))
+        for row in temp_rows:
+            if positive_gap_total > 0:
+                suggested_buy_value = contribution_amount * float(row["Positive Gap"]) / positive_gap_total
+            else:
+                suggested_buy_value = contribution_amount * float(row["Recommended Weight %"]) / 100.0
+
+            action = "Buy" if suggested_buy_value > 1e-9 else "Hold"
+            decision = "Execute" if (suggested_buy_value >= min_trade_value and action != "Hold") else "Hold"
+            executed_trade_value = suggested_buy_value if decision == "Execute" else 0.0
+            proposed_value = float(row["Current Value"]) + executed_trade_value
+            price = float(row["Reference Price"])
+            trade_shares = executed_trade_value / price if price > 0 else 0.0
+
+            rows.append(
+                {
+                    "Ticker": row["Ticker"],
+                    "Name": row["Name"],
+                    "Current Weight %": row["Current Weight %"],
+                    "Recommended Weight %": row["Recommended Weight %"],
+                    "Current Value": row["Current Value"],
+                    "Target Value After Contribution": row["Target Value After Contribution"],
+                    "Action": action,
+                    "Trade Value": suggested_buy_value,
+                    "Executed Trade Value": executed_trade_value,
+                    "Reference Price": price,
+                    "Trade Shares": trade_shares,
+                    "Decision": decision,
+                    "Proposed Value": proposed_value,
+                }
+            )
+
+    plan_df = pd.DataFrame(rows)
+
+    total_proposed = float(plan_df["Proposed Value"].sum())
     proposed_weight_map = {}
     if total_proposed > 0:
-        for ticker, value in proposed_value_map.items():
-            proposed_weight_map[ticker] = value / total_proposed
+        for _, row in plan_df.iterrows():
+            proposed_weight_map[str(row["Ticker"])] = float(row["Proposed Value"]) / total_proposed
     else:
-        for ticker in current_value_map:
+        for ticker in df["Ticker"].tolist():
             proposed_weight_map[ticker] = 0.0
 
-    suggestion_df["Proposed Weight %"] = suggestion_df["Ticker"].map(
+    plan_df["Proposed Weight %"] = plan_df["Ticker"].map(
         lambda t: float(proposed_weight_map.get(t, 0.0)) * 100.0
     )
-    suggestion_df["Post-Contribution Gap %"] = (
-        suggestion_df["Proposed Weight %"] - suggestion_df["Recommended Weight %"]
-    )
+    plan_df["Post-Plan Gap %"] = plan_df["Proposed Weight %"] - plan_df["Recommended Weight %"]
 
-    allocated_amount = float(suggestion_df["Executed Buy Value"].sum())
-    residual_cash = float(contribution_amount - allocated_amount)
+    buy_value = float(plan_df.loc[plan_df["Executed Trade Value"] > 0, "Executed Trade Value"].sum())
+    sell_value = float(abs(plan_df.loc[plan_df["Executed Trade Value"] < 0, "Executed Trade Value"].sum()))
+    net_external_contribution = buy_value - sell_value
+    residual_contribution = float(contribution_amount - net_external_contribution)
 
-    gap_closed_base = float(np.abs(df["Weight %"] - df["Ticker"].map(lambda t: float(recommended_map.get(t, 0.0)) * 100.0)).sum())
-    gap_closed_after = float(np.abs(suggestion_df["Post-Contribution Gap %"]).sum())
+    current_abs_gap = float(np.abs(df["Weight %"] - df["Ticker"].map(lambda t: float(recommended_map.get(t, 0.0)) * 100.0)).sum())
+    proposed_abs_gap = float(np.abs(plan_df["Post-Plan Gap %"]).sum())
     gap_closed_pct = (
-        (gap_closed_base - gap_closed_after) / gap_closed_base * 100.0
-        if gap_closed_base > 0
+        (current_abs_gap - proposed_abs_gap) / current_abs_gap * 100.0
+        if current_abs_gap > 0
         else 0.0
     )
 
     top_priority = "-"
-    execute_df = suggestion_df[suggestion_df["Decision"] == "Execute"].copy()
+    execute_df = plan_df[plan_df["Decision"] == "Execute"].copy()
     if not execute_df.empty:
-        top_priority = str(execute_df.sort_values("Executed Buy Value", ascending=False).iloc[0]["Ticker"])
+        top_priority = str(execute_df.iloc[0]["Ticker"])
 
-    keep_cols = [
-        "Ticker",
-        "Name",
-        "Current Weight %",
-        "Recommended Weight %",
-        "Current Value",
-        "Target Value After Contribution",
-        "Suggested Buy Value",
-        "Executed Buy Value",
-        "Price",
-        "Executed Shares",
-        "Proposed Weight %",
-        "Post-Contribution Gap %",
-        "Decision",
-    ]
-    suggestion_df = suggestion_df[keep_cols].copy()
+    plan_df = plan_df[
+        [
+            "Ticker",
+            "Name",
+            "Action",
+            "Decision",
+            "Current Weight %",
+            "Recommended Weight %",
+            "Current Value",
+            "Target Value After Contribution",
+            "Trade Value",
+            "Executed Trade Value",
+            "Reference Price",
+            "Trade Shares",
+            "Proposed Weight %",
+            "Post-Plan Gap %",
+        ]
+    ].copy()
 
     for col in [
         "Current Weight %",
         "Recommended Weight %",
         "Current Value",
         "Target Value After Contribution",
-        "Suggested Buy Value",
-        "Executed Buy Value",
-        "Price",
+        "Trade Value",
+        "Executed Trade Value",
+        "Reference Price",
         "Proposed Weight %",
-        "Post-Contribution Gap %",
+        "Post-Plan Gap %",
     ]:
-        suggestion_df[col] = pd.to_numeric(suggestion_df[col], errors="coerce").round(2)
+        plan_df[col] = pd.to_numeric(plan_df[col], errors="coerce").round(2)
 
-    suggestion_df["Executed Shares"] = pd.to_numeric(suggestion_df["Executed Shares"], errors="coerce").round(4)
-    suggestion_df = suggestion_df.sort_values("Executed Buy Value", ascending=False).reset_index(drop=True)
+    plan_df["Trade Shares"] = pd.to_numeric(plan_df["Trade Shares"], errors="coerce").round(4)
+    plan_df = plan_df.sort_values("Executed Trade Value", key=lambda s: s.abs(), ascending=False).reset_index(drop=True)
 
-    return suggestion_df, proposed_weight_map, allocated_amount, residual_cash, top_priority, gap_closed_pct
+    return (
+        plan_df,
+        proposed_weight_map,
+        buy_value,
+        sell_value,
+        residual_contribution,
+        gap_closed_pct,
+        top_priority,
+    )
 
 
-def _render_manual_orders(title: str, df_orders: pd.DataFrame, base_currency: str):
+def _render_manual_orders(title: str, df_orders: pd.DataFrame):
     info_section(title, "Manual order checklist to place trades in your broker.")
 
     if df_orders.empty:
         st.info("No trades qualified for execution under the current rules.")
         return
 
-    out = df_orders.copy()
-    st.dataframe(out, use_container_width=True, height=240)
+    st.dataframe(df_orders, use_container_width=True, height=240)
 
 
 def render_rebalancing_page(ctx):
@@ -600,10 +692,10 @@ def render_rebalancing_page(ctx):
 
     info_section(
         "Professional Rebalance Engine",
-        "This page combines portfolio diagnostics, efficient-frontier recommendations, trade proposal logic, and contribution planning in a single professional workflow."
+        "This page combines diagnostics, efficient-frontier recommendations, contribution planning, and trade proposal logic in a single professional workflow."
     )
 
-    models = _available_models(ctx, ctx["df"])
+    models = _available_models(ctx)
     default_model_index = models.index("Max Sharpe Frontier") if "Max Sharpe Frontier" in models else 0
 
     c1, c2, c3 = st.columns(3)
@@ -621,7 +713,7 @@ def render_rebalancing_page(ctx):
     )
     max_cost_pct = c6.number_input("Max Cost / Trade (%)", min_value=0.1, max_value=10.0, value=2.0, step=0.1)
 
-    allow_sells = st.checkbox("Allow Sell Trades In Proposal", value=True)
+    allow_sells_proposal = st.checkbox("Allow Sell Trades In Trade Proposal", value=True)
 
     recommended_map = _recommended_weight_map(ctx, ctx["df"], model_name)
     recommendation_stats = _portfolio_stats_from_weight_map(ctx, recommended_map)
@@ -651,7 +743,8 @@ def render_rebalancing_page(ctx):
     if model_name == "Strategic Target" and current_target_equal_current:
         st.warning(
             "Your current policy target is effectively equal to the current allocation. "
-            "That is why Weight % and Target % look the same. Use an efficient-frontier model to generate an actual recommendation."
+            "That is why Weight % and Policy Target % look the same. "
+            "Use an efficient-frontier model to generate a different recommendation."
         )
 
     m1, m2, m3, m4 = st.columns(4)
@@ -677,29 +770,29 @@ def render_rebalancing_page(ctx):
     )
     _render_alert_cards(alerts)
 
-    c_left, c_right = st.columns([1.15, 1.0])
+    left, right = st.columns([1.15, 1.0])
 
-    with c_left:
+    with left:
         info_section(
-            "Current vs Recommended Allocation",
-            "Professional comparison between current allocation, current policy target, and the selected recommended allocation."
+            "Current vs Policy vs Recommended",
+            "Professional comparison between current allocation, policy target, and the selected recommended allocation."
         )
         fig_compare = _build_compare_figure(ctx["df"], recommended_map)
-        st.plotly_chart(fig_compare, use_container_width=True, key="rebalance_compare_chart")
+        st.plotly_chart(fig_compare, use_container_width=True, key="rebalance_compare_chart_v2")
 
-    with c_right:
+    with right:
         info_section(
             "Efficient Frontier Snapshot",
-            "Use the efficient frontier output already computed by the app as the recommendation engine."
+            "Frontier already computed by the app and used here as a recommendation engine."
         )
         if ctx.get("fig_frontier") is not None:
-            st.plotly_chart(ctx["fig_frontier"], use_container_width=True, key="rebalance_frontier_chart")
+            st.plotly_chart(ctx["fig_frontier"], use_container_width=True, key="rebalance_frontier_chart_v2")
         else:
             st.info("Efficient frontier is not available for the current data set.")
 
     info_section(
         "Deviation Monitor",
-        "Current weights, recommended weights, tolerance bands, and estimated value required to move each position back to the selected recommended allocation."
+        "Current weights, policy targets, recommended weights, tolerance bands, and estimated value required to move each position toward the selected recommendation."
     )
     st.dataframe(monitor_df, use_container_width=True, height=360)
 
@@ -709,7 +802,7 @@ def render_rebalancing_page(ctx):
         tolerance_pct=float(tolerance_pct),
         min_trade_value=float(min_trade_value),
         max_cost_pct=float(max_cost_pct),
-        allow_sells=bool(allow_sells),
+        allow_sells=bool(allow_sells_proposal),
     )
 
     info_section(
@@ -718,7 +811,7 @@ def render_rebalancing_page(ctx):
     )
 
     p1, p2, p3, p4 = st.columns(4)
-    info_metric(p1, "Trades To Execute", str(trade_count), "Number of trades that passed the rebalance rules.")
+    info_metric(p1, "Trades To Execute", str(trade_count), "Number of trades that passed the proposal rules.")
     info_metric(p2, "Turnover", f"{turnover:.2f}%", "Trade value divided by invested holdings value.")
     info_metric(p3, "Estimated Cost", f"{ctx['base_currency']} {total_cost:,.2f}", "Estimated total transaction cost.")
     info_metric(p4, "Gap Closed", f"{gap_closed_pct:.2f}%", "Reduction in total absolute allocation gap if all approved trades are executed.")
@@ -729,11 +822,8 @@ def render_rebalancing_page(ctx):
 
     st.dataframe(proposal_df, use_container_width=True, height=360)
 
-    fig_proposed = _build_compare_figure(
-        ctx["df"].assign(**{"Target %": [float(recommended_map.get(t, 0.0)) * 100.0 for t in ctx["df"]["Ticker"]]}),
-        proposed_weight_map,
-    )
-    st.plotly_chart(fig_proposed, use_container_width=True, key="rebalance_proposed_chart")
+    fig_proposed = _build_compare_figure(ctx["df"], recommended_map, proposed_weight_map=proposed_weight_map)
+    st.plotly_chart(fig_proposed, use_container_width=True, key="rebalance_proposed_chart_v2")
 
     execute_df = proposal_df[proposal_df["Decision"] == "Execute"].copy()
     if not execute_df.empty:
@@ -749,56 +839,90 @@ def render_rebalancing_page(ctx):
     else:
         manual_orders_df = pd.DataFrame()
 
-    _render_manual_orders("Manual Orders From Trade Proposal", manual_orders_df, ctx["base_currency"])
+    _render_manual_orders("Manual Orders From Trade Proposal", manual_orders_df)
 
     info_section(
         "Contribution Plan",
-        "Practical buy plan based on the same recommendation model, designed for new cash contributions without necessarily selling existing positions."
+        "Enter a contribution amount and receive a professional buy or buy/sell plan using the selected recommendation model."
     )
 
-    contribution_amount = st.number_input(
+    cp1, cp2 = st.columns(2)
+    contribution_amount = cp1.number_input(
         f"Contribution Amount ({ctx['base_currency']})",
         min_value=0.0,
         value=0.0,
         step=100.0,
     )
+    allow_sells_contribution = cp2.checkbox("Allow Sell Trades In Contribution Plan", value=False)
 
-    contribution_df, contribution_weight_map, allocated_amount, residual_cash, top_priority, contribution_gap_closed = _build_contribution_plan(
+    required_contribution_no_sell, contribution_note = _estimate_contribution_needed_without_selling(
+        ctx["df"],
+        recommended_map,
+    )
+
+    if required_contribution_no_sell is None:
+        st.info(
+            "Estimated contribution needed to reach the recommended weights without selling: "
+            "Not feasible, because at least one current holding has a zero recommended weight."
+        )
+        if contribution_note:
+            st.caption(contribution_note)
+    else:
+        st.info(
+            f"Estimated contribution needed to reach the recommended weights without selling: "
+            f"{ctx['base_currency']} {required_contribution_no_sell:,.2f}"
+        )
+
+    (
+        contribution_df,
+        contribution_weight_map,
+        buy_value,
+        sell_value,
+        residual_contribution,
+        contribution_gap_closed,
+        top_priority,
+    ) = _build_contribution_plan(
         ctx=ctx,
         recommended_map=recommended_map,
         contribution_amount=float(contribution_amount),
         min_trade_value=float(min_trade_value),
+        allow_sells=bool(allow_sells_contribution),
     )
 
     c7, c8, c9, c10 = st.columns(4)
-    info_metric(c7, "Allocated Amount", f"{ctx['base_currency']} {allocated_amount:,.2f}", "Amount that passes the minimum trade rule.")
-    info_metric(c8, "Residual Cash", f"{ctx['base_currency']} {residual_cash:,.2f}", "Contribution amount not allocated because suggested trades were too small.")
-    info_metric(c9, "Top Priority", top_priority, "Highest-priority ticker for new cash allocation.")
-    info_metric(c10, "Gap Closed", f"{contribution_gap_closed:.2f}%", "Reduction in total absolute allocation gap after the contribution plan.")
+    info_metric(c7, "Estimated Buy Value", f"{ctx['base_currency']} {buy_value:,.2f}", "Total buy value from the contribution plan.")
+    info_metric(c8, "Estimated Sell Value", f"{ctx['base_currency']} {sell_value:,.2f}", "Total sell value from the contribution plan.")
+    info_metric(c9, "Residual Contribution", f"{ctx['base_currency']} {residual_contribution:,.2f}", "Contribution amount not effectively used after applying the current contribution plan rules.")
+    info_metric(c10, "Top Priority", top_priority, "Highest-priority ticker in the contribution plan.")
+
+    c11, c12 = st.columns(2)
+    info_metric(c11, "Gap Closed", f"{contribution_gap_closed:.2f}%", "Reduction in total absolute allocation gap after the contribution plan.")
+    info_metric(c12, "Contribution Sell Mode", "On" if allow_sells_contribution else "Off", "When enabled, the contribution plan may recommend sells as well as buys.")
 
     if contribution_amount <= 0:
-        st.info("Enter a positive contribution amount to generate a professional buy plan.")
+        st.info("Enter a positive contribution amount to generate a contribution plan.")
     else:
         st.dataframe(contribution_df, use_container_width=True, height=340)
 
         fig_contribution = _build_compare_figure(
-            ctx["df"].assign(**{"Target %": [float(recommended_map.get(t, 0.0)) * 100.0 for t in ctx["df"]["Ticker"]]}),
-            contribution_weight_map,
+            ctx["df"],
+            recommended_map,
+            proposed_weight_map=contribution_weight_map,
         )
-        st.plotly_chart(fig_contribution, use_container_width=True, key="rebalance_contribution_chart")
+        st.plotly_chart(fig_contribution, use_container_width=True, key="rebalance_contribution_chart_v2")
 
         contribution_execute_df = contribution_df[contribution_df["Decision"] == "Execute"].copy()
         if not contribution_execute_df.empty:
             contribution_orders_df = pd.DataFrame(
                 {
                     "Ticker": contribution_execute_df["Ticker"],
-                    "Side": "BUY",
-                    "Suggested Shares": contribution_execute_df["Executed Shares"].round(4),
-                    f"Trade Value ({ctx['base_currency']})": contribution_execute_df["Executed Buy Value"].round(2),
-                    f"Reference Price ({ctx['base_currency']})": contribution_execute_df["Price"].round(2),
+                    "Side": np.where(contribution_execute_df["Action"] == "Buy", "BUY", "SELL"),
+                    "Suggested Shares": contribution_execute_df["Trade Shares"].abs().round(4),
+                    f"Trade Value ({ctx['base_currency']})": contribution_execute_df["Executed Trade Value"].abs().round(2),
+                    f"Reference Price ({ctx['base_currency']})": contribution_execute_df["Reference Price"].round(2),
                 }
             )
         else:
             contribution_orders_df = pd.DataFrame()
 
-        _render_manual_orders("Manual Orders From Contribution Plan", contribution_orders_df, ctx["base_currency"])
+        _render_manual_orders("Manual Orders From Contribution Plan", contribution_orders_df)
