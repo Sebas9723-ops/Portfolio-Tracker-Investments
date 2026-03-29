@@ -11,7 +11,7 @@ from app_core import (
     render_page_title,
     save_private_positions_to_sheets,
 )
-from portfolio_history import save_portfolio_snapshot
+from pages_app.portfolio_history import save_portfolio_snapshot
 
 
 def _render_control_buttons(ctx):

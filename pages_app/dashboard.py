@@ -11,7 +11,7 @@ from app_core import (
     render_private_dashboard_logo,
     render_status_bar,
 )
-from portfolio_history import (
+from pages_app.portfolio_history import (
     build_allocation_history_figure,
     build_monthly_snapshot_summary,
     build_snapshot_report_table,
