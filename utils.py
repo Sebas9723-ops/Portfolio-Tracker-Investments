@@ -1,36 +1,24 @@
 from __future__ import annotations
 
-import pandas as pd
-import yfinance as yf
-import numpy as np
 from datetime import datetime
+
+import numpy as np
+import pandas as pd
 import pytz
+import yfinance as yf
 
 
 def get_prices(tickers: list[str]) -> dict[str, float]:
     if not tickers:
         return {}
 
-    prices = {}
+    close_df = _download_close_frame(
+        tickers=tickers,
+        period="10d",
+        interval="1d",
+    )
 
-    try:
-        data = yf.download(
-            tickers=tickers,
-            period="5d",
-            interval="1d",
-            auto_adjust=False,
-            progress=False,
-            threads=False,
-            group_by="column",
-        )
-    except Exception:
-        return {ticker: np.nan for ticker in tickers}
-
-    close_df = _extract_close_frame(data, tickers)
-
-    if close_df.empty:
-        return {ticker: np.nan for ticker in tickers}
-
+    prices: dict[str, float] = {}
     for ticker in tickers:
         if ticker in close_df.columns:
             series = pd.to_numeric(close_df[ticker], errors="coerce").dropna()
@@ -45,35 +33,136 @@ def get_historical_data(tickers: list[str], period: str = "2y") -> pd.DataFrame:
     if not tickers:
         return pd.DataFrame()
 
+    close_df = _download_close_frame(
+        tickers=tickers,
+        period=period,
+        interval="1d",
+    )
+
+    if close_df.empty:
+        return pd.DataFrame()
+
+    close_df = close_df.sort_index()
+    close_df = close_df.ffill()
+    close_df = close_df.dropna(how="all")
+
+    return close_df
+
+
+def _download_close_frame(
+    tickers: list[str],
+    period: str,
+    interval: str,
+) -> pd.DataFrame:
+    clean_tickers = [str(t).strip().upper() for t in tickers if str(t).strip()]
+    clean_tickers = list(dict.fromkeys(clean_tickers))
+
+    if not clean_tickers:
+        return pd.DataFrame()
+
+    combined = pd.DataFrame()
+
+    bulk_df = _safe_download_bulk(
+        tickers=clean_tickers,
+        period=period,
+        interval=interval,
+    )
+    bulk_close = _extract_close_frame(bulk_df, clean_tickers)
+
+    if not bulk_close.empty:
+        combined = bulk_close.copy()
+
+    missing = [t for t in clean_tickers if t not in combined.columns or pd.to_numeric(combined[t], errors="coerce").dropna().empty]
+
+    if missing:
+        for ticker in missing:
+            single_df = _safe_download_single(
+                ticker=ticker,
+                period=period,
+                interval=interval,
+            )
+            single_close = _extract_close_frame(single_df, [ticker])
+
+            if not single_close.empty and ticker in single_close.columns:
+                combined[ticker] = pd.to_numeric(single_close[ticker], errors="coerce")
+
+    if combined.empty:
+        return pd.DataFrame()
+
+    for ticker in clean_tickers:
+        if ticker not in combined.columns:
+            combined[ticker] = np.nan
+
+    combined = combined[clean_tickers].copy()
+    combined.index = pd.to_datetime(combined.index, errors="coerce")
+    combined = combined[~combined.index.isna()]
+    combined = combined.sort_index()
+
+    try:
+        if getattr(combined.index, "tz", None) is not None:
+            combined.index = combined.index.tz_localize(None)
+    except Exception:
+        pass
+
+    combined = combined.apply(pd.to_numeric, errors="coerce")
+
+    return combined
+
+
+def _safe_download_bulk(
+    tickers: list[str],
+    period: str,
+    interval: str,
+) -> pd.DataFrame:
     try:
         data = yf.download(
             tickers=tickers,
             period=period,
-            interval="1d",
+            interval=interval,
             auto_adjust=False,
             progress=False,
             threads=False,
             group_by="column",
         )
+        if isinstance(data, pd.DataFrame):
+            return data
+        return pd.DataFrame()
     except Exception:
         return pd.DataFrame()
 
-    close_df = _extract_close_frame(data, tickers)
 
-    if close_df.empty:
+def _safe_download_single(
+    ticker: str,
+    period: str,
+    interval: str,
+) -> pd.DataFrame:
+    try:
+        data = yf.download(
+            tickers=ticker,
+            period=period,
+            interval=interval,
+            auto_adjust=False,
+            progress=False,
+            threads=False,
+            group_by="column",
+        )
+        if isinstance(data, pd.DataFrame):
+            return data
         return pd.DataFrame()
-
-    close_df = close_df.sort_index().ffill().dropna(how="all")
-    return close_df
+    except Exception:
+        return pd.DataFrame()
 
 
 def _extract_close_frame(data: pd.DataFrame, tickers: list[str]) -> pd.DataFrame:
     if data is None or data.empty:
         return pd.DataFrame()
 
+    wanted = [str(t).strip().upper() for t in tickers if str(t).strip()]
+    wanted = list(dict.fromkeys(wanted))
+
     if isinstance(data.columns, pd.MultiIndex):
-        level0 = list(data.columns.get_level_values(0))
-        level1 = list(data.columns.get_level_values(1))
+        level0 = [str(x) for x in data.columns.get_level_values(0)]
+        level1 = [str(x) for x in data.columns.get_level_values(1)]
 
         close_df = pd.DataFrame()
 
@@ -91,29 +180,38 @@ def _extract_close_frame(data: pd.DataFrame, tickers: list[str]) -> pd.DataFrame
 
         if isinstance(close_df.columns, pd.MultiIndex):
             close_df.columns = [
-                col[-1] if isinstance(col, tuple) else col
+                str(col[-1]).upper() if isinstance(col, tuple) else str(col).upper()
                 for col in close_df.columns
             ]
+        else:
+            close_df.columns = [str(col).upper() for col in close_df.columns]
 
         close_df = close_df.apply(pd.to_numeric, errors="coerce")
 
-        existing = [ticker for ticker in tickers if ticker in close_df.columns]
+        existing = [ticker for ticker in wanted if ticker in close_df.columns]
         if existing:
-            close_df = close_df[existing]
+            return close_df[existing].copy()
 
-        return close_df
+        return close_df.copy()
 
-    if "Adj Close" in data.columns:
+    flat_cols = [str(c) for c in data.columns]
+
+    if "Adj Close" in flat_cols:
         series = pd.to_numeric(data["Adj Close"], errors="coerce")
-    elif "Close" in data.columns:
+    elif "Close" in flat_cols:
         series = pd.to_numeric(data["Close"], errors="coerce")
     else:
+        numeric_df = data.apply(pd.to_numeric, errors="coerce")
+        if len(wanted) == 1 and not numeric_df.empty:
+            if numeric_df.shape[1] >= 1:
+                first_col = numeric_df.columns[0]
+                return numeric_df[[first_col]].rename(columns={first_col: wanted[0]})
         return pd.DataFrame()
 
-    if len(tickers) == 1:
-        return series.to_frame(name=tickers[0])
+    if len(wanted) == 1:
+        return series.to_frame(name=wanted[0])
 
-    return series.to_frame(name="VALUE")
+    return pd.DataFrame()
 
 
 def compute_returns_and_covariance(price_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:

@@ -23,29 +23,35 @@ from pages_app.portfolio_history import (
 
 
 def _render_control_buttons(ctx):
-    c1, c2, c3, c4 = st.columns(4)
+    if ctx["mode"] == "Private" and ctx["authenticated"]:
+        c1, c2, c3, c4 = st.columns(4)
 
-    if c1.button("Refresh Market Data", use_container_width=True):
-        st.rerun()
+        if c1.button("Refresh Market Data", use_container_width=True):
+            st.rerun()
 
-    if c2.button("Recalculate Portfolio", use_container_width=True):
-        st.rerun()
+        if c2.button("Recalculate Portfolio", use_container_width=True):
+            st.rerun()
 
-    if c3.button("Sync Private Data", use_container_width=True):
-        if ctx["mode"] == "Private" and ctx["authenticated"]:
+        if c3.button("Sync Private Data", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
-        else:
-            st.info("Private sync is only available in Private mode.")
 
-    if c4.button("Save Portfolio Snapshot", use_container_width=True):
-        try:
-            save_portfolio_snapshot(ctx, notes="Manual dashboard snapshot")
-            st.cache_data.clear()
-            st.session_state["dashboard_snapshot_banner"] = "Portfolio snapshot saved successfully."
+        if c4.button("Save Portfolio Snapshot", use_container_width=True):
+            try:
+                save_portfolio_snapshot(ctx, notes="Manual dashboard snapshot")
+                st.cache_data.clear()
+                st.session_state["dashboard_snapshot_banner"] = "Portfolio snapshot saved successfully."
+                st.rerun()
+            except Exception as e:
+                st.error(f"Could not save portfolio snapshot: {e}")
+    else:
+        c1, c2 = st.columns(2)
+
+        if c1.button("Refresh Market Data", use_container_width=True):
             st.rerun()
-        except Exception as e:
-            st.error(f"Could not save portfolio snapshot: {e}")
+
+        if c2.button("Recalculate Portfolio", use_container_width=True):
+            st.rerun()
 
 
 def _normalize_weight_map(weight_map, tickers):
@@ -502,7 +508,6 @@ def render_dashboard(ctx):
     actions_df, source_label = _build_top_actions_table(ctx)
     alerts_df = _build_alerts_table(ctx)
     quality_df = _build_data_quality_table(ctx)
-    audit_df = _build_recent_audit_trail(ctx)
 
     info_section(
         "Decision Summary",
@@ -532,20 +537,18 @@ def render_dashboard(ctx):
         else:
             st.dataframe(alerts_df, use_container_width=True, height=260)
 
-    left2, right2 = st.columns(2)
+    info_section(
+        "Data Quality Checks",
+        "Validation checks for prices, shares, optimization availability, benchmark, and cash balances.",
+    )
+    st.dataframe(quality_df, use_container_width=True, height=260)
 
-    with left2:
-        info_section(
-            "Data Quality Checks",
-            "Validation checks for prices, shares, optimization availability, benchmark, and cash balances.",
-        )
-        st.dataframe(quality_df, use_container_width=True, height=260)
-
-    with right2:
+    if ctx["mode"] == "Private" and ctx["authenticated"]:
         info_section(
             "Recent Audit Trail",
             "Most recent changes made through Private Manager and written automatically into the Transactions ledger.",
         )
+        audit_df = _build_recent_audit_trail(ctx, limit=8)
         if audit_df.empty:
             st.info("No Private Manager audit entries found.")
         else:
@@ -563,71 +566,72 @@ def render_dashboard(ctx):
             key="dashboard_performance_pct_chart_phase5a",
         )
 
-    try:
-        all_snapshots = load_portfolio_snapshots()
-        snapshots_df = filter_snapshots_for_context(
-            all_snapshots,
-            mode=ctx["mode"],
-            base_currency=ctx["base_currency"],
-        )
-    except Exception as e:
-        snapshots_df = pd.DataFrame()
-        st.warning(f"Snapshot history could not be loaded: {e}")
+    if ctx["mode"] == "Private" and ctx["authenticated"]:
+        try:
+            all_snapshots = load_portfolio_snapshots()
+            snapshots_df = filter_snapshots_for_context(
+                all_snapshots,
+                mode=ctx["mode"],
+                base_currency=ctx["base_currency"],
+            )
+        except Exception as e:
+            snapshots_df = pd.DataFrame()
+            st.warning(f"Snapshot history could not be loaded: {e}")
 
-    snapshot_metrics = _build_snapshot_metrics(snapshots_df)
+        snapshot_metrics = _build_snapshot_metrics(snapshots_df)
 
-    info_section(
-        "Snapshot History",
-        "Historical memory of the portfolio. Use this to track portfolio evolution over time.",
-    )
-
-    s1, s2, s3, s4 = st.columns(4)
-    info_metric(s1, "Snapshots Stored", str(snapshot_metrics["count"]), "Number of saved snapshots for this mode and base currency.")
-    info_metric(s2, "Latest Snapshot", f"{ctx['base_currency']} {snapshot_metrics['latest']:,.2f}", "Most recent saved total portfolio value.")
-    info_metric(s3, "Change vs Previous", f"{ctx['base_currency']} {snapshot_metrics['change_vs_prev']:,.2f}", "Absolute change versus the prior snapshot.")
-    info_metric(s4, "30D Snapshot Change", f"{ctx['base_currency']} {snapshot_metrics['change_30d']:,.2f}", "Absolute change over the last 30 days using saved snapshots.")
-
-    timeline_fig = build_snapshot_timeline_figure(snapshots_df, ctx["base_currency"])
-    allocation_fig = build_allocation_history_figure(snapshots_df, top_n=5)
-    report_df = build_snapshot_report_table(snapshots_df)
-    monthly_df = build_monthly_snapshot_summary(snapshots_df)
-
-    left3, right3 = st.columns(2)
-
-    with left3:
         info_section(
-            "Portfolio Timeline",
-            "Historical total portfolio value, holdings, and cash based on saved snapshots.",
+            "Snapshot History",
+            "Historical memory of the portfolio. Use this to track portfolio evolution over time.",
         )
-        if timeline_fig is None:
-            st.info("No snapshots available yet. Use Save Portfolio Snapshot to start building history.")
-        else:
-            st.plotly_chart(timeline_fig, use_container_width=True, key="snapshot_timeline_chart_phase5a")
 
-    with right3:
+        s1, s2, s3, s4 = st.columns(4)
+        info_metric(s1, "Snapshots Stored", str(snapshot_metrics["count"]), "Number of saved snapshots for this mode and base currency.")
+        info_metric(s2, "Latest Snapshot", f"{ctx['base_currency']} {snapshot_metrics['latest']:,.2f}", "Most recent saved total portfolio value.")
+        info_metric(s3, "Change vs Previous", f"{ctx['base_currency']} {snapshot_metrics['change_vs_prev']:,.2f}", "Absolute change versus the prior snapshot.")
+        info_metric(s4, "30D Snapshot Change", f"{ctx['base_currency']} {snapshot_metrics['change_30d']:,.2f}", "Absolute change over the last 30 days using saved snapshots.")
+
+        timeline_fig = build_snapshot_timeline_figure(snapshots_df, ctx["base_currency"])
+        allocation_fig = build_allocation_history_figure(snapshots_df, top_n=5)
+        report_df = build_snapshot_report_table(snapshots_df)
+        monthly_df = build_monthly_snapshot_summary(snapshots_df)
+
+        left3, right3 = st.columns(2)
+
+        with left3:
+            info_section(
+                "Portfolio Timeline",
+                "Historical total portfolio value, holdings, and cash based on saved snapshots.",
+            )
+            if timeline_fig is None:
+                st.info("No snapshots available yet. Use Save Portfolio Snapshot to start building history.")
+            else:
+                st.plotly_chart(timeline_fig, use_container_width=True, key="snapshot_timeline_chart_phase5a")
+
+        with right3:
+            info_section(
+                "Allocation Timeline",
+                "Weight history for the largest current positions based on saved snapshots.",
+            )
+            if allocation_fig is None:
+                st.info("Allocation history will appear after snapshots are stored.")
+            else:
+                st.plotly_chart(allocation_fig, use_container_width=True, key="allocation_timeline_chart_phase5a")
+
         info_section(
-            "Allocation Timeline",
-            "Weight history for the largest current positions based on saved snapshots.",
+            "Historical Report Base",
+            "Saved portfolio timeline ready for future monthly reporting and historical analytics.",
         )
-        if allocation_fig is None:
-            st.info("Allocation history will appear after snapshots are stored.")
+        if report_df.empty:
+            st.info("No snapshot report available yet.")
         else:
-            st.plotly_chart(allocation_fig, use_container_width=True, key="allocation_timeline_chart_phase5a")
+            st.dataframe(report_df, use_container_width=True, height=320)
 
-    info_section(
-        "Historical Report Base",
-        "Saved portfolio timeline ready for future monthly reporting and historical analytics.",
-    )
-    if report_df.empty:
-        st.info("No snapshot report available yet.")
-    else:
-        st.dataframe(report_df, use_container_width=True, height=320)
-
-    info_section(
-        "Monthly Snapshot Summary",
-        "Latest saved snapshot of each month with month-over-month change.",
-    )
-    if monthly_df.empty:
-        st.info("No monthly summary available yet.")
-    else:
-        st.dataframe(monthly_df, use_container_width=True, height=260)
+        info_section(
+            "Monthly Snapshot Summary",
+            "Latest saved snapshot of each month with month-over-month change.",
+        )
+        if monthly_df.empty:
+            st.info("No monthly summary available yet.")
+        else:
+            st.dataframe(monthly_df, use_container_width=True, height=260)
