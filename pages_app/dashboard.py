@@ -12,7 +12,7 @@ from app_core import (
 )
 
 
-def _build_performance_vs_benchmark_pct_figure(ctx):
+def _build_dashboard_performance_chart(ctx):
     portfolio_returns = ctx.get("portfolio_returns")
     benchmark_returns = ctx.get("benchmark_returns")
 
@@ -25,8 +25,8 @@ def _build_performance_vs_benchmark_pct_figure(ctx):
     fig.add_scatter(
         x=portfolio_cum.index,
         y=portfolio_cum,
-        name="Portfolio",
         mode="lines",
+        name="Portfolio",
         hovertemplate="%{x|%Y-%m-%d}<br>Portfolio: %{y:.2%}<extra></extra>",
     )
 
@@ -41,8 +41,8 @@ def _build_performance_vs_benchmark_pct_figure(ctx):
             fig.add_scatter(
                 x=voo_cum.index,
                 y=voo_cum,
-                name="VOO",
                 mode="lines",
+                name="VOO",
                 hovertemplate="%{x|%Y-%m-%d}<br>VOO: %{y:.2%}<extra></extra>",
             )
 
@@ -52,8 +52,8 @@ def _build_performance_vs_benchmark_pct_figure(ctx):
         font=dict(color="#e6e6e6"),
         height=420,
         margin=dict(t=20, b=20, l=20, r=20),
-        yaxis_title="Return",
         xaxis_title="Date",
+        yaxis_title="Return",
         yaxis=dict(tickformat=".0%"),
         legend=dict(orientation="h", y=1.08, x=0.0),
     )
@@ -90,10 +90,14 @@ def render_dashboard(ctx):
     info_metric(c7, "Sharpe Ratio", f"{ctx['sharpe']:.2f}", "Portfolio Sharpe ratio.")
     info_metric(c8, "Realized PnL", f"{ctx['base_currency']} {ctx['realized_pnl']:,.2f}", "Closed profit and loss.")
 
-    fig_perf = _build_performance_vs_benchmark_pct_figure(ctx)
-    if fig_perf is not None:
+    perf_fig = _build_dashboard_performance_chart(ctx)
+    if perf_fig is not None:
         info_section(
             "Performance vs Benchmark",
             "Portfolio cumulative return versus VOO, displayed in percentage terms.",
         )
-        st.plotly_chart(fig_perf, use_container_width=True, key="dashboard_perf_pct_chart")
+        st.plotly_chart(
+            perf_fig,
+            use_container_width=True,
+            key="dashboard_performance_pct_chart",
+        )

@@ -9,7 +9,7 @@ from app_core import (
 )
 
 
-def _annualized_benchmark_return(ctx):
+def _annualized_voo_return(ctx):
     benchmark_returns = ctx.get("benchmark_returns")
     if benchmark_returns is None or benchmark_returns.empty:
         return None
@@ -23,11 +23,11 @@ def render_optimization_page(ctx):
         st.info("Not enough data to build the efficient frontier.")
         return
 
-    voo_return = _annualized_benchmark_return(ctx)
+    voo_return = _annualized_voo_return(ctx)
 
     c1, c2, c3, c4 = st.columns(4)
     info_metric(c1, "Current Return", f"{ctx['current_return']:.2%}", "Expected annualized return of the current portfolio.")
-    info_metric(c2, "VOO Return", "-" if voo_return is None else f"{voo_return:.2%}", "Annualized VOO return over the same history window.")
+    info_metric(c2, "VOO Return", "-" if voo_return is None else f"{voo_return:.2%}", "Annualized VOO return over the same historical window.")
     info_metric(c3, "Current Volatility", f"{ctx['current_vol']:.2%}", "Expected annualized volatility of the current portfolio.")
     info_metric(c4, "Current Sharpe", f"{ctx['current_sharpe']:.2f}", "Sharpe ratio of the current portfolio.")
 
@@ -35,7 +35,7 @@ def render_optimization_page(ctx):
         "Efficient Frontier",
         "Simulated efficient frontier, current portfolio, max Sharpe portfolio, and minimum volatility portfolio.",
     )
-    st.plotly_chart(ctx["fig_frontier"], use_container_width=True, key="optimization_frontier_chart")
+    st.plotly_chart(ctx["fig_frontier"], use_container_width=True, key="optimization_frontier_chart_v2")
 
     usable = list(ctx["usable"])
     ms_weights = ctx["max_sharpe_row"]["Weights"]

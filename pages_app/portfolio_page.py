@@ -18,7 +18,7 @@ def _normalize_weight_map(weight_map, tickers):
     return {t: v / total for t, v in clean.items()}
 
 
-def _max_sharpe_weight_map(ctx, df):
+def _get_max_sharpe_target_map(ctx, df):
     tickers = df["Ticker"].tolist()
 
     if ctx.get("max_sharpe_row") is None or not ctx.get("usable"):
@@ -27,8 +27,8 @@ def _max_sharpe_weight_map(ctx, df):
 
     usable = list(ctx["usable"])
     arr = np.array(ctx["max_sharpe_row"]["Weights"], dtype=float)
-    raw = {ticker: 0.0 for ticker in tickers}
 
+    raw = {ticker: 0.0 for ticker in tickers}
     if len(arr) == len(usable):
         for ticker, weight in zip(usable, arr):
             raw[ticker] = float(weight)
@@ -36,16 +36,20 @@ def _max_sharpe_weight_map(ctx, df):
     return _normalize_weight_map(raw, tickers), "Max Sharpe Frontier"
 
 
-def _build_weights_vs_target_figure(ctx):
+def _build_weights_vs_target_chart(ctx):
     df = ctx["df"].copy()
-    target_map, source_label = _max_sharpe_weight_map(ctx, df)
+    target_map, source_label = _get_max_sharpe_target_map(ctx, df)
 
     fig = go.Figure()
-    fig.add_bar(x=df["Ticker"], y=df["Weight %"], name="Actual %")
+    fig.add_bar(
+        x=df["Ticker"],
+        y=df["Weight %"],
+        name="Actual %",
+    )
     fig.add_bar(
         x=df["Ticker"],
         y=[float(target_map.get(t, 0.0)) * 100.0 for t in df["Ticker"]],
-        name="Max Sharpe %"
+        name="Max Sharpe %",
     )
 
     fig.update_layout(
@@ -75,15 +79,15 @@ def render_portfolio_page(ctx):
 
     with left:
         info_section("Allocation", "Current portfolio allocation by market value.")
-        st.plotly_chart(ctx["fig_pie"], use_container_width=True, key="portfolio_allocation_chart")
+        st.plotly_chart(ctx["fig_pie"], use_container_width=True, key="portfolio_allocation_chart_v2")
 
     with right:
-        fig_weights, source_label = _build_weights_vs_target_figure(ctx)
+        fig_weights, source_label = _build_weights_vs_target_chart(ctx)
         info_section(
             "Weights vs Target",
-            f"Actual weights compared against the target source: {source_label}.",
+            f"Actual weights compared against target source: {source_label}.",
         )
-        st.plotly_chart(fig_weights, use_container_width=True, key="portfolio_weights_target_chart")
+        st.plotly_chart(fig_weights, use_container_width=True, key="portfolio_weights_vs_target_chart_v2")
 
     info_section("Cash Balances", "Cash balances by currency converted to the base currency.")
     st.dataframe(ctx["cash_display_df"], use_container_width=True, height=240)
