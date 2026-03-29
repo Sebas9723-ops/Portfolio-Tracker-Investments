@@ -2,242 +2,84 @@ import pandas as pd
 import streamlit as st
 
 from app_core import (
-    SUPPORTED_BASE_CCY,
-    append_transaction_to_sheets,
-    adjust_cash_balance,
-    asset_currency,
     info_metric,
     info_section,
-    load_cash_balances_from_sheets,
     render_page_title,
-    save_cash_balances_to_sheets,
 )
 
 
-def _get_manage_password() -> str:
-    try:
-        return str(st.secrets["auth"]["manage_password"])
-    except Exception:
-        return ""
+def _render_control_buttons(ctx):
+    c1, c2, c3 = st.columns(3)
 
+    if c1.button("Refresh Market Data", use_container_width=True):
+        st.rerun()
 
-def _safe_load_cash_balances():
-    try:
-        df = load_cash_balances_from_sheets().copy()
-        if df is None or df.empty:
-            return pd.DataFrame(
-                {
-                    "currency": SUPPORTED_BASE_CCY,
-                    "amount": [0.0] * len(SUPPORTED_BASE_CCY),
-                }
-            ), False, "Cash balances sheet is empty or unavailable."
-        return df, True, ""
-    except Exception as e:
-        fallback = pd.DataFrame(
-            {
-                "currency": SUPPORTED_BASE_CCY,
-                "amount": [0.0] * len(SUPPORTED_BASE_CCY),
-            }
-        )
-        return fallback, False, str(e)
+    if c2.button("Recalculate Portfolio", use_container_width=True):
+        st.rerun()
+
+    if c3.button("Sync Private Data", use_container_width=True):
+        if ctx["mode"] == "Private" and ctx["authenticated"]:
+            st.cache_data.clear()
+            st.rerun()
+        else:
+            st.info("Private sync is only available in Private mode.")
 
 
 def render_transactions_page(ctx):
     render_page_title("Transactions")
 
     if ctx["mode"] != "Private" or not ctx["authenticated"]:
-        st.info("This page is available only in Private mode.")
+        st.warning("Transactions are only available in Private mode.")
         return
 
+    _render_control_buttons(ctx)
+
     info_section(
-        "Add Transaction",
-        "Register a buy or sell operation. Current shares in Private mode are derived from this transaction ledger."
+        "Transactions Ledger",
+        "This page is now read-only. New transaction history is automatically written when you modify current shares from Private Manager.",
     )
 
-    tx_tickers = []
-    if not ctx["transactions_df"].empty and "ticker" in ctx["transactions_df"].columns:
-        tx_tickers = (
-            ctx["transactions_df"]["ticker"]
-            .dropna()
-            .astype(str)
-            .str.upper()
-            .tolist()
-        )
+    tx_df = ctx.get("transactions_df", pd.DataFrame()).copy()
 
-    current_tickers = sorted(set(ctx["portfolio_data"].keys()) | set(tx_tickers))
-    ticker_options = current_tickers + ["OTHER"]
+    if tx_df.empty:
+        st.info("No transactions found.")
+        return
 
-    with st.form("add_transaction_form", clear_on_submit=True):
-        c1, c2, c3 = st.columns(3)
+    work = tx_df.copy()
+    work["date"] = pd.to_datetime(work["date"], errors="coerce")
+    work["shares"] = pd.to_numeric(work["shares"], errors="coerce").fillna(0.0)
+    work["price"] = pd.to_numeric(work["price"], errors="coerce").fillna(0.0)
+    work["fees"] = pd.to_numeric(work["fees"], errors="coerce").fillna(0.0)
+    work["gross_value"] = work["shares"] * work["price"]
 
-        with c1:
-            tx_date = st.date_input("Date")
-            ticker_choice = st.selectbox("Ticker", ticker_options)
-            tx_type = st.selectbox("Type", ["BUY", "SELL"])
+    buy_value = float(work.loc[work["type"] == "BUY", "gross_value"].sum())
+    sell_value = float(work.loc[work["type"] == "SELL", "gross_value"].sum())
+    total_fees = float(work["fees"].sum())
 
-        with c2:
-            shares = st.number_input(
-                "Shares",
-                min_value=0.0,
-                value=0.0,
-                step=0.0001,
-                format="%.4f",
-            )
-            price = st.number_input(
-                "Price",
-                min_value=0.0,
-                value=0.0,
-                step=0.01,
-                format="%.4f",
-            )
-            fees = st.number_input(
-                "Fees",
-                min_value=0.0,
-                value=0.0,
-                step=0.01,
-                format="%.4f",
-            )
+    c1, c2, c3, c4 = st.columns(4)
+    info_metric(c1, "Transactions", str(len(work)), "Total number of stored transactions.")
+    info_metric(c2, "Buy Value", f"{ctx['base_currency']} {buy_value:,.2f}", "Gross buy value stored in the ledger.")
+    info_metric(c3, "Sell Value", f"{ctx['base_currency']} {sell_value:,.2f}", "Gross sell value stored in the ledger.")
+    info_metric(c4, "Fees", f"{ctx['base_currency']} {total_fees:,.2f}", "Total recorded fees.")
 
-        with c3:
-            manual_ticker = st.text_input("Manual Ticker (only if OTHER)").strip().upper()
-            notes = st.text_input("Notes").strip()
-            update_cash = st.checkbox("Update cash balance automatically", value=True)
-            auth_password = st.text_input("Authorization Password", type="password")
-
-        ticker = manual_ticker if ticker_choice == "OTHER" else ticker_choice
-        native_ccy = asset_currency(ticker) if ticker else "—"
-        st.caption(f"Inferred native currency: {native_ccy}")
-
-        submitted = st.form_submit_button("Add Transaction")
-
-    if submitted:
-        if auth_password != _get_manage_password():
-            st.error("Invalid authorization password.")
-            return
-
-        if not ticker:
-            st.error("Please select a ticker or enter one manually.")
-            return
-
-        if shares <= 0 or price <= 0:
-            st.error("Shares and price must be greater than zero.")
-            return
-
-        tx = {
-            "date": tx_date.isoformat(),
-            "ticker": ticker,
-            "type": tx_type,
-            "shares": float(shares),
-            "price": float(price),
-            "fees": float(fees),
-            "notes": notes,
+    display = work.rename(
+        columns={
+            "date": "Date",
+            "ticker": "Ticker",
+            "type": "Type",
+            "shares": "Shares",
+            "price": "Price",
+            "fees": "Fees",
+            "notes": "Notes",
+            "gross_value": "Gross Value",
         }
+    ).copy()
 
-        append_transaction_to_sheets(tx)
+    display["Date"] = pd.to_datetime(display["Date"], errors="coerce").dt.date
+    display = display.sort_values("Date", ascending=False).reset_index(drop=True)
 
-        if update_cash:
-            try:
-                gross_value = float(shares) * float(price)
-                if tx_type == "BUY":
-                    delta = -(gross_value + float(fees))
-                else:
-                    delta = gross_value - float(fees)
-                adjust_cash_balance(native_ccy, delta)
-            except Exception as e:
-                st.warning(
-                    f"Transaction was saved and current shares were updated, but cash balance could not be updated: {e}"
-                )
-                st.rerun()
-
-        st.success("Transaction saved successfully. Current shares were updated.")
-        st.rerun()
-
-    info_section("Cash Balances", "Edit and save current cash balances by currency.")
-
-    live_cash_df, cash_sheet_ok, cash_sheet_error = _safe_load_cash_balances()
-    live_cash_df["currency"] = live_cash_df["currency"].astype(str).str.upper()
-
-    if not cash_sheet_ok:
-        st.warning(
-            "Cash balances sheet is not available right now. "
-            "You can still use transactions and update current shares. "
-            f"Detail: {cash_sheet_error}"
-        )
-
-    cash_cols = st.columns(3)
-    cash_values = {}
-
-    for idx, ccy in enumerate(SUPPORTED_BASE_CCY):
-        row = live_cash_df[live_cash_df["currency"] == ccy]
-        amount = float(row["amount"].iloc[0]) if not row.empty else 0.0
-
-        with cash_cols[idx % 3]:
-            cash_values[ccy] = st.number_input(
-                f"{ccy} Cash",
-                value=float(amount),
-                step=100.0,
-                format="%.2f",
-                key=f"cash_edit_{ccy}",
-            )
-
-    if st.button("Save Cash Balances"):
-        try:
-            save_df = pd.DataFrame(
-                {
-                    "currency": list(cash_values.keys()),
-                    "amount": list(cash_values.values()),
-                }
-            )
-            save_cash_balances_to_sheets(save_df)
-            st.success("Cash balances saved.")
-            st.rerun()
-        except Exception as e:
-            st.error(f"Could not save cash balances: {e}")
-
-    t1, t2, t3 = st.columns(3)
-    info_metric(
-        t1,
-        "Transactions",
-        str(0 if ctx["transactions_df"].empty else len(ctx["transactions_df"])),
-        "Number of recorded buy and sell transactions.",
+    st.dataframe(
+        display[["Date", "Ticker", "Type", "Shares", "Price", "Gross Value", "Fees", "Notes"]],
+        use_container_width=True,
+        height=440,
     )
-    info_metric(
-        t2,
-        "Tracked Tickers",
-        str(len(set(ctx["transactions_df"]["ticker"].tolist())) if not ctx["transactions_df"].empty else 0),
-        "Number of tickers present in the transaction ledger.",
-    )
-    info_metric(
-        t3,
-        "Cash Total",
-        f"{ctx['base_currency']} {ctx['cash_total_value']:,.2f}",
-        "Cash balances converted to the selected base currency.",
-    )
-
-    info_section("Transaction History", "Chronological list of all recorded transactions.")
-
-    if ctx["transactions_df"].empty:
-        st.info("No transactions recorded yet.")
-    else:
-        tx_display = ctx["transactions_df"].copy()
-        tx_display["date"] = pd.to_datetime(tx_display["date"]).dt.date
-        tx_display = tx_display.sort_values("date", ascending=False).reset_index(drop=True)
-        tx_display.columns = ["Date", "Ticker", "Type", "Shares", "Price", "Fees", "Notes"]
-        st.dataframe(tx_display, use_container_width=True, height=360)
-
-    info_section("Tracked Positions", "Positions reconstructed from transactions and current market prices.")
-    tracked_positions = ctx["display_df"][
-        [
-            "Ticker",
-            "Name",
-            "Source",
-            "Shares",
-            "Avg Cost",
-            "Price",
-            "Invested Capital",
-            "Value",
-            "Unrealized PnL",
-            "Realized PnL",
-        ]
-    ].copy()
-    st.dataframe(tracked_positions, use_container_width=True, height=320)

@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -10,6 +11,85 @@ from app_core import (
     render_private_dashboard_logo,
     render_status_bar,
 )
+
+
+def _render_control_buttons(ctx):
+    c1, c2, c3 = st.columns(3)
+
+    if c1.button("Refresh Market Data", use_container_width=True):
+        st.rerun()
+
+    if c2.button("Recalculate Portfolio", use_container_width=True):
+        st.rerun()
+
+    if c3.button("Sync Private Data", use_container_width=True):
+        if ctx["mode"] == "Private" and ctx["authenticated"]:
+            st.cache_data.clear()
+            st.rerun()
+        else:
+            st.info("Private sync is only available in Private mode.")
+
+
+def _get_max_sharpe_target_map(ctx, df):
+    tickers = df["Ticker"].tolist()
+
+    if ctx.get("max_sharpe_row") is None or not ctx.get("usable"):
+        raw = df.set_index("Ticker")["Target Weight"].to_dict()
+    else:
+        usable = list(ctx["usable"])
+        arr = np.array(ctx["max_sharpe_row"]["Weights"], dtype=float)
+        raw = {ticker: 0.0 for ticker in tickers}
+        if len(arr) == len(usable):
+            for ticker, weight in zip(usable, arr):
+                raw[ticker] = float(weight)
+
+    total = float(sum(max(float(v), 0.0) for v in raw.values()))
+    if total <= 0:
+        equal = 1.0 / len(tickers) if tickers else 0.0
+        return {t: equal for t in tickers}
+
+    return {t: max(float(raw.get(t, 0.0)), 0.0) / total for t in tickers}
+
+
+def _build_top_actions_table(ctx):
+    df = ctx["df"].copy()
+    if df.empty:
+        return pd.DataFrame()
+
+    target_map = _get_max_sharpe_target_map(ctx, df)
+    holdings_total = float(df["Value"].sum())
+
+    df["Recommended Weight %"] = df["Ticker"].map(lambda t: float(target_map.get(t, 0.0)) * 100.0)
+    df["Gap %"] = df["Weight %"] - df["Recommended Weight %"]
+
+    if holdings_total > 0:
+        df[f"Trade To Max Sharpe ({ctx['base_currency']})"] = (
+            (df["Recommended Weight %"] - df["Weight %"]) / 100.0 * holdings_total
+        )
+    else:
+        df[f"Trade To Max Sharpe ({ctx['base_currency']})"] = 0.0
+
+    df["Action"] = np.where(
+        df["Gap %"] > 0,
+        "Trim / Sell",
+        np.where(df["Gap %"] < 0, "Buy / Add", "Hold"),
+    )
+
+    out = df[
+        [
+            "Ticker",
+            "Name",
+            "Action",
+            "Weight %",
+            "Recommended Weight %",
+            "Gap %",
+            f"Trade To Max Sharpe ({ctx['base_currency']})",
+        ]
+    ].copy()
+
+    out = out[out["Action"] != "Hold"].copy()
+    out = out.sort_values("Gap %", key=lambda s: s.abs(), ascending=False).reset_index(drop=True)
+    return out.head(5)
 
 
 def _build_performance_vs_benchmark_pct_chart(ctx):
@@ -82,6 +162,7 @@ def render_dashboard(ctx):
         sheets_ok=ctx["positions_sheet_available"],
     )
 
+    _render_control_buttons(ctx)
     render_market_clocks()
 
     c1, c2, c3, c4 = st.columns(4)
@@ -96,6 +177,16 @@ def render_dashboard(ctx):
     info_metric(c7, "Sharpe Ratio", f"{ctx['sharpe']:.2f}", "Portfolio Sharpe ratio.")
     info_metric(c8, "Realized PnL", f"{ctx['base_currency']} {ctx['realized_pnl']:,.2f}", "Closed profit and loss.")
 
+    actions_df = _build_top_actions_table(ctx)
+    info_section(
+        "Top Actions",
+        "Largest drifts versus the Max Sharpe allocation. Review these first.",
+    )
+    if actions_df.empty:
+        st.success("No material drifts detected versus the current recommendation.")
+    else:
+        st.dataframe(actions_df, use_container_width=True, height=260)
+
     perf_fig = _build_performance_vs_benchmark_pct_chart(ctx)
     if perf_fig is not None:
         info_section(
@@ -105,5 +196,5 @@ def render_dashboard(ctx):
         st.plotly_chart(
             perf_fig,
             use_container_width=True,
-            key="dashboard_performance_pct_chart_with_labels",
+            key="dashboard_performance_pct_chart_phase4a",
         )
