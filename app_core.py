@@ -343,163 +343,189 @@ def render_status_bar(mode: str, base_currency: str, profile: str, tc_model: str
 
 
 def render_market_clocks():
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-    import streamlit as st
+    from streamlit.components.v1 import html as components_html
 
-    markets = [
-        {"name": "New York", "exchange": "NYSE / Nasdaq", "tz": "America/New_York"},
-        {"name": "London", "exchange": "LSE", "tz": "Europe/London"},
-        {"name": "Frankfurt", "exchange": "Xetra", "tz": "Europe/Berlin"},
-        {"name": "Zurich", "exchange": "SIX", "tz": "Europe/Zurich"},
-        {"name": "Tokyo", "exchange": "TSE", "tz": "Asia/Tokyo"},
-        {"name": "Shanghai", "exchange": "SSE", "tz": "Asia/Shanghai"},
-        {"name": "Singapore", "exchange": "SGX", "tz": "Asia/Singapore"},
-        {"name": "Bogotá", "exchange": "BVC", "tz": "America/Bogota"},
-        {"name": "Sydney", "exchange": "ASX", "tz": "Australia/Sydney"},
-    ]
+    components_html(
+        """
+        <style>
+            body {
+                margin: 0;
+                background: transparent;
+                font-family: "IBM Plex Mono", monospace;
+            }
 
-    cards = []
+            .pm-clock-wrapper {
+                border: 1px solid #2b3340;
+                border-left: 4px solid #f3a712;
+                border-radius: 6px;
+                padding: 12px;
+                background: #111821;
+                width: 100%;
+                box-sizing: border-box;
+            }
 
-    for market in markets:
-        now = datetime.now(ZoneInfo(market["tz"]))
-        time_val = now.strftime("%H:%M:%S")
-        date_val = now.strftime("%a %d %b")
+            .pm-clock-title {
+                color: #f3a712;
+                font-weight: 800;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                margin-bottom: 10px;
+                font-size: 15px;
+            }
 
-        cards.append(
-            f"""
-            <div class="pm-clock-card">
-                <div class="pm-clock-name">{market["name"]}</div>
-                <div class="pm-clock-exchange">{market["exchange"]}</div>
-                <div class="pm-clock-time">{time_val}</div>
-                <div class="pm-clock-date">{date_val}</div>
-            </div>
-            """
-        )
+            .pm-clock-grid {
+                display: grid;
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                gap: 10px;
+                width: 100%;
+            }
 
-    html_block = f"""
-    <style>
-    .pm-clock-wrapper {{
-        border: 1px solid #2b3340;
-        border-left: 4px solid #f3a712;
-        border-radius: 6px;
-        padding: 12px;
-        background: #111821;
-        width: 100%;
-        box-sizing: border-box;
-        margin-bottom: 1rem;
-    }}
+            .pm-clock-card {
+                background: #0f141b;
+                border: 1px solid #2d3642;
+                border-radius: 6px;
+                padding: 10px;
+                min-height: 94px;
+                box-sizing: border-box;
+                overflow: hidden;
+            }
 
-    .pm-clock-title {{
-        color: #f3a712;
-        font-weight: 800;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        margin-bottom: 10px;
-        font-size: 15px;
-    }}
+            .pm-clock-name {
+                color: #f3a712;
+                font-weight: 800;
+                font-size: 13px;
+                text-transform: uppercase;
+                line-height: 1.1;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
 
-    .pm-clock-grid {{
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 10px;
-        width: 100%;
-    }}
+            .pm-clock-exchange {
+                color: #9fb0c3;
+                font-size: 11px;
+                margin-top: 2px;
+                line-height: 1.05;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
 
-    .pm-clock-card {{
-        background: #0f141b;
-        border: 1px solid #2d3642;
-        border-radius: 6px;
-        padding: 10px;
-        min-height: 94px;
-        box-sizing: border-box;
-        overflow: hidden;
-    }}
+            .pm-clock-time {
+                color: #f8f8f8;
+                font-size: 18px;
+                font-weight: 800;
+                margin-top: 8px;
+                line-height: 1.05;
+                white-space: nowrap;
+            }
 
-    .pm-clock-name {{
-        color: #f3a712;
-        font-weight: 800;
-        font-size: 13px;
-        text-transform: uppercase;
-        line-height: 1.1;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }}
+            .pm-clock-date {
+                color: #7fb3ff;
+                font-size: 11px;
+                margin-top: 4px;
+                line-height: 1.05;
+                white-space: nowrap;
+            }
 
-    .pm-clock-exchange {{
-        color: #9fb0c3;
-        font-size: 11px;
-        margin-top: 2px;
-        line-height: 1.05;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }}
+            @media (max-width: 900px) {
+                .pm-clock-grid {
+                    grid-template-columns: repeat(2, minmax(0, 1fr));
+                    gap: 8px;
+                }
 
-    .pm-clock-time {{
-        color: #f8f8f8;
-        font-size: 18px;
-        font-weight: 800;
-        margin-top: 8px;
-        line-height: 1.05;
-        white-space: nowrap;
-    }}
+                .pm-clock-card {
+                    padding: 8px 10px;
+                    min-height: 82px;
+                }
 
-    .pm-clock-date {{
-        color: #7fb3ff;
-        font-size: 11px;
-        margin-top: 4px;
-        line-height: 1.05;
-        white-space: nowrap;
-    }}
+                .pm-clock-name {
+                    font-size: 12px;
+                }
 
-    @media (max-width: 900px) {{
-        .pm-clock-grid {{
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 8px;
-        }}
+                .pm-clock-exchange {
+                    font-size: 10px;
+                }
 
-        .pm-clock-card {{
-            padding: 8px 10px;
-            min-height: 82px;
-        }}
+                .pm-clock-time {
+                    font-size: 16px;
+                    margin-top: 6px;
+                }
 
-        .pm-clock-name {{
-            font-size: 12px;
-        }}
+                .pm-clock-date {
+                    font-size: 10px;
+                }
+            }
 
-        .pm-clock-exchange {{
-            font-size: 10px;
-        }}
+            @media (max-width: 320px) {
+                .pm-clock-grid {
+                    grid-template-columns: 1fr;
+                }
+            }
+        </style>
 
-        .pm-clock-time {{
-            font-size: 16px;
-            margin-top: 6px;
-        }}
-
-        .pm-clock-date {{
-            font-size: 10px;
-        }}
-    }}
-
-    @media (max-width: 320px) {{
-        .pm-clock-grid {{
-            grid-template-columns: 1fr;
-        }}
-    }}
-    </style>
-
-    <div class="pm-clock-wrapper">
-        <div class="pm-clock-title">Live Market Clocks</div>
-        <div class="pm-clock-grid">
-            {''.join(cards)}
+        <div class="pm-clock-wrapper">
+            <div class="pm-clock-title">Live Market Clocks</div>
+            <div class="pm-clock-grid" id="pm-clock-grid"></div>
         </div>
-    </div>
-    """
 
-    st.markdown(html_block, unsafe_allow_html=True)
+        <script>
+            const markets = [
+                { name: "New York", exchange: "NYSE / Nasdaq", tz: "America/New_York" },
+                { name: "London", exchange: "LSE", tz: "Europe/London" },
+                { name: "Frankfurt", exchange: "Xetra", tz: "Europe/Berlin" },
+                { name: "Zurich", exchange: "SIX", tz: "Europe/Zurich" },
+                { name: "Tokyo", exchange: "TSE", tz: "Asia/Tokyo" },
+                { name: "Shanghai", exchange: "SSE", tz: "Asia/Shanghai" },
+                { name: "Singapore", exchange: "SGX", tz: "Asia/Singapore" },
+                { name: "Bogotá", exchange: "BVC", tz: "America/Bogota" },
+                { name: "Sydney", exchange: "ASX", tz: "Australia/Sydney" }
+            ];
 
+            function formatClock(tz) {
+                const now = new Date();
+
+                const time = new Intl.DateTimeFormat("en-GB", {
+                    timeZone: tz,
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                    hour12: false
+                }).format(now);
+
+                const date = new Intl.DateTimeFormat("en-GB", {
+                    timeZone: tz,
+                    weekday: "short",
+                    day: "2-digit",
+                    month: "short"
+                }).format(now);
+
+                return { time, date };
+            }
+
+            function renderClocks() {
+                const container = document.getElementById("pm-clock-grid");
+                if (!container) return;
+
+                container.innerHTML = markets.map(m => {
+                    const clock = formatClock(m.tz);
+                    return `
+                        <div class="pm-clock-card">
+                            <div class="pm-clock-name">${m.name}</div>
+                            <div class="pm-clock-exchange">${m.exchange}</div>
+                            <div class="pm-clock-time">${clock.time}</div>
+                            <div class="pm-clock-date">${clock.date}</div>
+                        </div>
+                    `;
+                }).join("");
+            }
+
+            renderClocks();
+            setInterval(renderClocks, 1000);
+        </script>
+        """,
+        height=495,
+    )
 
 # =========================
 # INVESTMENT HORIZON
