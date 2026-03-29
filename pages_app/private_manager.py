@@ -311,7 +311,7 @@ def render_private_manager_page(ctx):
 
                 save_cash_balances_to_sheets(updated_cash)
                 st.cache_data.clear()
-                st.success(f"Cash balance updated: {currency_up} {cash_amount:,.2f}")
+                st.session_state["pm_save_banner"] = f"Cash balance updated: {currency_up} {cash_amount:,.2f}"
                 st.rerun()
             except Exception as e:
                 st.error(f"Could not save cash balance: {e}")
