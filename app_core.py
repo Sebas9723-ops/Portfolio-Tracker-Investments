@@ -23,6 +23,7 @@ DEFAULT_RISK_FREE_RATE = 0.02
 N_SIMULATIONS = 8000
 SUPPORTED_BASE_CCY = ["USD", "EUR", "GBP", "COP", "CHF", "AUD"]
 PUBLIC_DEFAULTS_VERSION = "public_defaults_v12_phase2"
+GOOGLE_SHEETS_CACHE_TTL = 30
 
 PROXY_TICKER_MAP = {
     "IWDA.AS": "EUNL.DE",
@@ -453,7 +454,6 @@ def render_market_clocks():
         white-space: nowrap;
     }}
 
-    /* Tablet y móvil ancho */
     @media (max-width: 900px) {{
         .pm-clock-grid {{
             grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -483,7 +483,6 @@ def render_market_clocks():
         }}
     }}
 
-    /* Solo móviles extremadamente estrechos */
     @media (max-width: 320px) {{
         .pm-clock-grid {{
             grid-template-columns: 1fr;
@@ -501,7 +500,7 @@ def render_market_clocks():
 
     st.markdown(html_block, unsafe_allow_html=True)
 
-            
+
 # =========================
 # INVESTMENT HORIZON
 # =========================
@@ -640,8 +639,7 @@ def _get_sheets_cfg():
         raise RuntimeError("Missing [sheets] in Streamlit secrets.") from e
 
 
-def _get_spreadsheet():
-    gcp_cfg = _get_gcp_cfg()
+def _get_private_positions_sheet_locator():
     sheets_cfg = _get_sheets_cfg()
 
     sheet_id = str(sheets_cfg.get("private_positions_sheet_id", "")).strip()
@@ -650,45 +648,111 @@ def _get_spreadsheet():
     if not sheet_id and not sheet_url:
         raise RuntimeError("Missing 'private_positions_sheet_id' or 'private_positions_sheet_url' in [sheets].")
 
+    return sheet_id, sheet_url
+
+
+def get_private_positions_sheet_id():
+    sheet_id, sheet_url = _get_private_positions_sheet_locator()
+
+    if sheet_id:
+        return sheet_id
+
+    if "/d/" not in sheet_url:
+        raise RuntimeError("Invalid Google Sheets URL in [sheets].")
+
+    return sheet_url.split("/d/")[1].split("/")[0]
+
+
+def _get_private_positions_worksheet_name():
+    sheets_cfg = _get_sheets_cfg()
+    return str(sheets_cfg.get("private_positions_worksheet", "private_positions")).strip()
+
+
+@st.cache_resource(show_spinner=False)
+def _get_gspread_client_cached():
+    gcp_cfg = _get_gcp_cfg()
+
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
     ]
 
     creds = Credentials.from_service_account_info(gcp_cfg, scopes=scopes)
-    client = gspread.authorize(creds)
+    return gspread.authorize(creds)
+
+
+@st.cache_resource(show_spinner=False)
+def _get_spreadsheet_cached(sheet_id: str, sheet_url: str):
+    client = _get_gspread_client_cached()
 
     if sheet_id:
         return client.open_by_key(sheet_id)
     return client.open_by_url(sheet_url)
 
 
-def _connect_named_worksheet(worksheet_name, headers, default_rows=None):
-    spreadsheet = _get_spreadsheet()
+@st.cache_data(ttl=GOOGLE_SHEETS_CACHE_TTL, show_spinner=False)
+def _get_worksheet_header_cached(sheet_id: str, sheet_url: str, worksheet_name: str):
+    spreadsheet = _get_spreadsheet_cached(sheet_id, sheet_url)
+    ws = spreadsheet.worksheet(worksheet_name)
+    return ws.row_values(1)
 
+
+@st.cache_data(ttl=GOOGLE_SHEETS_CACHE_TTL, show_spinner=False)
+def _get_worksheet_records_cached(sheet_id: str, sheet_url: str, worksheet_name: str):
+    spreadsheet = _get_spreadsheet_cached(sheet_id, sheet_url)
+    ws = spreadsheet.worksheet(worksheet_name)
+    return ws.get_all_records()
+
+
+@st.cache_data(ttl=GOOGLE_SHEETS_CACHE_TTL, show_spinner=False)
+def _get_worksheet_values_cached(sheet_id: str, sheet_url: str, worksheet_name: str):
+    spreadsheet = _get_spreadsheet_cached(sheet_id, sheet_url)
+    ws = spreadsheet.worksheet(worksheet_name)
+    return ws.get_all_values()
+
+
+def _clear_google_sheets_cache():
+    _get_worksheet_header_cached.clear()
+    _get_worksheet_records_cached.clear()
+    _get_worksheet_values_cached.clear()
+
+
+def _get_spreadsheet():
+    sheet_id, sheet_url = _get_private_positions_sheet_locator()
+    return _get_spreadsheet_cached(sheet_id, sheet_url)
+
+
+def _connect_named_worksheet(worksheet_name, headers, default_rows=None):
+    sheet_id, sheet_url = _get_private_positions_sheet_locator()
+    spreadsheet = _get_spreadsheet_cached(sheet_id, sheet_url)
+
+    created = False
     try:
         ws = spreadsheet.worksheet(worksheet_name)
     except gspread.WorksheetNotFound:
         ws = spreadsheet.add_worksheet(title=worksheet_name, rows=1000, cols=max(len(headers), 5))
+        created = True
 
-    try:
-        current_header = ws.row_values(1)
-    except Exception:
-        current_header = []
+    current_header = []
+    if not created:
+        try:
+            current_header = _get_worksheet_header_cached(sheet_id, sheet_url, worksheet_name)
+        except Exception:
+            current_header = headers
 
-    if current_header != headers:
+    if created or current_header != headers:
         ws.clear()
         rows = [headers]
         if default_rows:
             rows.extend(default_rows)
         ws.update(range_name="A1", values=rows)
+        _clear_google_sheets_cache()
 
     return ws
 
 
 def connect_private_positions_worksheet():
-    sheets_cfg = _get_sheets_cfg()
-    worksheet_name = str(sheets_cfg.get("private_positions_worksheet", "private_positions")).strip()
+    worksheet_name = _get_private_positions_worksheet_name()
     return _connect_named_worksheet(worksheet_name, PRIVATE_POSITIONS_HEADERS)
 
 
@@ -706,8 +770,14 @@ def connect_dividends_worksheet():
 
 
 def load_private_positions_from_sheets():
-    ws = connect_private_positions_worksheet()
-    records = ws.get_all_records()
+    worksheet_name = _get_private_positions_worksheet_name()
+    sheet_id, sheet_url = _get_private_positions_sheet_locator()
+
+    try:
+        connect_private_positions_worksheet()
+        records = _get_worksheet_records_cached(sheet_id, sheet_url, worksheet_name)
+    except Exception:
+        return {}
 
     positions = {}
     for row in records:
@@ -738,11 +808,17 @@ def save_private_positions_to_sheets(positions: dict):
 
     ws.clear()
     ws.update(range_name="A1", values=rows)
+    _clear_google_sheets_cache()
 
 
 def load_transactions_from_sheets():
-    ws = connect_transactions_worksheet()
-    records = ws.get_all_records()
+    sheet_id, sheet_url = _get_private_positions_sheet_locator()
+
+    try:
+        connect_transactions_worksheet()
+        records = _get_worksheet_records_cached(sheet_id, sheet_url, "transactions")
+    except Exception:
+        return pd.DataFrame(columns=TRANSACTIONS_HEADERS)
 
     if not records:
         return pd.DataFrame(columns=TRANSACTIONS_HEADERS)
@@ -782,17 +858,30 @@ def append_transaction_to_sheets(tx: dict):
         str(tx.get("notes", "")).strip(),
     ]
     ws.append_row(row, value_input_option="USER_ENTERED")
+    _clear_google_sheets_cache()
 
 
 def load_cash_balances_from_sheets():
-    ws = connect_cash_balances_worksheet()
-    records = ws.get_all_records()
+    sheet_id, sheet_url = _get_private_positions_sheet_locator()
+
+    try:
+        connect_cash_balances_worksheet()
+        records = _get_worksheet_records_cached(sheet_id, sheet_url, "cash_balances")
+    except Exception:
+        return pd.DataFrame(
+            {
+                "currency": SUPPORTED_BASE_CCY,
+                "amount": [0.0] * len(SUPPORTED_BASE_CCY),
+            }
+        )
 
     if not records:
-        rows = [[ccy, 0.0] for ccy in SUPPORTED_BASE_CCY]
-        ws.clear()
-        ws.update(range_name="A1", values=[CASH_BALANCES_HEADERS] + rows)
-        records = [{"currency": ccy, "amount": 0.0} for ccy in SUPPORTED_BASE_CCY]
+        return pd.DataFrame(
+            {
+                "currency": SUPPORTED_BASE_CCY,
+                "amount": [0.0] * len(SUPPORTED_BASE_CCY),
+            }
+        )
 
     df = pd.DataFrame(records)
     df.columns = [str(c).strip().lower() for c in df.columns]
@@ -834,6 +923,7 @@ def save_cash_balances_to_sheets(cash_df: pd.DataFrame):
 
     ws.clear()
     ws.update(range_name="A1", values=rows)
+    _clear_google_sheets_cache()
 
 
 def adjust_cash_balance(currency: str, delta: float):
@@ -852,8 +942,13 @@ def adjust_cash_balance(currency: str, delta: float):
 
 
 def load_dividends_from_sheets():
-    ws = connect_dividends_worksheet()
-    records = ws.get_all_records()
+    sheet_id, sheet_url = _get_private_positions_sheet_locator()
+
+    try:
+        connect_dividends_worksheet()
+        records = _get_worksheet_records_cached(sheet_id, sheet_url, "dividends_received")
+    except Exception:
+        return pd.DataFrame(columns=DIVIDENDS_HEADERS)
 
     if not records:
         return pd.DataFrame(columns=DIVIDENDS_HEADERS)
@@ -886,6 +981,7 @@ def append_dividend_to_sheets(div_tx: dict):
         str(div_tx.get("notes", "")).strip(),
     ]
     ws.append_row(row, value_input_option="USER_ENTERED")
+    _clear_google_sheets_cache()
 
 
 # =========================
@@ -1602,7 +1698,7 @@ def build_dividend_insights(
     dividends_total = float(collected_df[f"amount_{base_currency.lower()}"].sum())
 
     collected_display_df = collected_df.copy()
-    collected_display_df["date"] = pd.to_datetime(collected_display_df["date"]).dt.date
+    collected_display_df["date"] = pd.to_datetime(collected_df["date"]).dt.date
     collected_display_df = collected_display_df.rename(
         columns={
             "date": "Date",
