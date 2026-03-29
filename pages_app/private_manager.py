@@ -4,11 +4,13 @@ import pandas as pd
 import streamlit as st
 
 from app_core import (
+    SUPPORTED_BASE_CCY,
     append_transaction_to_sheets,
     get_manage_password,
     info_metric,
     info_section,
     render_page_title,
+    save_cash_balances_to_sheets,
     save_private_positions_to_sheets,
 )
 from pages_app.portfolio_history import save_portfolio_snapshot
@@ -256,3 +258,57 @@ def render_private_manager_page(ctx):
         st.info("No Private Manager audit entries found.")
     else:
         st.dataframe(audit_df, use_container_width=True, height=320)
+
+    info_section(
+        "Cash Balances",
+        "Set the total cash balance for a currency. Requires authorization.",
+    )
+
+    cash_df = ctx.get("cash_balances_df", pd.DataFrame()).copy()
+    if not cash_df.empty:
+        display_cash = cash_df.copy()
+        display_cash.columns = ["Currency", "Amount"]
+        display_cash["Amount"] = pd.to_numeric(display_cash["Amount"], errors="coerce").fillna(0.0)
+        st.dataframe(display_cash, use_container_width=True, height=220)
+    else:
+        st.info("No cash balances on record.")
+
+    with st.form("cash_balances_form"):
+        cc1, cc2 = st.columns(2)
+        with cc1:
+            cash_currency = st.selectbox("Currency", SUPPORTED_BASE_CCY, key="pm_cash_currency")
+        with cc2:
+            cash_amount = st.number_input(
+                "New Balance",
+                min_value=0.0,
+                value=0.0,
+                step=10.0,
+                format="%.2f",
+                key="pm_cash_amount",
+            )
+
+        cash_auth = st.text_input("Authorization Password", type="password", key="pm_cash_auth")
+        cash_submitted = st.form_submit_button("Save Cash Balance", use_container_width=True)
+
+    if cash_submitted:
+        if cash_auth != get_manage_password():
+            st.error("Incorrect authorization password.")
+        else:
+            try:
+                updated_cash = cash_df.copy()
+                currency_up = str(cash_currency).upper().strip()
+
+                if not updated_cash.empty and currency_up in updated_cash["currency"].values:
+                    updated_cash.loc[updated_cash["currency"] == currency_up, "amount"] = float(cash_amount)
+                else:
+                    updated_cash = pd.concat(
+                        [updated_cash, pd.DataFrame({"currency": [currency_up], "amount": [float(cash_amount)]})],
+                        ignore_index=True,
+                    )
+
+                save_cash_balances_to_sheets(updated_cash)
+                st.cache_data.clear()
+                st.success(f"Cash balance updated: {currency_up} {cash_amount:,.2f}")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Could not save cash balance: {e}")
