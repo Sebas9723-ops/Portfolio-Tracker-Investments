@@ -145,6 +145,19 @@ def _load_private_runtime_state():
             {"currency": SUPPORTED_BASE_CCY, "amount": [0.0] * len(SUPPORTED_BASE_CCY)}
         )
 
+    # Apply any pending cash override written by Private Manager (bypasses Sheets cache lag)
+    if "pm_cash_override" in st.session_state:
+        override = st.session_state.pop("pm_cash_override")
+        for ccy, amt in override.items():
+            mask = cash_balances_df["currency"] == ccy
+            if mask.any():
+                cash_balances_df.loc[mask, "amount"] = float(amt)
+            else:
+                cash_balances_df = pd.concat(
+                    [cash_balances_df, pd.DataFrame({"currency": [ccy], "amount": [float(amt)]})],
+                    ignore_index=True,
+                )
+
     try:
         dividends_df = load_dividends_from_sheets()
     except Exception:

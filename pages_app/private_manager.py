@@ -310,9 +310,9 @@ def render_private_manager_page(ctx):
                     )
 
                 save_cash_balances_to_sheets(updated_cash)
-                # save_cash_balances_to_sheets already calls _clear_google_sheets_cache() internally.
-                # Do NOT call st.cache_data.clear() here — it triggers a full reload of all Sheets
-                # (positions, transactions, cash, dividends) simultaneously, hitting the 429 quota.
+                # Store override in session_state so the next rerun reflects the new value
+                # immediately, bypassing any Sheets cache lag.
+                st.session_state["pm_cash_override"] = {currency_up: cash_amount}
                 st.session_state["pm_save_banner"] = f"Cash balance updated: {currency_up} {cash_amount:,.2f}"
                 st.rerun()
             except Exception as e:
