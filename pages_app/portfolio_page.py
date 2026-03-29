@@ -1,55 +1,38 @@
-import numpy as np
-import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from app_core import (
-    info_metric,
-    info_section,
-    render_page_title,
-)
+from app_core import info_metric, info_section, render_page_title
 
 
-def _normalize_weight_map(weight_map, tickers):
-    clean = {t: max(float(weight_map.get(t, 0.0)), 0.0) for t in tickers}
-    total = float(sum(clean.values()))
-    if total <= 0:
-        equal = 1.0 / len(tickers) if tickers else 0.0
-        return {t: equal for t in tickers}
-    return {t: v / total for t, v in clean.items()}
-
-
-def _get_max_sharpe_target_map(ctx, df):
-    tickers = df["Ticker"].tolist()
-
-    if ctx.get("max_sharpe_row") is None or not ctx.get("usable"):
-        raw = df.set_index("Ticker")["Target Weight"].to_dict()
-        return _normalize_weight_map(raw, tickers), "Policy Target"
-
-    usable = list(ctx["usable"])
-    arr = np.array(ctx["max_sharpe_row"]["Weights"], dtype=float)
-
-    raw = {ticker: 0.0 for ticker in tickers}
-    if len(arr) == len(usable):
-        for ticker, weight in zip(usable, arr):
-            raw[ticker] = float(weight)
-
-    return _normalize_weight_map(raw, tickers), "Max Sharpe Frontier"
-
-
-def _build_weights_vs_target_chart(ctx):
+def _build_weights_vs_targets_chart(ctx):
     df = ctx["df"].copy()
-    target_map, source_label = _get_max_sharpe_target_map(ctx, df)
+    policy_map = ctx.get("policy_target_map", {})
+
+    max_sharpe_map = {}
+    if ctx.get("max_sharpe_row") is not None and ctx.get("usable"):
+        usable = list(ctx["usable"])
+        arr = ctx["max_sharpe_row"]["Weights"]
+        max_sharpe_map = {t: 0.0 for t in df["Ticker"]}
+        if len(arr) == len(usable):
+            for ticker, weight in zip(usable, arr):
+                max_sharpe_map[ticker] = float(weight)
+    else:
+        max_sharpe_map = dict(policy_map)
 
     fig = go.Figure()
     fig.add_bar(
         x=df["Ticker"],
         y=df["Weight %"],
-        name="Actual %",
+        name="Current Weight %",
     )
     fig.add_bar(
         x=df["Ticker"],
-        y=[float(target_map.get(t, 0.0)) * 100.0 for t in df["Ticker"]],
+        y=[float(policy_map.get(t, 0.0)) * 100.0 for t in df["Ticker"]],
+        name="Policy Target %",
+    )
+    fig.add_bar(
+        x=df["Ticker"],
+        y=[float(max_sharpe_map.get(t, 0.0)) * 100.0 for t in df["Ticker"]],
         name="Max Sharpe %",
     )
 
@@ -58,52 +41,47 @@ def _build_weights_vs_target_chart(ctx):
         paper_bgcolor="#0b0f14",
         plot_bgcolor="#0b0f14",
         font=dict(color="#e6e6e6"),
-        height=360,
+        height=390,
         margin=dict(t=20, b=20, l=20, r=20),
         xaxis_title="Ticker",
         yaxis_title="Weight %",
         legend=dict(orientation="h", y=1.08, x=0.0),
     )
-    return fig, source_label
+    return fig
 
 
-def _build_performance_vs_benchmark_pct_chart(ctx):
+def _build_performance_vs_benchmark_chart(ctx):
     portfolio_returns = ctx.get("portfolio_returns")
-    benchmark_returns = ctx.get("benchmark_returns")
+    benchmark_returns = ctx.get("resolved_benchmark_returns")
 
     if portfolio_returns is None or portfolio_returns.empty:
         return None
 
     fig = go.Figure()
-
     portfolio_cum = (1 + portfolio_returns).cumprod() - 1
-    portfolio_last = float(portfolio_cum.iloc[-1]) if not portfolio_cum.empty else 0.0
-    portfolio_name = f"Portfolio ({portfolio_last:.2%})"
-
     fig.add_scatter(
         x=portfolio_cum.index,
         y=portfolio_cum,
         mode="lines",
-        name=portfolio_name,
+        name=f"Portfolio ({portfolio_cum.iloc[-1]:.2%})",
         hovertemplate="%{x|%Y-%m-%d}<br>Portfolio: %{y:.2%}<extra></extra>",
     )
 
     if benchmark_returns is not None and not benchmark_returns.empty:
-        aligned = pd.concat(
-            [portfolio_returns.rename("Portfolio"), benchmark_returns.rename("VOO")],
-            axis=1,
-        ).dropna()
+        aligned = (
+            portfolio_returns.rename("Portfolio")
+            .to_frame()
+            .join(benchmark_returns.rename("VOO"), how="inner")
+            .dropna()
+        )
 
         if not aligned.empty:
             voo_cum = (1 + aligned["VOO"]).cumprod() - 1
-            voo_last = float(voo_cum.iloc[-1]) if not voo_cum.empty else 0.0
-            voo_name = f"VOO ({voo_last:.2%})"
-
             fig.add_scatter(
                 x=voo_cum.index,
                 y=voo_cum,
                 mode="lines",
-                name=voo_name,
+                name=f"VOO ({voo_cum.iloc[-1]:.2%})",
                 hovertemplate="%{x|%Y-%m-%d}<br>VOO: %{y:.2%}<extra></extra>",
             )
 
@@ -134,26 +112,29 @@ def render_portfolio_page(ctx):
 
     with left:
         info_section("Allocation", "Current portfolio allocation by market value.")
-        st.plotly_chart(ctx["fig_pie"], use_container_width=True, key="portfolio_allocation_chart_with_labels")
+        st.plotly_chart(ctx["fig_pie"], use_container_width=True, key="portfolio_allocation_chart_fixed_v2")
 
     with right:
-        fig_weights, source_label = _build_weights_vs_target_chart(ctx)
         info_section(
-            "Weights vs Target",
-            f"Actual weights compared against target source: {source_label}.",
+            "Weights vs Targets",
+            "Current weight, policy target, and max Sharpe allocation shown side by side.",
         )
-        st.plotly_chart(fig_weights, use_container_width=True, key="portfolio_weights_target_chart_with_labels")
+        st.plotly_chart(
+            _build_weights_vs_targets_chart(ctx),
+            use_container_width=True,
+            key="portfolio_weights_targets_chart_fixed_v2",
+        )
 
-    perf_fig = _build_performance_vs_benchmark_pct_chart(ctx)
+    perf_fig = _build_performance_vs_benchmark_chart(ctx)
     if perf_fig is not None:
         info_section(
             "Performance vs Benchmark",
-            "Portfolio cumulative return versus VOO, displayed in percentage terms.",
+            "Portfolio cumulative return versus VOO in percentage terms. Legend includes latest cumulative values.",
         )
         st.plotly_chart(
             perf_fig,
             use_container_width=True,
-            key="portfolio_performance_pct_chart_with_labels",
+            key="portfolio_performance_vs_benchmark_fixed_v2",
         )
 
     info_section("Cash Balances", "Cash balances by currency converted to the base currency.")
