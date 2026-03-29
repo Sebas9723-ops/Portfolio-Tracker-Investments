@@ -9,6 +9,7 @@ from app_core import (
     get_manage_password,
     info_metric,
     info_section,
+    load_cash_balances_from_sheets,
     render_page_title,
     save_cash_balances_to_sheets,
     save_private_positions_to_sheets,
@@ -298,20 +299,23 @@ def render_private_manager_page(ctx):
             st.error("Incorrect authorization password.")
         elif cash_amount is not None:
             try:
-                updated_cash = cash_df.copy()
                 currency_up = str(cash_currency).upper().strip()
 
-                if not updated_cash.empty and currency_up in updated_cash["currency"].values:
-                    updated_cash.loc[updated_cash["currency"] == currency_up, "amount"] = cash_amount
+                # Load fresh from Sheets to avoid stale ctx data
+                fresh_cash = load_cash_balances_from_sheets()
+
+                if not fresh_cash.empty and currency_up in fresh_cash["currency"].values:
+                    fresh_cash.loc[fresh_cash["currency"] == currency_up, "amount"] = cash_amount
                 else:
-                    updated_cash = pd.concat(
-                        [updated_cash, pd.DataFrame({"currency": [currency_up], "amount": [cash_amount]})],
+                    fresh_cash = pd.concat(
+                        [fresh_cash, pd.DataFrame({"currency": [currency_up], "amount": [cash_amount]})],
                         ignore_index=True,
                     )
 
-                save_cash_balances_to_sheets(updated_cash)
+                save_cash_balances_to_sheets(fresh_cash)
                 st.cache_data.clear()
                 st.session_state["pm_save_banner"] = f"Cash balance updated: {currency_up} {cash_amount:,.2f}"
                 st.rerun()
             except Exception as e:
-                st.error(f"Could not save cash balance: {e}")
+                import traceback
+                st.error(f"Could not save cash balance: {e}\n\n{traceback.format_exc()}")
