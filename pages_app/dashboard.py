@@ -57,6 +57,30 @@ def _get_max_sharpe_target_map(ctx, df):
     return _normalize_weight_map(raw, tickers), "Max Sharpe Frontier"
 
 
+def _estimate_required_contribution_without_selling(df, target_map):
+    if df.empty:
+        return None, "No holdings data."
+
+    total_value = float(df["Value"].sum())
+    required_contribution = 0.0
+
+    for _, row in df.iterrows():
+        ticker = str(row["Ticker"])
+        current_value = float(row["Value"])
+        target_weight = float(target_map.get(ticker, 0.0))
+
+        if current_value <= 1e-12:
+            continue
+
+        if target_weight <= 1e-12:
+            return None, f"{ticker} has positive value but zero recommended weight."
+
+        needed = current_value / target_weight - total_value
+        required_contribution = max(required_contribution, needed)
+
+    return max(required_contribution, 0.0), ""
+
+
 def _build_top_actions_table(ctx):
     df = ctx["df"].copy()
     if df.empty:
@@ -176,6 +200,126 @@ def _build_alerts_table(ctx):
     out["__rank"] = out["Level"].map(order).fillna(9)
     out = out.sort_values(["__rank", "Item"]).drop(columns="__rank").reset_index(drop=True)
     return out
+
+
+def _build_data_quality_table(ctx):
+    rows = []
+    df = ctx.get("df", pd.DataFrame()).copy()
+
+    if df.empty:
+        rows.append({"Level": "Critical", "Check": "Portfolio", "Message": "No portfolio holdings available."})
+        return pd.DataFrame(rows)
+
+    if pd.to_numeric(df["Price"], errors="coerce").fillna(0.0).le(0).any():
+        bad = df[pd.to_numeric(df["Price"], errors="coerce").fillna(0.0).le(0)]["Ticker"].astype(str).tolist()
+        rows.append({"Level": "Critical", "Check": "Pricing", "Message": f"Missing or zero market price for: {', '.join(bad)}."})
+
+    if pd.to_numeric(df["Shares"], errors="coerce").fillna(0.0).lt(0).any():
+        bad = df[pd.to_numeric(df["Shares"], errors="coerce").fillna(0.0).lt(0)]["Ticker"].astype(str).tolist()
+        rows.append({"Level": "Critical", "Check": "Shares", "Message": f"Negative shares detected for: {', '.join(bad)}."})
+
+    if df["Ticker"].astype(str).duplicated().any():
+        dup = df.loc[df["Ticker"].astype(str).duplicated(), "Ticker"].astype(str).tolist()
+        rows.append({"Level": "Warning", "Check": "Tickers", "Message": f"Duplicate ticker rows detected: {', '.join(dup)}."})
+
+    cash_df = ctx.get("cash_display_df", pd.DataFrame()).copy()
+    if not cash_df.empty and "Amount" in cash_df.columns:
+        negative_cash = cash_df[pd.to_numeric(cash_df["Amount"], errors="coerce").fillna(0.0) < 0]
+        if not negative_cash.empty:
+            ccy = negative_cash["Currency"].astype(str).tolist() if "Currency" in negative_cash.columns else ["Unknown"]
+            rows.append({"Level": "Warning", "Check": "Cash", "Message": f"Negative cash balance detected in: {', '.join(ccy)}."})
+
+    if ctx.get("fig_frontier") is None or ctx.get("max_sharpe_row") is None:
+        rows.append({"Level": "Info", "Check": "Optimization", "Message": "Efficient frontier recommendation is not available."})
+
+    bench = ctx.get("benchmark_returns")
+    if bench is None or bench.empty:
+        rows.append({"Level": "Info", "Check": "Benchmark", "Message": "Benchmark return series is not available."})
+
+    if not rows:
+        rows.append({"Level": "OK", "Check": "Data Quality", "Message": "No obvious data quality issues detected."})
+
+    out = pd.DataFrame(rows)
+    order = {"Critical": 0, "Warning": 1, "Info": 2, "OK": 3}
+    out["__rank"] = out["Level"].map(order).fillna(9)
+    out = out.sort_values(["__rank", "Check"]).drop(columns="__rank").reset_index(drop=True)
+    return out
+
+
+def _build_decision_summary(ctx):
+    df = ctx["df"].copy()
+    if df.empty:
+        return pd.DataFrame()
+
+    target_map, source_label = _get_max_sharpe_target_map(ctx, df)
+    actions_df, _ = _build_top_actions_table(ctx)
+    total_portfolio_value = float(ctx["total_portfolio_value"])
+    cash_total_value = float(ctx["cash_total_value"])
+    cash_pct = (cash_total_value / total_portfolio_value * 100.0) if total_portfolio_value > 0 else 0.0
+    required_contribution, contribution_note = _estimate_required_contribution_without_selling(df, target_map)
+
+    rows = []
+
+    rows.append(
+        {
+            "Priority": 1,
+            "Decision": f"Use {source_label}",
+            "Rationale": "Current recommendation source driving portfolio actions.",
+        }
+    )
+
+    if not actions_df.empty:
+        top_row = actions_df.iloc[0]
+        rows.append(
+            {
+                "Priority": 2,
+                "Decision": f"{top_row['Action']} {top_row['Ticker']}",
+                "Rationale": f"Largest drift is {top_row['Gap %']:+.2f}% versus recommendation.",
+            }
+        )
+    else:
+        rows.append(
+            {
+                "Priority": 2,
+                "Decision": "No immediate rebalance action",
+                "Rationale": "No material drift detected versus current recommendation.",
+            }
+        )
+
+    if required_contribution is None:
+        rows.append(
+            {
+                "Priority": 3,
+                "Decision": "Buy-only transition not feasible",
+                "Rationale": contribution_note,
+            }
+        )
+    else:
+        rows.append(
+            {
+                "Priority": 3,
+                "Decision": f"Buy-only contribution: {ctx['base_currency']} {required_contribution:,.2f}",
+                "Rationale": "Estimated cash needed to reach recommended weights without selling.",
+            }
+        )
+
+    rows.append(
+        {
+            "Priority": 4,
+            "Decision": f"Cash ratio: {cash_pct:.2f}%",
+            "Rationale": "Monitor whether cash drag is becoming meaningful.",
+        }
+    )
+
+    rows.append(
+        {
+            "Priority": 5,
+            "Decision": f"Current Sharpe: {ctx['sharpe']:.2f}",
+            "Rationale": "Use together with recommended Sharpe in Rebalancing.",
+        }
+    )
+
+    return pd.DataFrame(rows)
 
 
 def _build_recent_audit_trail(ctx, limit=8):
@@ -300,9 +444,17 @@ def render_dashboard(ctx):
     info_metric(c7, "Sharpe Ratio", f"{ctx['sharpe']:.2f}", "Portfolio Sharpe ratio.")
     info_metric(c8, "Realized PnL", f"{ctx['base_currency']} {ctx['realized_pnl']:,.2f}", "Closed profit and loss.")
 
+    summary_df = _build_decision_summary(ctx)
     actions_df, source_label = _build_top_actions_table(ctx)
     alerts_df = _build_alerts_table(ctx)
+    quality_df = _build_data_quality_table(ctx)
     audit_df = _build_recent_audit_trail(ctx)
+
+    info_section(
+        "Decision Summary",
+        "Clean executive summary of what matters most right now.",
+    )
+    st.dataframe(summary_df, use_container_width=True, height=240)
 
     left, right = st.columns(2)
 
@@ -326,14 +478,24 @@ def render_dashboard(ctx):
         else:
             st.dataframe(alerts_df, use_container_width=True, height=260)
 
-    info_section(
-        "Recent Audit Trail",
-        "Most recent changes made through Private Manager and written automatically into the Transactions ledger.",
-    )
-    if audit_df.empty:
-        st.info("No Private Manager audit entries found.")
-    else:
-        st.dataframe(audit_df, use_container_width=True, height=260)
+    left2, right2 = st.columns(2)
+
+    with left2:
+        info_section(
+            "Data Quality Checks",
+            "Validation checks for prices, shares, optimization availability, benchmark, and cash balances.",
+        )
+        st.dataframe(quality_df, use_container_width=True, height=260)
+
+    with right2:
+        info_section(
+            "Recent Audit Trail",
+            "Most recent changes made through Private Manager and written automatically into the Transactions ledger.",
+        )
+        if audit_df.empty:
+            st.info("No Private Manager audit entries found.")
+        else:
+            st.dataframe(audit_df, use_container_width=True, height=260)
 
     perf_fig = _build_performance_vs_benchmark_pct_chart(ctx)
     if perf_fig is not None:
@@ -344,5 +506,5 @@ def render_dashboard(ctx):
         st.plotly_chart(
             perf_fig,
             use_container_width=True,
-            key="dashboard_performance_pct_chart_phase4b",
+            key="dashboard_performance_pct_chart_phase4c",
         )

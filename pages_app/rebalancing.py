@@ -225,6 +225,97 @@ def _build_alerts_table(ctx, recommended_map):
     return out
 
 
+def _build_validation_table(ctx, recommended_map, contribution_amount, min_trade_value):
+    rows = []
+    df = ctx["df"].copy()
+
+    if df.empty:
+        rows.append({"Level": "Critical", "Check": "Portfolio", "Message": "No holdings available."})
+        return pd.DataFrame(rows)
+
+    if pd.to_numeric(df["Price"], errors="coerce").fillna(0.0).le(0).any():
+        bad = df[pd.to_numeric(df["Price"], errors="coerce").fillna(0.0).le(0)]["Ticker"].astype(str).tolist()
+        rows.append({"Level": "Critical", "Check": "Pricing", "Message": f"Missing or zero price for: {', '.join(bad)}."})
+
+    if ctx.get("fig_frontier") is None:
+        rows.append({"Level": "Info", "Check": "Optimization", "Message": "Efficient frontier is not available for the current data set."})
+
+    if contribution_amount > 0 and contribution_amount < min_trade_value:
+        rows.append({"Level": "Warning", "Check": "Contribution", "Message": "Contribution amount is below the minimum trade threshold."})
+
+    total_recommended = float(sum(recommended_map.values()))
+    if not np.isclose(total_recommended, 1.0, atol=1e-6):
+        rows.append({"Level": "Warning", "Check": "Weights", "Message": "Recommended weights do not sum cleanly to 100%."})
+
+    if not rows:
+        rows.append({"Level": "OK", "Check": "Validation", "Message": "No validation issues detected under the current settings."})
+
+    out = pd.DataFrame(rows)
+    order = {"Critical": 0, "Warning": 1, "Info": 2, "OK": 3}
+    out["__rank"] = out["Level"].map(order).fillna(9)
+    out = out.sort_values(["__rank", "Check"]).drop(columns="__rank").reset_index(drop=True)
+    return out
+
+
+def _build_decision_summary(ctx, model_name, recommended_map, monitor_df, required_contribution):
+    rows = []
+
+    rows.append(
+        {
+            "Priority": 1,
+            "Decision": f"Use {model_name}",
+            "Rationale": "Current recommendation model driving portfolio actions.",
+        }
+    )
+
+    if not monitor_df.empty:
+        actionable = monitor_df[monitor_df["Action"] != "Within Band"].copy()
+        if not actionable.empty:
+            top = actionable.iloc[0]
+            rows.append(
+                {
+                    "Priority": 2,
+                    "Decision": f"{top['Action']} {top['Ticker']}",
+                    "Rationale": f"Largest gap is {top['Gap %']:+.2f}% versus recommendation.",
+                }
+            )
+        else:
+            rows.append(
+                {
+                    "Priority": 2,
+                    "Decision": "No immediate rebalance action",
+                    "Rationale": "All holdings are inside the selected tolerance band.",
+                }
+            )
+
+    if required_contribution is None:
+        rows.append(
+            {
+                "Priority": 3,
+                "Decision": "Buy-only transition not feasible",
+                "Rationale": "At least one positive holding has zero recommended weight.",
+            }
+        )
+    else:
+        rows.append(
+            {
+                "Priority": 3,
+                "Decision": f"Buy-only contribution: {ctx['base_currency']} {required_contribution:,.2f}",
+                "Rationale": "Estimated cash needed to reach recommended weights without selling.",
+            }
+        )
+
+    rows.append(
+        {
+            "Priority": 4,
+            "Decision": f"Current Sharpe {ctx['current_sharpe']:.2f} vs Recommended { _portfolio_stats_from_weight_map(ctx, recommended_map)['sharpe']:.2f}",
+            "Rationale": "Use this as the main optimization checkpoint.",
+        }
+    )
+
+    return pd.DataFrame(rows)
+
+
 def _build_compare_figure(
     df: pd.DataFrame,
     recommended_map: dict[str, float],
@@ -818,7 +909,50 @@ def render_rebalancing_page(ctx):
 
     recommended_map = _recommended_weight_map(ctx, ctx["df"], model_name)
     recommendation_stats = _portfolio_stats_from_weight_map(ctx, recommended_map)
+
+    info_section(
+        "Executive Summary",
+        "Cleaner decision layer before diving into charts and tables.",
+    )
+
+    monitor_df = _build_monitor_table(
+        df=ctx["df"],
+        recommended_map=recommended_map,
+        tolerance_pct=float(tolerance_pct),
+        base_currency=ctx["base_currency"],
+    )
+
+    required_contribution, required_df, msg = _estimate_required_contribution_without_selling(
+        ctx["df"],
+        recommended_map,
+        ctx["base_currency"],
+    )
+
+    contribution_amount_preview = 0.0
+    summary_df = _build_decision_summary(ctx, model_name, recommended_map, monitor_df, required_contribution)
+    st.dataframe(summary_df, use_container_width=True, height=220)
+
     alerts_df = _build_alerts_table(ctx, recommended_map)
+    validation_df = _build_validation_table(ctx, recommended_map, contribution_amount_preview, float(min_trade_value))
+
+    left, right = st.columns(2)
+
+    with left:
+        info_section(
+            "Active Alerts",
+            "Priority alerts for drift, concentration, and cash drag under the selected recommendation model.",
+        )
+        if alerts_df.empty:
+            st.success("No active alerts for the selected recommendation model.")
+        else:
+            st.dataframe(alerts_df, use_container_width=True, height=240)
+
+    with right:
+        info_section(
+            "Validation Warnings",
+            "Checks for pricing, optimization availability, weights, and contribution thresholds.",
+        )
+        st.dataframe(validation_df, use_container_width=True, height=240)
 
     m1, m2, m3, m4 = st.columns(4)
     info_metric(m1, "Current Return", f"{ctx['current_return']:.2%}", "Current portfolio expected return.")
@@ -833,41 +967,20 @@ def render_rebalancing_page(ctx):
     info_metric(m8, "Active Alerts", str(len(alerts_df)), "Number of active rebalance alerts.")
 
     info_section(
-        "Active Alerts",
-        "Priority alerts for drift, concentration, and cash drag under the selected recommendation model.",
-    )
-    if alerts_df.empty:
-        st.success("No active alerts for the selected recommendation model.")
-    else:
-        st.dataframe(alerts_df, use_container_width=True, height=240)
-
-    info_section(
         "Current vs Policy vs Recommended",
         "Professional comparison between current allocation, policy target, and the selected recommendation.",
     )
     st.plotly_chart(
         _build_compare_figure(ctx["df"], recommended_map),
         use_container_width=True,
-        key="rebalance_compare_chart_phase4b",
+        key="rebalance_compare_chart_phase4c",
     )
 
     info_section(
         "Deviation Monitor",
         "Current weights, policy targets, recommended weights, tolerance bands, and estimated value required to move each position toward the selected recommendation.",
     )
-    monitor_df = _build_monitor_table(
-        df=ctx["df"],
-        recommended_map=recommended_map,
-        tolerance_pct=float(tolerance_pct),
-        base_currency=ctx["base_currency"],
-    )
     st.dataframe(monitor_df, use_container_width=True, height=360)
-
-    required_contribution, required_df, msg = _estimate_required_contribution_without_selling(
-        ctx["df"],
-        recommended_map,
-        ctx["base_currency"],
-    )
 
     info_section(
         "Required Contribution To Reach Recommended Allocation Without Selling",
@@ -921,7 +1034,7 @@ def render_rebalancing_page(ctx):
     st.plotly_chart(
         _build_compare_figure(ctx["df"], recommended_map, proposed_weight_map=proposed_weight_map),
         use_container_width=True,
-        key="rebalance_proposed_chart_phase4b",
+        key="rebalance_proposed_chart_phase4c",
     )
 
     execute_df = proposal_df[proposal_df["Decision"] == "Execute"].copy()
@@ -966,6 +1079,19 @@ def render_rebalancing_page(ctx):
         allow_sells=bool(allow_sells_contribution),
     )
 
+    validation_df_live = _build_validation_table(
+        ctx,
+        recommended_map,
+        float(contribution_amount),
+        float(min_trade_value),
+    )
+
+    info_section(
+        "Live Validation Warnings",
+        "Validation refreshed using the current contribution amount and execution thresholds.",
+    )
+    st.dataframe(validation_df_live, use_container_width=True, height=220)
+
     plan_df = contribution_result["plan_df"]
     suggested_weight_map = contribution_result["suggested_weight_map"]
     executable_weight_map = contribution_result["executable_weight_map"]
@@ -1002,13 +1128,13 @@ def render_rebalancing_page(ctx):
         st.plotly_chart(
             _build_compare_figure(ctx["df"], recommended_map, proposed_weight_map=suggested_weight_map),
             use_container_width=True,
-            key="rebalance_contribution_suggested_chart_phase4b",
+            key="rebalance_contribution_suggested_chart_phase4c",
         )
 
         st.plotly_chart(
             _build_compare_figure(ctx["df"], recommended_map, proposed_weight_map=executable_weight_map),
             use_container_width=True,
-            key="rebalance_contribution_executable_chart_phase4b",
+            key="rebalance_contribution_executable_chart_phase4c",
         )
 
         _render_manual_orders(
