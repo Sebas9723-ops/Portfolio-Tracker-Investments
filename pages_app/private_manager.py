@@ -44,6 +44,43 @@ def _build_current_positions_map(ctx):
     return positions
 
 
+def _build_audit_trail(ctx, limit=20):
+    tx_df = ctx.get("transactions_df", pd.DataFrame()).copy()
+    if tx_df.empty:
+        return pd.DataFrame()
+
+    work = tx_df.copy()
+    work["notes"] = work["notes"].fillna("").astype(str)
+    work = work[work["notes"].str.contains("Private Manager share adjustment", case=False, na=False)].copy()
+
+    if work.empty:
+        return pd.DataFrame()
+
+    work["date"] = pd.to_datetime(work["date"], errors="coerce")
+    work["shares"] = pd.to_numeric(work["shares"], errors="coerce").fillna(0.0)
+    work["price"] = pd.to_numeric(work["price"], errors="coerce").fillna(0.0)
+    work["fees"] = pd.to_numeric(work["fees"], errors="coerce").fillna(0.0)
+    work["gross_value"] = work["shares"] * work["price"]
+
+    display = work.rename(
+        columns={
+            "date": "Date",
+            "ticker": "Ticker",
+            "type": "Type",
+            "shares": "Shares",
+            "price": "Price",
+            "fees": "Fees",
+            "notes": "Notes",
+            "gross_value": "Gross Value",
+        }
+    ).copy()
+
+    display["Date"] = pd.to_datetime(display["Date"], errors="coerce").dt.date
+    display = display.sort_values("Date", ascending=False).reset_index(drop=True)
+
+    return display[["Date", "Ticker", "Type", "Shares", "Price", "Gross Value", "Fees", "Notes"]].head(limit)
+
+
 def render_private_manager_page(ctx):
     render_page_title("Private Manager")
 
@@ -175,10 +212,21 @@ def render_private_manager_page(ctx):
 
     info_section(
         "Private Workflow",
-        "Transactions are now a read-only ledger. Private Manager is the operational control layer for current shares, and each change creates a historical transaction record automatically.",
+        "Transactions are a read-only ledger. Private Manager is the operational control layer for current shares, and each change creates a historical transaction record automatically.",
     )
 
     c1, c2, c3 = st.columns(3)
     info_metric(c1, "Managed Positions", str(total_positions), "Number of positions currently controlled from Private Manager.")
     info_metric(c2, "Invested Assets", f"{ctx['base_currency']} {invested_assets:,.2f}", "Current market value of invested assets.")
     info_metric(c3, "Total Portfolio", f"{ctx['base_currency']} {total_portfolio:,.2f}", "Invested assets plus cash.")
+
+    audit_df = _build_audit_trail(ctx, limit=20)
+
+    info_section(
+        "Audit Trail",
+        "Visual history of changes saved from Private Manager.",
+    )
+    if audit_df.empty:
+        st.info("No Private Manager audit entries found.")
+    else:
+        st.dataframe(audit_df, use_container_width=True, height=320)

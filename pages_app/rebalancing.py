@@ -11,6 +11,23 @@ from app_core import (
 )
 
 
+def _render_control_buttons(ctx):
+    c1, c2, c3 = st.columns(3)
+
+    if c1.button("Refresh Market Data", use_container_width=True):
+        st.rerun()
+
+    if c2.button("Recalculate Portfolio", use_container_width=True):
+        st.rerun()
+
+    if c3.button("Sync Private Data", use_container_width=True):
+        if ctx["mode"] == "Private" and ctx["authenticated"]:
+            st.cache_data.clear()
+            st.rerun()
+        else:
+            st.info("Private sync is only available in Private mode.")
+
+
 def _normalize_weight_map(weight_map: dict[str, float], tickers: list[str]) -> dict[str, float]:
     clean = {t: max(float(weight_map.get(t, 0.0)), 0.0) for t in tickers}
     total = float(sum(clean.values()))
@@ -145,6 +162,66 @@ def _build_monitor_table(
         out[col] = pd.to_numeric(out[col], errors="coerce").round(2)
 
     out = out.sort_values("Gap %", key=lambda s: s.abs(), ascending=False).reset_index(drop=True)
+    return out
+
+
+def _build_alerts_table(ctx, recommended_map):
+    df = ctx["df"].copy()
+    if df.empty:
+        return pd.DataFrame()
+
+    tolerance_pct = 3.0
+    concentration_pct = 35.0
+    cash_alert_pct = 8.0
+
+    rows = []
+
+    for _, row in df.iterrows():
+        ticker = str(row["Ticker"])
+        name = str(row["Name"])
+        current_weight = float(row["Weight %"])
+        recommended_weight = float(recommended_map.get(ticker, 0.0)) * 100.0
+        gap_pct = current_weight - recommended_weight
+
+        if abs(gap_pct) > tolerance_pct:
+            level = "Critical" if abs(gap_pct) >= 6.0 else "Warning"
+            rows.append(
+                {
+                    "Level": level,
+                    "Item": ticker,
+                    "Message": f"{name} is {gap_pct:+.2f}% away from recommended weight.",
+                }
+            )
+
+        if current_weight > concentration_pct:
+            rows.append(
+                {
+                    "Level": "Warning",
+                    "Item": ticker,
+                    "Message": f"{name} concentration is {current_weight:.2f}%, above {concentration_pct:.2f}%.",
+                }
+            )
+
+    total_portfolio_value = float(ctx["total_portfolio_value"])
+    cash_total_value = float(ctx["cash_total_value"])
+    cash_pct = (cash_total_value / total_portfolio_value * 100.0) if total_portfolio_value > 0 else 0.0
+
+    if cash_pct > cash_alert_pct:
+        rows.append(
+            {
+                "Level": "Info" if cash_pct < cash_alert_pct * 1.5 else "Warning",
+                "Item": "Cash",
+                "Message": f"Cash is {cash_pct:.2f}% of total portfolio value.",
+            }
+        )
+
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+
+    order = {"Critical": 0, "Warning": 1, "Info": 2}
+    out["__rank"] = out["Level"].map(order).fillna(9)
+    out = out.sort_values(["__rank", "Item"]).drop(columns="__rank").reset_index(drop=True)
     return out
 
 
@@ -717,6 +794,8 @@ def render_rebalancing_page(ctx):
         st.info("No portfolio data available.")
         return
 
+    _render_control_buttons(ctx)
+
     models = _available_models(ctx)
     default_model_index = models.index("Max Sharpe Frontier") if "Max Sharpe Frontier" in models else 0
 
@@ -739,6 +818,7 @@ def render_rebalancing_page(ctx):
 
     recommended_map = _recommended_weight_map(ctx, ctx["df"], model_name)
     recommendation_stats = _portfolio_stats_from_weight_map(ctx, recommended_map)
+    alerts_df = _build_alerts_table(ctx, recommended_map)
 
     m1, m2, m3, m4 = st.columns(4)
     info_metric(m1, "Current Return", f"{ctx['current_return']:.2%}", "Current portfolio expected return.")
@@ -746,10 +826,20 @@ def render_rebalancing_page(ctx):
     info_metric(m3, "Current Sharpe", f"{ctx['current_sharpe']:.2f}", "Current portfolio Sharpe ratio.")
     info_metric(m4, "Recommendation Model", model_name, "Target engine currently used.")
 
-    m5, m6, m7 = st.columns(3)
+    m5, m6, m7, m8 = st.columns(4)
     info_metric(m5, "Recommended Return", f"{recommendation_stats['return']:.2%}", "Expected return of the selected recommendation.")
     info_metric(m6, "Recommended Volatility", f"{recommendation_stats['volatility']:.2%}", "Expected volatility of the selected recommendation.")
     info_metric(m7, "Recommended Sharpe", f"{recommendation_stats['sharpe']:.2f}", "Sharpe ratio of the selected recommendation.")
+    info_metric(m8, "Active Alerts", str(len(alerts_df)), "Number of active rebalance alerts.")
+
+    info_section(
+        "Active Alerts",
+        "Priority alerts for drift, concentration, and cash drag under the selected recommendation model.",
+    )
+    if alerts_df.empty:
+        st.success("No active alerts for the selected recommendation model.")
+    else:
+        st.dataframe(alerts_df, use_container_width=True, height=240)
 
     info_section(
         "Current vs Policy vs Recommended",
@@ -758,7 +848,7 @@ def render_rebalancing_page(ctx):
     st.plotly_chart(
         _build_compare_figure(ctx["df"], recommended_map),
         use_container_width=True,
-        key="rebalance_compare_chart_restored",
+        key="rebalance_compare_chart_phase4b",
     )
 
     info_section(
@@ -831,7 +921,7 @@ def render_rebalancing_page(ctx):
     st.plotly_chart(
         _build_compare_figure(ctx["df"], recommended_map, proposed_weight_map=proposed_weight_map),
         use_container_width=True,
-        key="rebalance_proposed_chart_restored",
+        key="rebalance_proposed_chart_phase4b",
     )
 
     execute_df = proposal_df[proposal_df["Decision"] == "Execute"].copy()
@@ -912,13 +1002,13 @@ def render_rebalancing_page(ctx):
         st.plotly_chart(
             _build_compare_figure(ctx["df"], recommended_map, proposed_weight_map=suggested_weight_map),
             use_container_width=True,
-            key="rebalance_contribution_suggested_chart_restored",
+            key="rebalance_contribution_suggested_chart_phase4b",
         )
 
         st.plotly_chart(
             _build_compare_figure(ctx["df"], recommended_map, proposed_weight_map=executable_weight_map),
             use_container_width=True,
-            key="rebalance_contribution_executable_chart_restored",
+            key="rebalance_contribution_executable_chart_phase4b",
         )
 
         _render_manual_orders(
