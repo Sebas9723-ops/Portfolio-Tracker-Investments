@@ -6,3 +6,4 @@ numpy
 gspread
 oauth2client
 pytz
+alpaca-py

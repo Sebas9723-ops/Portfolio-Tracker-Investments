@@ -340,7 +340,13 @@ def build_app_context_runtime(app_scope: str):
 
     tickers = list(updated_portfolio.keys())
 
-    live_prices_native, asset_hist_native = load_market_data_with_proxies(tickers=tickers, period="2y")
+    if app_scope == "private":
+        from data_providers import load_market_data_private, data_source_labels
+        live_prices_native, asset_hist_native = load_market_data_private(tickers=tickers, period="2y")
+        data_source_info = data_source_labels(tickers)
+    else:
+        live_prices_native, asset_hist_native = load_market_data_with_proxies(tickers=tickers, period="2y")
+        data_source_info = {}
 
     if asset_hist_native is None or asset_hist_native.empty or asset_hist_native.dropna(how="all").empty:
         st.error("Could not load historical data.")
@@ -385,6 +391,8 @@ def build_app_context_runtime(app_scope: str):
         tx_stats_map=tx_stats_map,
     )
 
+    df["Price Source"] = df["Ticker"].map(lambda t: data_source_info.get(t, ""))
+
     cash_display_df, cash_total_value = build_cash_display_df(
         cash_balances_df,
         base_currency,
@@ -397,6 +405,7 @@ def build_app_context_runtime(app_scope: str):
         [
             "Ticker",
             "Name",
+            "Price Source",
             "Source",
             "Market",
             "Native Currency",
@@ -644,6 +653,7 @@ def build_app_context_runtime(app_scope: str):
     return {
         "app_scope": app_scope,
         "mode": mode,
+        "data_source_info": data_source_info,
         "authenticated": authenticated,
         "base_currency": base_currency,
         "profile": profile,

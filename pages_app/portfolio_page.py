@@ -99,6 +99,24 @@ def _build_performance_vs_benchmark_chart(ctx):
     return fig
 
 
+def _render_data_source_badges(ctx):
+    info = ctx.get("data_source_info", {})
+    if not info:
+        return
+    parts = []
+    for ticker, label in info.items():
+        is_live = label.startswith("Live")
+        bg = "#0d3d0d" if is_live else "#0d2340"
+        fg = "#4dff4d" if is_live else "#4db8ff"
+        parts.append(
+            f'<span style="background:{bg};color:{fg};border:1px solid {fg};'
+            f'padding:2px 9px;border-radius:10px;font-size:11px;'
+            f'font-family:\'IBM Plex Mono\',monospace;margin-right:4px;white-space:nowrap;">'
+            f"{ticker}&nbsp;·&nbsp;{label}</span>"
+        )
+    st.markdown("&nbsp;".join(parts), unsafe_allow_html=True)
+
+
 def render_portfolio_page(ctx):
     render_page_title("Portfolio")
 
@@ -141,4 +159,5 @@ def render_portfolio_page(ctx):
     st.dataframe(ctx["cash_display_df"], use_container_width=True, height=240)
 
     info_section("Portfolio Snapshot", "Current holdings, values, and performance metrics.")
+    _render_data_source_badges(ctx)
     st.dataframe(ctx["display_df"], use_container_width=True, height=360)
