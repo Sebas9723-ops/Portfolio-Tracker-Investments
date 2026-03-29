@@ -68,6 +68,7 @@ def _build_weights_vs_target_chart(ctx):
 
 def render_portfolio_page(ctx):
     render_page_title("Portfolio")
+    st.caption("BUILD CHECK PORTFOLIO V1")
 
     c1, c2, c3, c4 = st.columns(4)
     info_metric(c1, "Total Portfolio", f"{ctx['base_currency']} {ctx['total_portfolio_value']:,.2f}", "Holdings plus cash.")

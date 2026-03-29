@@ -158,6 +158,7 @@ def _estimate_required_contribution_without_selling(df, target_map, base_currenc
 
 def render_rebalancing_page(ctx):
     render_page_title("Rebalance Center")
+    st.caption("BUILD CHECK REBALANCING V1")
 
     if ctx["df"].empty:
         st.info("No portfolio data available.")

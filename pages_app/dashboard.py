@@ -62,6 +62,7 @@ def _build_dashboard_performance_chart(ctx):
 
 def render_dashboard(ctx):
     render_page_title("Dashboard")
+    st.caption("BUILD CHECK DASHBOARD V1")
 
     render_private_dashboard_logo(
         mode=ctx["mode"],
