@@ -224,16 +224,23 @@ def build_app_context_runtime(app_scope: str):
         st.rerun()
 
     if mode == "Private" and authenticated:
-        st.sidebar.info("Current shares are managed only from Private Manager.")
-        st.sidebar.caption("Transactions are kept as history and cost basis only.")
-
-    st.sidebar.header("Portfolio Inputs")
-    updated_portfolio = build_current_portfolio(
-        portfolio_data=portfolio_data,
-        prefix=prefix,
-        mode=mode,
-        disable_inputs=bool(mode == "Private" and authenticated),
-    )
+        updated_portfolio = {
+            ticker: {
+                "name": meta["name"],
+                "shares": float(meta["shares"]),
+                "base_shares": float(meta.get("base_shares", meta["shares"])),
+                "target_weight": meta.get("target_weight"),
+            }
+            for ticker, meta in portfolio_data.items()
+        }
+    else:
+        st.sidebar.header("Portfolio Inputs")
+        updated_portfolio = build_current_portfolio(
+            portfolio_data=portfolio_data,
+            prefix=prefix,
+            mode=mode,
+            disable_inputs=False,
+        )
 
     st.sidebar.header("Optimization Settings")
     profile = st.sidebar.selectbox("Investor Profile", ["Aggressive", "Balanced", "Conservative"])
