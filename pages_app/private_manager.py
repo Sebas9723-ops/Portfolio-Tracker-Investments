@@ -265,10 +265,12 @@ def render_private_manager_page(ctx):
     )
 
     cash_df = ctx.get("cash_balances_df", pd.DataFrame()).copy()
-    if not cash_df.empty:
+    cash_display_df = ctx.get("cash_display_df", pd.DataFrame()).copy()
+    if not cash_display_df.empty:
+        st.dataframe(cash_display_df, use_container_width=True, height=220)
+    elif not cash_df.empty:
         display_cash = cash_df.copy()
         display_cash.columns = ["Currency", "Amount"]
-        display_cash["Amount"] = pd.to_numeric(display_cash["Amount"], errors="coerce").fillna(0.0)
         st.dataframe(display_cash, use_container_width=True, height=220)
     else:
         st.info("No cash balances on record.")
