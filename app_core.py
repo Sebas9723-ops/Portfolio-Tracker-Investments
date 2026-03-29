@@ -733,7 +733,7 @@ def _get_worksheet_header_cached(sheet_id: str, sheet_url: str, worksheet_name: 
 def _get_worksheet_records_cached(sheet_id: str, sheet_url: str, worksheet_name: str):
     spreadsheet = _get_spreadsheet_cached(sheet_id, sheet_url)
     ws = spreadsheet.worksheet(worksheet_name)
-    return ws.get_all_records()
+    return ws.get_all_records(value_render_option="UNFORMATTED_VALUE")
 
 
 @st.cache_data(ttl=GOOGLE_SHEETS_CACHE_TTL, show_spinner=False)
