@@ -18,7 +18,6 @@ def _annualized_voo_return(ctx):
 
 def render_optimization_page(ctx):
     render_page_title("Optimization")
-    st.caption("BUILD CHECK OPTIMIZATION V1")
 
     if ctx.get("fig_frontier") is None or ctx.get("max_sharpe_row") is None or ctx.get("min_vol_row") is None:
         st.info("Not enough data to build the efficient frontier.")

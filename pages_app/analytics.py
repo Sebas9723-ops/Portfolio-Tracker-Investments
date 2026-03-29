@@ -110,7 +110,6 @@ def _build_rolling_metrics_chart(rolling_df):
 
 def render_analytics_page(ctx):
     render_page_title("Analytics")
-    st.caption("BUILD CHECK ANALYTICS V1")
 
     c1, c2, c3, c4 = st.columns(4)
     info_metric(c1, "Alpha", f"{ctx['alpha']:.2%}", "Annualized alpha versus VOO.")

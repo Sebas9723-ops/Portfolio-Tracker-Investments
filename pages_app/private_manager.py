@@ -11,10 +11,11 @@ from app_core import (
     render_page_title,
     save_private_positions_to_sheets,
 )
+from portfolio_history import save_portfolio_snapshot
 
 
 def _render_control_buttons(ctx):
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
 
     if c1.button("Refresh Market Data", use_container_width=True):
         st.rerun()
@@ -28,6 +29,15 @@ def _render_control_buttons(ctx):
             st.rerun()
         else:
             st.info("Private sync is only available in Private mode.")
+
+    if c4.button("Save Portfolio Snapshot", use_container_width=True):
+        try:
+            save_portfolio_snapshot(ctx, notes="Manual Private Manager snapshot")
+            st.cache_data.clear()
+            st.session_state["pm_save_banner"] = "Portfolio snapshot saved successfully."
+            st.rerun()
+        except Exception as e:
+            st.error(f"Could not save portfolio snapshot: {e}")
 
 
 def _build_current_positions_map(ctx):
@@ -88,7 +98,22 @@ def render_private_manager_page(ctx):
         st.warning("Private Manager is only available in Private mode.")
         return
 
+    pending_snapshot = st.session_state.pop("pm_trigger_snapshot", False)
+    pending_note = st.session_state.pop("pm_trigger_snapshot_note", "")
+
+    if pending_snapshot:
+        try:
+            save_portfolio_snapshot(ctx, notes=pending_note or "Auto snapshot from Private Manager")
+            st.cache_data.clear()
+            st.session_state["pm_save_banner"] = "Current shares updated, transaction history saved, and snapshot stored."
+        except Exception as e:
+            st.session_state["pm_save_banner"] = f"Current shares updated, but snapshot could not be stored: {e}"
+
     _render_control_buttons(ctx)
+
+    banner = st.session_state.pop("pm_save_banner", None)
+    if banner:
+        st.success(banner)
 
     info_section(
         "Current Shares Control",
@@ -200,7 +225,8 @@ def render_private_manager_page(ctx):
                 append_transaction_to_sheets(tx)
 
             st.cache_data.clear()
-            st.success("Current shares updated successfully and transaction history saved.")
+            st.session_state["pm_trigger_snapshot"] = True
+            st.session_state["pm_trigger_snapshot_note"] = "Auto snapshot after Private Manager share update"
             st.rerun()
 
         except Exception as e:
@@ -212,7 +238,7 @@ def render_private_manager_page(ctx):
 
     info_section(
         "Private Workflow",
-        "Transactions are a read-only ledger. Private Manager is the operational control layer for current shares, and each change creates a historical transaction record automatically.",
+        "Transactions are a read-only ledger. Private Manager is the operational control layer for current shares, each change creates a historical transaction record automatically, and phase 5A stores a historical portfolio snapshot.",
     )
 
     c1, c2, c3 = st.columns(3)

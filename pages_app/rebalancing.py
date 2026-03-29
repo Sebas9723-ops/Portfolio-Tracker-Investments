@@ -308,7 +308,7 @@ def _build_decision_summary(ctx, model_name, recommended_map, monitor_df, requir
     rows.append(
         {
             "Priority": 4,
-            "Decision": f"Current Sharpe {ctx['current_sharpe']:.2f} vs Recommended { _portfolio_stats_from_weight_map(ctx, recommended_map)['sharpe']:.2f}",
+            "Decision": f"Current Sharpe {ctx['current_sharpe']:.2f} vs Recommended {_portfolio_stats_from_weight_map(ctx, recommended_map)['sharpe']:.2f}",
             "Rationale": "Use this as the main optimization checkpoint.",
         }
     )
@@ -910,11 +910,6 @@ def render_rebalancing_page(ctx):
     recommended_map = _recommended_weight_map(ctx, ctx["df"], model_name)
     recommendation_stats = _portfolio_stats_from_weight_map(ctx, recommended_map)
 
-    info_section(
-        "Executive Summary",
-        "Cleaner decision layer before diving into charts and tables.",
-    )
-
     monitor_df = _build_monitor_table(
         df=ctx["df"],
         recommended_map=recommended_map,
@@ -928,12 +923,16 @@ def render_rebalancing_page(ctx):
         ctx["base_currency"],
     )
 
-    contribution_amount_preview = 0.0
+    info_section(
+        "Executive Summary",
+        "Cleaner decision layer before diving into charts and tables.",
+    )
+
     summary_df = _build_decision_summary(ctx, model_name, recommended_map, monitor_df, required_contribution)
     st.dataframe(summary_df, use_container_width=True, height=220)
 
     alerts_df = _build_alerts_table(ctx, recommended_map)
-    validation_df = _build_validation_table(ctx, recommended_map, contribution_amount_preview, float(min_trade_value))
+    validation_df = _build_validation_table(ctx, recommended_map, 0.0, float(min_trade_value))
 
     left, right = st.columns(2)
 
@@ -973,7 +972,7 @@ def render_rebalancing_page(ctx):
     st.plotly_chart(
         _build_compare_figure(ctx["df"], recommended_map),
         use_container_width=True,
-        key="rebalance_compare_chart_phase4c",
+        key="rebalance_compare_chart_phase5a",
     )
 
     info_section(
@@ -1034,7 +1033,7 @@ def render_rebalancing_page(ctx):
     st.plotly_chart(
         _build_compare_figure(ctx["df"], recommended_map, proposed_weight_map=proposed_weight_map),
         use_container_width=True,
-        key="rebalance_proposed_chart_phase4c",
+        key="rebalance_proposed_chart_phase5a",
     )
 
     execute_df = proposal_df[proposal_df["Decision"] == "Execute"].copy()
@@ -1079,19 +1078,6 @@ def render_rebalancing_page(ctx):
         allow_sells=bool(allow_sells_contribution),
     )
 
-    validation_df_live = _build_validation_table(
-        ctx,
-        recommended_map,
-        float(contribution_amount),
-        float(min_trade_value),
-    )
-
-    info_section(
-        "Live Validation Warnings",
-        "Validation refreshed using the current contribution amount and execution thresholds.",
-    )
-    st.dataframe(validation_df_live, use_container_width=True, height=220)
-
     plan_df = contribution_result["plan_df"]
     suggested_weight_map = contribution_result["suggested_weight_map"]
     executable_weight_map = contribution_result["executable_weight_map"]
@@ -1128,13 +1114,13 @@ def render_rebalancing_page(ctx):
         st.plotly_chart(
             _build_compare_figure(ctx["df"], recommended_map, proposed_weight_map=suggested_weight_map),
             use_container_width=True,
-            key="rebalance_contribution_suggested_chart_phase4c",
+            key="rebalance_contribution_suggested_chart_phase5a",
         )
 
         st.plotly_chart(
             _build_compare_figure(ctx["df"], recommended_map, proposed_weight_map=executable_weight_map),
             use_container_width=True,
-            key="rebalance_contribution_executable_chart_phase4c",
+            key="rebalance_contribution_executable_chart_phase5a",
         )
 
         _render_manual_orders(
@@ -1147,3 +1133,16 @@ def render_rebalancing_page(ctx):
             executable_orders_df,
             "No contribution trades qualified for execution under the current rules.",
         )
+
+    validation_df_live = _build_validation_table(
+        ctx,
+        recommended_map,
+        float(contribution_amount),
+        float(min_trade_value),
+    )
+
+    info_section(
+        "Live Validation Warnings",
+        "Validation refreshed using the current contribution amount and execution thresholds.",
+    )
+    st.dataframe(validation_df_live, use_container_width=True, height=220)
