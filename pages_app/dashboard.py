@@ -12,7 +12,7 @@ from app_core import (
 )
 
 
-def _build_dashboard_performance_chart(ctx):
+def _build_performance_vs_benchmark_pct_chart(ctx):
     portfolio_returns = ctx.get("portfolio_returns")
     benchmark_returns = ctx.get("benchmark_returns")
 
@@ -62,7 +62,6 @@ def _build_dashboard_performance_chart(ctx):
 
 def render_dashboard(ctx):
     render_page_title("Dashboard")
-    st.caption("BUILD CHECK DASHBOARD V1")
 
     render_private_dashboard_logo(
         mode=ctx["mode"],
@@ -91,7 +90,7 @@ def render_dashboard(ctx):
     info_metric(c7, "Sharpe Ratio", f"{ctx['sharpe']:.2f}", "Portfolio Sharpe ratio.")
     info_metric(c8, "Realized PnL", f"{ctx['base_currency']} {ctx['realized_pnl']:,.2f}", "Closed profit and loss.")
 
-    perf_fig = _build_dashboard_performance_chart(ctx)
+    perf_fig = _build_performance_vs_benchmark_pct_chart(ctx)
     if perf_fig is not None:
         info_section(
             "Performance vs Benchmark",
@@ -100,5 +99,5 @@ def render_dashboard(ctx):
         st.plotly_chart(
             perf_fig,
             use_container_width=True,
-            key="dashboard_performance_pct_chart",
+            key="dashboard_performance_pct_chart_final",
         )

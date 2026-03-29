@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
@@ -66,9 +67,56 @@ def _build_weights_vs_target_chart(ctx):
     return fig, source_label
 
 
+def _build_performance_vs_benchmark_pct_chart(ctx):
+    portfolio_returns = ctx.get("portfolio_returns")
+    benchmark_returns = ctx.get("benchmark_returns")
+
+    if portfolio_returns is None or portfolio_returns.empty:
+        return None
+
+    fig = go.Figure()
+
+    portfolio_cum = (1 + portfolio_returns).cumprod() - 1
+    fig.add_scatter(
+        x=portfolio_cum.index,
+        y=portfolio_cum,
+        mode="lines",
+        name="Portfolio",
+        hovertemplate="%{x|%Y-%m-%d}<br>Portfolio: %{y:.2%}<extra></extra>",
+    )
+
+    if benchmark_returns is not None and not benchmark_returns.empty:
+        aligned = pd.concat(
+            [portfolio_returns.rename("Portfolio"), benchmark_returns.rename("VOO")],
+            axis=1,
+        ).dropna()
+
+        if not aligned.empty:
+            voo_cum = (1 + aligned["VOO"]).cumprod() - 1
+            fig.add_scatter(
+                x=voo_cum.index,
+                y=voo_cum,
+                mode="lines",
+                name="VOO",
+                hovertemplate="%{x|%Y-%m-%d}<br>VOO: %{y:.2%}<extra></extra>",
+            )
+
+    fig.update_layout(
+        paper_bgcolor="#0b0f14",
+        plot_bgcolor="#0b0f14",
+        font=dict(color="#e6e6e6"),
+        height=420,
+        margin=dict(t=20, b=20, l=20, r=20),
+        xaxis_title="Date",
+        yaxis_title="Return",
+        yaxis=dict(tickformat=".0%"),
+        legend=dict(orientation="h", y=1.08, x=0.0),
+    )
+    return fig
+
+
 def render_portfolio_page(ctx):
     render_page_title("Portfolio")
-    st.caption("BUILD CHECK PORTFOLIO V1")
 
     c1, c2, c3, c4 = st.columns(4)
     info_metric(c1, "Total Portfolio", f"{ctx['base_currency']} {ctx['total_portfolio_value']:,.2f}", "Holdings plus cash.")
@@ -80,7 +128,7 @@ def render_portfolio_page(ctx):
 
     with left:
         info_section("Allocation", "Current portfolio allocation by market value.")
-        st.plotly_chart(ctx["fig_pie"], use_container_width=True, key="portfolio_allocation_chart_v2")
+        st.plotly_chart(ctx["fig_pie"], use_container_width=True, key="portfolio_allocation_chart_final")
 
     with right:
         fig_weights, source_label = _build_weights_vs_target_chart(ctx)
@@ -88,7 +136,19 @@ def render_portfolio_page(ctx):
             "Weights vs Target",
             f"Actual weights compared against target source: {source_label}.",
         )
-        st.plotly_chart(fig_weights, use_container_width=True, key="portfolio_weights_vs_target_chart_v2")
+        st.plotly_chart(fig_weights, use_container_width=True, key="portfolio_weights_target_chart_final")
+
+    perf_fig = _build_performance_vs_benchmark_pct_chart(ctx)
+    if perf_fig is not None:
+        info_section(
+            "Performance vs Benchmark",
+            "Portfolio cumulative return versus VOO, displayed in percentage terms.",
+        )
+        st.plotly_chart(
+            perf_fig,
+            use_container_width=True,
+            key="portfolio_performance_pct_chart_final",
+        )
 
     info_section("Cash Balances", "Cash balances by currency converted to the base currency.")
     st.dataframe(ctx["cash_display_df"], use_container_width=True, height=240)
