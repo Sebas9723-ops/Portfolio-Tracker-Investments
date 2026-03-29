@@ -301,8 +301,9 @@ def render_private_manager_page(ctx):
             try:
                 currency_up = str(cash_currency).upper().strip()
 
-                # Load fresh from Sheets to avoid stale ctx data
+                st.cache_data.clear()
                 fresh_cash = load_cash_balances_from_sheets()
+                st.info(f"DEBUG before save — {currency_up} current value in Sheets: {fresh_cash.loc[fresh_cash['currency'] == currency_up, 'amount'].values}")
 
                 if not fresh_cash.empty and currency_up in fresh_cash["currency"].values:
                     fresh_cash.loc[fresh_cash["currency"] == currency_up, "amount"] = cash_amount
@@ -312,8 +313,13 @@ def render_private_manager_page(ctx):
                         ignore_index=True,
                     )
 
+                st.info(f"DEBUG payload to save: {fresh_cash[fresh_cash['currency'] == currency_up][['currency','amount']].to_dict('records')}")
                 save_cash_balances_to_sheets(fresh_cash)
+
                 st.cache_data.clear()
+                verify = load_cash_balances_from_sheets()
+                st.info(f"DEBUG after save — {currency_up} value read back: {verify.loc[verify['currency'] == currency_up, 'amount'].values}")
+
                 st.session_state["pm_save_banner"] = f"Cash balance updated: {currency_up} {cash_amount:,.2f}"
                 st.rerun()
             except Exception as e:
