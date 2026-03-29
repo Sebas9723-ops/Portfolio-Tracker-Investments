@@ -29,6 +29,12 @@ PROXY_TICKER_MAP = {
     "IWDA.AS": "EUNL.DE",
 }
 
+# Tickers that don't follow the standard exchange currency convention.
+# Add any ticker here whose actual quote currency differs from its exchange suffix.
+TICKER_CURRENCY_OVERRIDE = {
+    "IGLN.L": "USD",  # iShares Physical Gold ETC — quoted in USD on LSE, not GBP
+}
+
 PRIVATE_POSITIONS_HEADERS = ["Ticker", "Name", "Shares"]
 TRANSACTIONS_HEADERS = ["date", "ticker", "type", "shares", "price", "fees", "notes"]
 CASH_BALANCES_HEADERS = ["currency", "amount"]
@@ -1177,6 +1183,8 @@ def build_current_portfolio(portfolio_data: dict, prefix: str, mode: str, disabl
 # =========================
 def asset_currency(ticker: str) -> str:
     ticker = str(ticker).upper().strip()
+    if ticker in TICKER_CURRENCY_OVERRIDE:
+        return TICKER_CURRENCY_OVERRIDE[ticker]
     if ticker.endswith(".DE") or ticker.endswith(".AS"):
         return "EUR"
     if ticker.endswith(".L"):
