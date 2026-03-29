@@ -310,9 +310,11 @@ def render_private_manager_page(ctx):
                     )
 
                 save_cash_balances_to_sheets(updated_cash)
-                # Store override in session_state so the next rerun reflects the new value
-                # immediately, bypassing any Sheets cache lag.
-                st.session_state["pm_cash_override"] = {currency_up: cash_amount}
+                # Keep override alive for the whole browser session so every page reflects
+                # the new value without depending on Sheets cache expiry.
+                if "pm_cash_override" not in st.session_state:
+                    st.session_state["pm_cash_override"] = {}
+                st.session_state["pm_cash_override"][currency_up] = cash_amount
                 st.session_state["pm_save_banner"] = f"Cash balance updated: {currency_up} {cash_amount:,.2f}"
                 st.rerun()
             except Exception as e:
