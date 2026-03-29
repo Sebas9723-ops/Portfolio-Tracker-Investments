@@ -924,7 +924,11 @@ def load_cash_balances_from_sheets():
         df["amount"] = 0.0
 
     df["currency"] = df["currency"].astype(str).str.strip().str.upper()
-    df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
+    # Normalize amount: Sheets may return "2,58" (locale comma) instead of "2.58"
+    df["amount"] = pd.to_numeric(
+        df["amount"].astype(str).str.replace(",", ".", regex=False),
+        errors="coerce",
+    ).fillna(0.0)
     df = df[df["currency"] != ""].copy()
 
     existing = set(df["currency"].tolist())
