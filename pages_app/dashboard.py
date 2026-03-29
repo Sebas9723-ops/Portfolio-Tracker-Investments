@@ -22,11 +22,14 @@ def _build_performance_vs_benchmark_pct_chart(ctx):
     fig = go.Figure()
 
     portfolio_cum = (1 + portfolio_returns).cumprod() - 1
+    portfolio_last = float(portfolio_cum.iloc[-1]) if not portfolio_cum.empty else 0.0
+    portfolio_name = f"Portfolio ({portfolio_last:.2%})"
+
     fig.add_scatter(
         x=portfolio_cum.index,
         y=portfolio_cum,
         mode="lines",
-        name="Portfolio",
+        name=portfolio_name,
         hovertemplate="%{x|%Y-%m-%d}<br>Portfolio: %{y:.2%}<extra></extra>",
     )
 
@@ -38,11 +41,14 @@ def _build_performance_vs_benchmark_pct_chart(ctx):
 
         if not aligned.empty:
             voo_cum = (1 + aligned["VOO"]).cumprod() - 1
+            voo_last = float(voo_cum.iloc[-1]) if not voo_cum.empty else 0.0
+            voo_name = f"VOO ({voo_last:.2%})"
+
             fig.add_scatter(
                 x=voo_cum.index,
                 y=voo_cum,
                 mode="lines",
-                name="VOO",
+                name=voo_name,
                 hovertemplate="%{x|%Y-%m-%d}<br>VOO: %{y:.2%}<extra></extra>",
             )
 
@@ -99,5 +105,5 @@ def render_dashboard(ctx):
         st.plotly_chart(
             perf_fig,
             use_container_width=True,
-            key="dashboard_performance_pct_chart_final",
+            key="dashboard_performance_pct_chart_with_labels",
         )

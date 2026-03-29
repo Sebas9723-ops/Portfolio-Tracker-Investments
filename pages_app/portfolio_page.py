@@ -77,11 +77,14 @@ def _build_performance_vs_benchmark_pct_chart(ctx):
     fig = go.Figure()
 
     portfolio_cum = (1 + portfolio_returns).cumprod() - 1
+    portfolio_last = float(portfolio_cum.iloc[-1]) if not portfolio_cum.empty else 0.0
+    portfolio_name = f"Portfolio ({portfolio_last:.2%})"
+
     fig.add_scatter(
         x=portfolio_cum.index,
         y=portfolio_cum,
         mode="lines",
-        name="Portfolio",
+        name=portfolio_name,
         hovertemplate="%{x|%Y-%m-%d}<br>Portfolio: %{y:.2%}<extra></extra>",
     )
 
@@ -93,11 +96,14 @@ def _build_performance_vs_benchmark_pct_chart(ctx):
 
         if not aligned.empty:
             voo_cum = (1 + aligned["VOO"]).cumprod() - 1
+            voo_last = float(voo_cum.iloc[-1]) if not voo_cum.empty else 0.0
+            voo_name = f"VOO ({voo_last:.2%})"
+
             fig.add_scatter(
                 x=voo_cum.index,
                 y=voo_cum,
                 mode="lines",
-                name="VOO",
+                name=voo_name,
                 hovertemplate="%{x|%Y-%m-%d}<br>VOO: %{y:.2%}<extra></extra>",
             )
 
@@ -128,7 +134,7 @@ def render_portfolio_page(ctx):
 
     with left:
         info_section("Allocation", "Current portfolio allocation by market value.")
-        st.plotly_chart(ctx["fig_pie"], use_container_width=True, key="portfolio_allocation_chart_final")
+        st.plotly_chart(ctx["fig_pie"], use_container_width=True, key="portfolio_allocation_chart_with_labels")
 
     with right:
         fig_weights, source_label = _build_weights_vs_target_chart(ctx)
@@ -136,7 +142,7 @@ def render_portfolio_page(ctx):
             "Weights vs Target",
             f"Actual weights compared against target source: {source_label}.",
         )
-        st.plotly_chart(fig_weights, use_container_width=True, key="portfolio_weights_target_chart_final")
+        st.plotly_chart(fig_weights, use_container_width=True, key="portfolio_weights_target_chart_with_labels")
 
     perf_fig = _build_performance_vs_benchmark_pct_chart(ctx)
     if perf_fig is not None:
@@ -147,7 +153,7 @@ def render_portfolio_page(ctx):
         st.plotly_chart(
             perf_fig,
             use_container_width=True,
-            key="portfolio_performance_pct_chart_final",
+            key="portfolio_performance_pct_chart_with_labels",
         )
 
     info_section("Cash Balances", "Cash balances by currency converted to the base currency.")
