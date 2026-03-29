@@ -278,12 +278,9 @@ def render_private_manager_page(ctx):
         with cc1:
             cash_currency = st.selectbox("Currency", SUPPORTED_BASE_CCY, key="pm_cash_currency")
         with cc2:
-            cash_amount = st.number_input(
-                "New Balance",
-                min_value=0.0,
-                value=0.0,
-                step=10.0,
-                format="%.2f",
+            cash_amount_raw = st.text_input(
+                "New Balance (use . as decimal separator)",
+                value="0.00",
                 key="pm_cash_amount",
             )
 
@@ -291,18 +288,24 @@ def render_private_manager_page(ctx):
         cash_submitted = st.form_submit_button("Save Cash Balance", use_container_width=True)
 
     if cash_submitted:
-        if cash_auth != get_manage_password():
+        try:
+            cash_amount = float(str(cash_amount_raw).strip().replace(",", "."))
+        except ValueError:
+            st.error(f"Invalid amount: '{cash_amount_raw}'. Use a number with . as decimal separator (e.g. 2.58).")
+            cash_amount = None
+
+        if cash_amount is not None and cash_auth != get_manage_password():
             st.error("Incorrect authorization password.")
-        else:
+        elif cash_amount is not None:
             try:
                 updated_cash = cash_df.copy()
                 currency_up = str(cash_currency).upper().strip()
 
                 if not updated_cash.empty and currency_up in updated_cash["currency"].values:
-                    updated_cash.loc[updated_cash["currency"] == currency_up, "amount"] = float(cash_amount)
+                    updated_cash.loc[updated_cash["currency"] == currency_up, "amount"] = cash_amount
                 else:
                     updated_cash = pd.concat(
-                        [updated_cash, pd.DataFrame({"currency": [currency_up], "amount": [float(cash_amount)]})],
+                        [updated_cash, pd.DataFrame({"currency": [currency_up], "amount": [cash_amount]})],
                         ignore_index=True,
                     )
 
