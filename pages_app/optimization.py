@@ -13,6 +13,75 @@ from app_core import (
 )
 
 
+def _render_risk_parity(ctx):
+    rp = ctx.get("risk_parity_result")
+    if rp is None:
+        return
+
+    info_section(
+        "Risk Parity (Equal Risk Contribution)",
+        "ERC portfolio: each asset contributes the same percentage of total portfolio volatility. "
+        "No return forecasts required — purely volatility-based.",
+    )
+
+    tickers = rp["tickers"]
+    weights = rp["weights"]
+    rc = rp["risk_contributions"]
+    port_vol = rp["portfolio_vol"]
+
+    df_ctx = ctx.get("df", pd.DataFrame())
+    current_weights = {}
+    if not df_ctx.empty and "Ticker" in df_ctx.columns and "Weight" in df_ctx.columns:
+        tot = df_ctx["Weight"].sum()
+        if tot > 0:
+            for _, row in df_ctx.iterrows():
+                current_weights[str(row["Ticker"])] = float(row["Weight"]) / tot
+
+    # Side-by-side weight comparison
+    fig = go.Figure()
+    erc_w = [weights.get(t, 0) for t in tickers]
+    cur_w = [current_weights.get(t, 0) for t in tickers]
+    fig.add_bar(x=tickers, y=cur_w, name="Current", marker_color="#4db8ff",
+                hovertemplate="%{x}<br>Current: %{y:.1%}<extra></extra>")
+    fig.add_bar(x=tickers, y=erc_w, name="ERC Target", marker_color="#f3a712",
+                hovertemplate="%{x}<br>ERC: %{y:.1%}<extra></extra>")
+    fig.update_layout(
+        barmode="group",
+        paper_bgcolor="#0b0f14",
+        plot_bgcolor="#0b0f14",
+        font=dict(color="#e6e6e6"),
+        height=320,
+        margin=dict(t=20, b=20, l=20, r=20),
+        yaxis=dict(tickformat=".0%"),
+        legend=dict(orientation="h", y=1.08),
+    )
+    st.plotly_chart(fig, use_container_width=True, key="rp_weights_chart")
+
+    # Summary table
+    rows = [
+        {
+            "Ticker": t,
+            "Current Weight": f"{current_weights.get(t, 0):.2%}",
+            "ERC Weight": f"{weights.get(t, 0):.2%}",
+            "Δ": f"{weights.get(t, 0) - current_weights.get(t, 0):+.2%}",
+            "Risk Contribution": f"{rc.get(t, 0):.2%}",
+        }
+        for t in tickers
+    ]
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.caption(
+        f"ERC Portfolio Volatility: **{port_vol:.2%}** annualized. "
+        "Each asset contributes ~equal risk share."
+    )
+
+    # Recommended shares
+    erc_weights_arr = np.array([weights.get(t, 0) for t in tickers])
+    erc_rec = build_recommended_shares_table(erc_weights_arr, tickers, df_ctx)
+    if erc_rec is not None and not erc_rec.empty:
+        with st.expander("ERC Recommended Shares", expanded=False):
+            st.dataframe(erc_rec, use_container_width=True, hide_index=True)
+
+
 def _render_black_litterman(ctx):
     asset_returns = ctx.get("asset_returns")
     usable = list(ctx.get("usable", []))
@@ -180,4 +249,5 @@ def render_optimization_page(ctx):
         info_section("Min Volatility Shares", "Recommended shares to move the current portfolio toward the minimum volatility allocation.")
         st.dataframe(mv_rec, use_container_width=True, height=300)
 
+    _render_risk_parity(ctx)
     _render_black_litterman(ctx)

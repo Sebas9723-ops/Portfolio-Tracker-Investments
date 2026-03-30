@@ -105,6 +105,42 @@ def _render_fixed_income(ctx):
     st.dataframe(fi_df, use_container_width=True, hide_index=True)
 
 
+def _render_compliance(ctx):
+    rules = ctx.get("compliance_results")
+    if not rules:
+        return
+
+    info_section(
+        "Compliance / Mandate Monitor",
+        "IPS constraint checks — green = within policy limits, red = breach.",
+    )
+
+    cols = st.columns(len(rules))
+    for i, rule in enumerate(rules):
+        passed = rule["Status"] == "PASS"
+        color = "#00c853" if passed else "#ff1744"
+        label = rule["Rule"]
+        value = rule["Value"]
+        threshold = rule["Threshold"]
+        status_icon = "✓ PASS" if passed else "✗ FAIL"
+        cols[i].markdown(
+            f"<div style='text-align:center;padding:10px 6px;border-radius:6px;"
+            f"background:#1a1f2e;border:2px solid {color}'>"
+            f"<div style='color:{color};font-size:16px;font-weight:bold'>{status_icon}</div>"
+            f"<div style='color:#e6e6e6;font-size:13px;margin:4px 0'>{label}</div>"
+            f"<div style='color:#f3a712;font-size:15px;font-weight:bold'>{value}</div>"
+            f"<div style='color:#888;font-size:11px'>Limit: {threshold}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("")
+    st.caption(
+        "Limits: Max Concentration ≤ constraint setting | Min Bonds ≥ constraint setting | "
+        "Max Drawdown ≤ 25% | Tracking Error ≤ 15% | Daily VaR 95% ≤ 3%"
+    )
+
+
 def render_risk_page(ctx):
     render_page_title("Risk")
 
@@ -153,3 +189,4 @@ def render_risk_page(ctx):
 
     _render_risk_budget(ctx)
     _render_fixed_income(ctx)
+    _render_compliance(ctx)

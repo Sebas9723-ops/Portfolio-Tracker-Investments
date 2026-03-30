@@ -29,11 +29,15 @@ from app_core import (
     build_stress_test_table,
     build_transaction_positions,
     compute_brinson_attribution,
+    compute_drawdown_episodes,
     compute_extended_ratios,
     compute_ff3_exposure,
     compute_fixed_income_analytics,
+    check_mandate_compliance,
+    compute_monthly_returns_calendar,
     compute_mwr,
     compute_risk_budget,
+    compute_risk_parity_weights,
     compute_rolling_metrics,
     compute_var_cvar,
     convert_historical_to_base,
@@ -731,7 +735,18 @@ def build_app_context_runtime(app_scope: str):
     except Exception:
         pass
 
+    monthly_calendar_df = compute_monthly_returns_calendar(portfolio_returns)
+    drawdown_episodes_df = compute_drawdown_episodes(portfolio_returns)
+    risk_parity_result = compute_risk_parity_weights(asset_returns)
+
     var_cvar = compute_var_cvar(portfolio_returns)
+    compliance_results = check_mandate_compliance(
+        df=df,
+        max_drawdown=max_drawdown,
+        tracking_error=tracking_error,
+        var_cvar=var_cvar,
+        constraints=constraints,
+    )
     fig_correlation = build_correlation_heatmap(asset_returns)
     extended_ratios = compute_extended_ratios(portfolio_returns, resolved_benchmark_returns, risk_free_rate, max_drawdown)
     mwr_result = compute_mwr(transactions_df, total_portfolio_value)
@@ -831,6 +846,10 @@ def build_app_context_runtime(app_scope: str):
         "blended_voo_weight": blended_voo_weight,
         "blended_bnd_weight": blended_bnd_weight,
         "ff3_result": ff3_result,
+        "monthly_calendar_df": monthly_calendar_df,
+        "drawdown_episodes_df": drawdown_episodes_df,
+        "risk_parity_result": risk_parity_result,
+        "compliance_results": compliance_results,
     }
 
     if _should_auto_snapshot(ctx):

@@ -932,6 +932,83 @@ def append_transaction_to_sheets(tx: dict):
     _clear_google_sheets_cache()
 
 
+TRADE_JOURNAL_HEADERS = [
+    "id", "date", "ticker", "direction", "shares", "entry_price",
+    "target_price", "stop_loss", "thesis", "status", "exit_date", "exit_price", "notes",
+]
+
+
+def connect_trade_journal_worksheet():
+    return _connect_named_worksheet("trade_journal", TRADE_JOURNAL_HEADERS)
+
+
+@st.cache_data(ttl=GOOGLE_SHEETS_CACHE_TTL, show_spinner=False)
+def load_trade_journal_from_sheets() -> pd.DataFrame:
+    sheet_id, sheet_url = _get_private_positions_sheet_locator()
+    try:
+        connect_trade_journal_worksheet()
+        records = _get_worksheet_records_cached(sheet_id, sheet_url, "trade_journal")
+    except Exception:
+        return pd.DataFrame(columns=TRADE_JOURNAL_HEADERS)
+
+    if not records:
+        return pd.DataFrame(columns=TRADE_JOURNAL_HEADERS)
+
+    df = pd.DataFrame(records)
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    for col in TRADE_JOURNAL_HEADERS:
+        if col not in df.columns:
+            df[col] = ""
+    for col in ["shares", "entry_price", "target_price", "stop_loss", "exit_price"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["exit_date"] = pd.to_datetime(df["exit_date"], errors="coerce")
+    df = df.dropna(subset=["date"])
+    df["ticker"] = df["ticker"].astype(str).str.strip().str.upper()
+    return df[TRADE_JOURNAL_HEADERS].reset_index(drop=True)
+
+
+def append_trade_journal_entry(entry: dict):
+    ws = connect_trade_journal_worksheet()
+    row = [
+        str(entry.get("id", "")),
+        str(entry.get("date", "")),
+        str(entry.get("ticker", "")).upper().strip(),
+        str(entry.get("direction", "")).upper().strip(),
+        float(entry.get("shares", 0.0)),
+        float(entry.get("entry_price", 0.0)),
+        float(entry.get("target_price", 0.0)) if entry.get("target_price") else "",
+        float(entry.get("stop_loss", 0.0)) if entry.get("stop_loss") else "",
+        str(entry.get("thesis", "")).strip(),
+        str(entry.get("status", "Active")).strip(),
+        str(entry.get("exit_date", "")).strip(),
+        float(entry.get("exit_price", 0.0)) if entry.get("exit_price") else "",
+        str(entry.get("notes", "")).strip(),
+    ]
+    ws.append_row(row, value_input_option="USER_ENTERED")
+    _clear_google_sheets_cache()
+
+
+def update_trade_journal_entry(entry_id: str, updates: dict):
+    """Update an existing trade journal row by its id column."""
+    ws = connect_trade_journal_worksheet()
+    records = ws.get_all_values()
+    if len(records) < 2:
+        return
+    header = [str(h).strip().lower() for h in records[0]]
+    id_col = header.index("id") + 1 if "id" in header else None
+    if id_col is None:
+        return
+    for i, row in enumerate(records[1:], start=2):
+        if str(row[id_col - 1]).strip() == str(entry_id).strip():
+            for field, val in updates.items():
+                if field in header:
+                    col_num = header.index(field) + 1
+                    ws.update_cell(i, col_num, val)
+            break
+    _clear_google_sheets_cache()
+
+
 def load_cash_balances_from_sheets():
     sheet_id, sheet_url = _get_private_positions_sheet_locator()
 
@@ -2837,6 +2914,214 @@ def compute_black_litterman(
         }
     except Exception:
         return None
+
+
+def compute_monthly_returns_calendar(portfolio_returns: pd.Series) -> pd.DataFrame | None:
+    """Monthly returns grid: rows=years, cols=months (Jan-Dec) + YTD."""
+    if portfolio_returns is None or portfolio_returns.empty or len(portfolio_returns) < 20:
+        return None
+
+    returns = portfolio_returns.copy()
+    returns.index = pd.to_datetime(returns.index)
+
+    monthly = returns.resample("ME").apply(lambda r: float((1 + r).prod() - 1))
+
+    years = sorted(monthly.index.year.unique())
+    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    records = []
+    for yr in years:
+        row: dict = {"Year": yr}
+        ytd = 1.0
+        for m in range(1, 13):
+            mask = (monthly.index.year == yr) & (monthly.index.month == m)
+            val = float(monthly[mask].iloc[0]) if mask.any() else None
+            row[month_names[m - 1]] = val
+            if val is not None:
+                ytd *= (1 + val)
+        row["YTD"] = float(ytd - 1)
+        records.append(row)
+
+    return pd.DataFrame(records)
+
+
+def compute_drawdown_episodes(portfolio_returns: pd.Series) -> pd.DataFrame | None:
+    """All historical drawdown episodes with peak/trough/recovery dates and durations."""
+    if portfolio_returns is None or portfolio_returns.empty or len(portfolio_returns) < 10:
+        return None
+
+    cum = (1 + portfolio_returns).cumprod()
+    cum.index = pd.to_datetime(cum.index)
+
+    episodes = []
+    in_drawdown = False
+    peak_date = cum.index[0]
+    peak_val = float(cum.iloc[0])
+    trough_date = peak_date
+    trough_val = peak_val
+
+    for dt, val in cum.items():
+        val = float(val)
+        if val >= peak_val:
+            if in_drawdown:
+                # Recovery
+                dd_pct = (trough_val - peak_val) / peak_val
+                episodes.append({
+                    "Peak Date": peak_date.date(),
+                    "Trough Date": trough_date.date(),
+                    "Recovery Date": dt.date(),
+                    "Max Drawdown %": round(dd_pct * 100, 2),
+                    "Duration (days)": (trough_date - peak_date).days,
+                    "Recovery (days)": (dt - trough_date).days,
+                })
+                in_drawdown = False
+            peak_date = dt
+            peak_val = val
+            trough_date = dt
+            trough_val = val
+        else:
+            in_drawdown = True
+            if val < trough_val:
+                trough_date = dt
+                trough_val = val
+
+    # Open drawdown (no recovery yet)
+    if in_drawdown:
+        dd_pct = (trough_val - peak_val) / peak_val
+        episodes.append({
+            "Peak Date": peak_date.date(),
+            "Trough Date": trough_date.date(),
+            "Recovery Date": None,
+            "Max Drawdown %": round(dd_pct * 100, 2),
+            "Duration (days)": (trough_date - peak_date).days,
+            "Recovery (days)": None,
+        })
+
+    if not episodes:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(episodes).sort_values("Max Drawdown %").reset_index(drop=True)
+    return df
+
+
+def compute_risk_parity_weights(
+    asset_returns: pd.DataFrame,
+    max_iter: int = 1000,
+    tol: float = 1e-8,
+) -> dict | None:
+    """Equal Risk Contribution (ERC) weights via iterative normalization."""
+    if asset_returns is None or asset_returns.empty or len(asset_returns.columns) < 2:
+        return None
+
+    returns_clean = asset_returns.dropna(how="all").fillna(0)
+    if len(returns_clean) < 30:
+        return None
+
+    tickers = list(returns_clean.columns)
+    n = len(tickers)
+    cov = returns_clean.cov().values * 252
+
+    # Iterative ERC: w_i ∝ 1 / (Cov @ w)_i until risk contributions are equal
+    w = np.ones(n) / n
+    for _ in range(max_iter):
+        sigma_p = float(np.sqrt(max(w @ cov @ w, 1e-12)))
+        marginal = (cov @ w) / sigma_p
+        w_new = w / marginal
+        w_new = w_new / w_new.sum()
+        if float(np.max(np.abs(w_new - w))) < tol:
+            w = w_new
+            break
+        w = w_new
+
+    # Compute risk contributions
+    sigma_p = float(np.sqrt(max(w @ cov @ w, 1e-12)))
+    rc = w * (cov @ w) / sigma_p
+
+    return {
+        "tickers": tickers,
+        "weights": {t: float(w[i]) for i, t in enumerate(tickers)},
+        "risk_contributions": {t: float(rc[i] / rc.sum()) for i, t in enumerate(tickers)},
+        "portfolio_vol": sigma_p,
+    }
+
+
+def check_mandate_compliance(
+    df: pd.DataFrame,
+    max_drawdown: float,
+    tracking_error: float,
+    var_cvar: dict,
+    constraints: dict,
+) -> list[dict]:
+    """IPS constraint checks — returns list of PASS/FAIL rule results."""
+    results = []
+
+    def rule(name: str, description: str, value_str: str, passed: bool, threshold_str: str):
+        results.append({
+            "Rule": name,
+            "Description": description,
+            "Value": value_str,
+            "Threshold": threshold_str,
+            "Status": "PASS" if passed else "FAIL",
+        })
+
+    if df is not None and not df.empty:
+        max_weight = float(df["Weight"].max()) if "Weight" in df.columns else 0.0
+        max_conc_limit = float(constraints.get("max_single_asset", 0.40))
+        rule(
+            "Max Concentration",
+            "No single asset may exceed the concentration limit",
+            f"{max_weight * 100:.1f}%",
+            max_weight <= max_conc_limit,
+            f"≤ {max_conc_limit * 100:.0f}%",
+        )
+
+        bonds_weight = 0.0
+        for _, row in df.iterrows():
+            ticker = str(row.get("Ticker", ""))
+            if bucket_for_ticker(ticker) == "Bonds":
+                bonds_weight += float(row.get("Weight", 0.0))
+        min_bonds_limit = float(constraints.get("min_bonds", 0.05))
+        rule(
+            "Min Bonds Allocation",
+            "Portfolio must maintain minimum fixed income exposure",
+            f"{bonds_weight * 100:.1f}%",
+            bonds_weight >= min_bonds_limit,
+            f"≥ {min_bonds_limit * 100:.0f}%",
+        )
+
+    # Max drawdown
+    max_dd_limit = 0.25  # 25% max drawdown policy limit
+    rule(
+        "Max Drawdown",
+        "Portfolio drawdown must remain within policy limits",
+        f"{abs(max_drawdown) * 100:.1f}%",
+        abs(max_drawdown) <= max_dd_limit,
+        f"≤ {max_dd_limit * 100:.0f}%",
+    )
+
+    # Tracking error
+    te_limit = 0.15  # 15% annualized
+    rule(
+        "Tracking Error",
+        "Active risk relative to benchmark must be within tolerance",
+        f"{tracking_error * 100:.1f}%" if tracking_error > 0 else "N/A",
+        tracking_error <= te_limit or tracking_error == 0.0,
+        f"≤ {te_limit * 100:.0f}%",
+    )
+
+    # VaR limit
+    if var_cvar:
+        var_95 = abs(float(var_cvar.get("hist_var_95", 0.0)))
+        var_limit = 0.03  # 3% daily VaR 95%
+        rule(
+            "Daily VaR 95%",
+            "One-day Value at Risk must remain within policy limits",
+            f"{var_95 * 100:.2f}%",
+            var_95 <= var_limit,
+            f"≤ {var_limit * 100:.1f}%",
+        )
+
+    return results
 
 
 def compute_goal_contribution(

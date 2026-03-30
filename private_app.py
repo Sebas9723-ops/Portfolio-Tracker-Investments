@@ -6,11 +6,13 @@ from pages_app.analytics import render_analytics_page
 from pages_app.dashboard import render_dashboard
 from pages_app.optimization import render_optimization_page
 from pages_app.portfolio_page import render_portfolio_page
+from pages_app.performance_calendar import render_performance_calendar_page
 from pages_app.private_manager import render_private_manager_page
 from pages_app.projections import render_projections_page
 from pages_app.rebalancing import render_rebalancing_page
 from pages_app.risk import render_risk_page
 from pages_app.scenarios import render_scenarios_page
+from pages_app.trade_journal import render_trade_journal_page
 from pages_app.transactions import render_transactions_page
 
 
@@ -88,6 +90,8 @@ _NAV_PAGES = [
     "Optimization",
     "Rebalance Center",
     "Transactions",
+    "Performance Calendar",
+    "Trade Journal",
     "Private Manager",
 ]
 
@@ -128,5 +132,9 @@ elif page_name == "Rebalance Center":
     render_rebalancing_page(ctx)
 elif page_name == "Transactions":
     render_transactions_page(ctx)
+elif page_name == "Performance Calendar":
+    render_performance_calendar_page(ctx)
+elif page_name == "Trade Journal":
+    render_trade_journal_page(ctx)
 elif page_name == "Private Manager":
     render_private_manager_page(ctx)
