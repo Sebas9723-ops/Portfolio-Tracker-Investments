@@ -7,3 +7,4 @@ gspread
 oauth2client
 pytz
 alpaca-py
+Pillow

@@ -56,6 +56,11 @@ DIVIDEND_META = {
 # UI
 # =========================
 def apply_bloomberg_style():
+    # Inject apple-touch-icon so iOS "Add to Home Screen" uses the logo
+    st.markdown(
+        '<link rel="apple-touch-icon" href="/app/static/apple-touch-icon.png">',
+        unsafe_allow_html=True,
+    )
     st.markdown(
         """
         <style>

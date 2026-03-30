@@ -13,7 +13,12 @@ from pages_app.transactions import render_transactions_page
 from pages_app.income import render_income_page
 
 
-st.set_page_config(page_title="Portfolio Dashboard", layout="wide")
+from PIL import Image as _Image
+st.set_page_config(
+    page_title="Portfolio Management SA",
+    page_icon=_Image.open("static/apple-touch-icon.png"),
+    layout="wide",
+)
 apply_bloomberg_style()
 
 ctx = build_app_context()

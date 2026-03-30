@@ -11,8 +11,10 @@ from pages_app.rebalancing import render_rebalancing_page
 from pages_app.transactions import render_transactions_page
 
 
+from PIL import Image as _Image
 st.set_page_config(
     page_title="Portfolio Management SA | Private",
+    page_icon=_Image.open("static/apple-touch-icon.png"),
     layout="wide",
 )
 
