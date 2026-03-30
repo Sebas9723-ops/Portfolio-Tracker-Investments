@@ -1070,6 +1070,7 @@ def load_private_portfolio():
         "VWCE.DE": {"name": "All World", "shares": float(p["VWCE_DE"]), "base_shares": float(p["VWCE_DE"])},
         "IGLN.L": {"name": "Gold", "shares": float(p["IGLN_L"]), "base_shares": float(p["IGLN_L"])},
         "BND": {"name": "Bonds", "shares": float(p["BND"]), "base_shares": float(p["BND"])},
+        "QQQM": {"name": "Nasdaq-100 Growth ETF", "shares": float(p.get("QQQM", 0.0)), "base_shares": float(p.get("QQQM", 0.0))},
     }
 
 
