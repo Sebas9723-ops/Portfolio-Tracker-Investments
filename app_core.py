@@ -56,9 +56,26 @@ DIVIDEND_META = {
 # UI
 # =========================
 def apply_bloomberg_style():
-    # Inject apple-touch-icon so iOS "Add to Home Screen" uses the logo
+    # Inject favicon + apple-touch-icon into <head> via JS so iOS/Chrome picks them up
     st.markdown(
-        '<link rel="apple-touch-icon" href="/app/static/apple-touch-icon.png">',
+        """
+        <script>
+        (function() {
+            var icons = [
+                {rel: 'icon', type: 'image/png', href: '/app/static/favicon.png'},
+                {rel: 'apple-touch-icon', href: '/app/static/apple-touch-icon.png'},
+                {rel: 'apple-touch-icon-precomposed', href: '/app/static/apple-touch-icon.png'},
+                {rel: 'manifest', href: '/app/static/manifest.json'},
+            ];
+            icons.forEach(function(attrs) {
+                var existing = document.querySelector('link[rel="' + attrs.rel + '"]');
+                var el = existing || document.createElement('link');
+                Object.keys(attrs).forEach(function(k) { el[k] = attrs[k]; });
+                if (!existing) document.head.appendChild(el);
+            });
+        })();
+        </script>
+        """,
         unsafe_allow_html=True,
     )
     st.markdown(

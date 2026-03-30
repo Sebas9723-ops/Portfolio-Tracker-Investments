@@ -1,0 +1,20 @@
+{
+  "name": "Portafolio Management SA",
+  "short_name": "PMSA",
+  "icons": [
+    {
+      "src": "/app/static/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    },
+    {
+      "src": "/app/static/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ],
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b0f14",
+  "theme_color": "#f3a712"
+}
