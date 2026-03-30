@@ -2432,7 +2432,6 @@ def build_app_context():
             "Value",
             "Unrealized PnL",
             "Unrealized PnL %",
-            "Realized PnL",
             "Weight %",
             "Target %",
             "Deviation %",

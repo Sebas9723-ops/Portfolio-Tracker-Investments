@@ -443,7 +443,6 @@ def build_app_context_runtime(app_scope: str):
             "Value",
             "Unrealized PnL",
             "Unrealized PnL %",
-            "Realized PnL",
             "Weight %",
             "Target %",
             "Deviation %",
