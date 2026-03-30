@@ -68,19 +68,17 @@ def apply_bloomberg_style():
     try { if (window.top !== window.parent) targets.push(window.top.document); } catch(e) {}
     targets.forEach(function(doc) {
         ['apple-touch-icon', 'apple-touch-icon-precomposed'].forEach(function(rel) {
-            if (!doc.querySelector('link[rel="' + rel + '"]')) {
-                var el = doc.createElement('link');
-                el.rel = rel;
-                el.href = src;
-                doc.head.appendChild(el);
-            }
+            var el = doc.querySelector('link[rel="' + rel + '"]') || doc.createElement('link');
+            el.rel = rel;
+            el.setAttribute('href', src);
+            if (!el.parentNode) doc.head.appendChild(el);
         });
-        if (!doc.querySelector('link[rel="manifest"]')) {
-            var mf = doc.createElement('link');
-            mf.rel = 'manifest';
-            mf.href = '/app/static/manifest.json';
-            doc.head.appendChild(mf);
-        }
+        var mf = doc.querySelector('link[rel="manifest"]') || doc.createElement('link');
+        mf.rel = 'manifest';
+        mf.setAttribute('href', '/app/static/manifest.json');
+        if (!mf.parentNode) doc.head.appendChild(mf);
+        // Override page title too
+        try { doc.title = 'Portafolio Management SA'; } catch(e) {}
     });
 })();
 </script>""",
