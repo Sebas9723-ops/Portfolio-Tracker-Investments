@@ -255,17 +255,11 @@ def build_app_context_runtime(app_scope: str):
         tx_stats_map = {}
     else:
         mode = "Private"
-        st.sidebar.markdown("### Private Access")
-        password = st.sidebar.text_input("Password", type="password")
-
-        if not password:
+        # Authentication is handled by the login page in private_app.py.
+        # By the time we reach here the session state flag is already set.
+        authenticated = bool(st.session_state.get("private_authenticated", False))
+        if not authenticated:
             st.stop()
-
-        if password != st.secrets["auth"]["password"]:
-            st.error("Incorrect password.")
-            st.stop()
-
-        authenticated = True
         private_state = _load_private_runtime_state()
         positions_sheet_available = private_state["positions_sheet_available"]
         positions_sheet_error = private_state["positions_sheet_error"]
