@@ -230,6 +230,7 @@ def render_portfolio_page(ctx):
         df_fresh["Price Source"] = df_fresh["Ticker"].map(
             lambda t: ctx.get("data_source_info", {}).get(t, "")
         )
+        df_fresh["Market Status"] = df_fresh["Ticker"].map(_market_status)
 
         total_portfolio = pnl["holdings_value"] + ctx["cash_total_value"]
 
@@ -239,7 +240,7 @@ def render_portfolio_page(ctx):
         info_metric(c3, "Unrealized PnL", f"{ctx['base_currency']} {pnl['unrealized_pnl']:,.2f}", "Open profit and loss.")
 
         display_cols = [c for c in [
-            "Ticker", "Name", "Price Source", "Source", "Market", "Native Currency",
+            "Ticker", "Name", "Market Status", "Price Source", "Source", "Market", "Native Currency",
             "Shares", "Avg Cost", "Price", "Invested Capital", "Value",
             "Unrealized PnL", "Unrealized PnL %",
             "Weight %", "Target %", "Deviation %",
