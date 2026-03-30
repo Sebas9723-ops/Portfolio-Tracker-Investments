@@ -172,6 +172,65 @@ def _estimate_required_contribution_without_selling(df, target_map, base_currenc
     return required_contribution, out, ""
 
 
+def _build_contribution_plan(df, target_map, contribution_base, base_currency):
+    """
+    Allocate a cash contribution across tickers to close underweight gaps
+    toward max Sharpe targets. Scales proportionally if total gap > contribution.
+    """
+    if df.empty or contribution_base <= 0:
+        return pd.DataFrame()
+
+    total_current = float(df["Value"].sum())
+    total_after = total_current + contribution_base
+
+    gaps = {}
+    for _, row in df.iterrows():
+        ticker = str(row["Ticker"])
+        current_value = float(row["Value"])
+        target_weight = float(target_map.get(ticker, 0.0))
+        target_value = target_weight * total_after
+        gap = target_value - current_value
+        gaps[ticker] = max(gap, 0.0)
+
+    total_gap = sum(gaps.values())
+
+    rows = []
+    for _, row in df.iterrows():
+        ticker = str(row["Ticker"])
+        name = str(row["Name"])
+        current_value = float(row["Value"])
+        current_shares = float(row["Shares"])
+        price = float(row["Price"])
+        target_weight = float(target_map.get(ticker, 0.0))
+        gap = gaps[ticker]
+
+        if total_gap > 0:
+            if total_gap <= contribution_base:
+                buy_value = gap
+            else:
+                buy_value = gap / total_gap * contribution_base
+        else:
+            buy_value = 0.0
+
+        buy_shares = buy_value / price if price > 0 else 0.0
+        new_value = current_value + buy_value
+        new_weight = new_value / total_after * 100.0 if total_after > 0 else 0.0
+        current_weight = current_value / total_current * 100.0 if total_current > 0 else 0.0
+
+        rows.append({
+            "Ticker": ticker,
+            "Name": name,
+            "Current Weight %": round(current_weight, 2),
+            "Target Weight %": round(target_weight * 100.0, 2),
+            f"Buy ({base_currency})": round(buy_value, 2),
+            "Buy Shares": round(buy_shares, 4),
+            "Resulting Weight %": round(new_weight, 2),
+        })
+
+    out = pd.DataFrame(rows).sort_values(f"Buy ({base_currency})", ascending=False).reset_index(drop=True)
+    return out
+
+
 def _build_live_validation_table(ctx, policy_map, max_sharpe_map):
     rows = []
 
@@ -281,6 +340,111 @@ def render_rebalancing_page(ctx):
         use_container_width=True,
         height=340,
     )
+
+    # ── Contribution Engine ────────────────────────────────────────────────────
+    info_section(
+        "Contribution Planner",
+        "Enter how much you want to invest and the engine will tell you how to allocate it "
+        "across your portfolio to move closer to the Max Sharpe target weights.",
+    )
+
+    from app_core import SUPPORTED_BASE_CCY
+    col_amt, col_ccy, col_btn = st.columns([3, 1, 1])
+    with col_amt:
+        contribution_amount = st.number_input(
+            "Contribution Amount",
+            min_value=0.0,
+            value=1000.0,
+            step=100.0,
+            format="%.2f",
+            label_visibility="collapsed",
+        )
+    with col_ccy:
+        contribution_ccy = st.selectbox(
+            "Currency",
+            SUPPORTED_BASE_CCY,
+            index=SUPPORTED_BASE_CCY.index(ctx["base_currency"]) if ctx["base_currency"] in SUPPORTED_BASE_CCY else 0,
+            label_visibility="collapsed",
+        )
+    with col_btn:
+        run_contribution = st.button("Calculate", use_container_width=True)
+
+    if run_contribution or contribution_amount > 0:
+        fx_prices = ctx.get("fx_prices", {})
+        fx_hist = ctx.get("fx_hist", pd.DataFrame())
+        base_currency = ctx["base_currency"]
+
+        if contribution_ccy == base_currency:
+            contribution_base = contribution_amount
+        else:
+            from app_core import get_fx_rate_current
+            pair = f"{contribution_ccy}{base_currency}=X"
+            rate = get_fx_rate_current(contribution_ccy, base_currency, fx_prices, fx_hist)
+            if rate and rate > 0:
+                contribution_base = contribution_amount * rate
+            else:
+                st.warning(f"Could not convert {contribution_ccy} → {base_currency}. Treating as {base_currency}.")
+                contribution_base = contribution_amount
+
+        if contribution_base > 0:
+            plan_df = _build_contribution_plan(
+                ctx["df"], max_sharpe_map, contribution_base, base_currency
+            )
+
+            if not plan_df.empty:
+                total_allocated = plan_df[f"Buy ({base_currency})"].sum()
+                unallocated = max(contribution_base - total_allocated, 0.0)
+
+                m1, m2, m3 = st.columns(3)
+                info_metric(
+                    m1,
+                    f"Contribution ({contribution_ccy})",
+                    f"{contribution_ccy} {contribution_amount:,.2f}",
+                    "Amount entered by the user.",
+                )
+                info_metric(
+                    m2,
+                    f"Allocated ({base_currency})",
+                    f"{base_currency} {total_allocated:,.2f}",
+                    "Total amount allocated across tickers.",
+                )
+                info_metric(
+                    m3,
+                    f"Unallocated ({base_currency})",
+                    f"{base_currency} {unallocated:,.2f}",
+                    "Remaining cash after allocation (all targets already met or rounding).",
+                )
+
+                st.dataframe(plan_df, use_container_width=True, height=280)
+
+                fig_contrib = go.Figure()
+                fig_contrib.add_bar(
+                    x=plan_df["Ticker"],
+                    y=plan_df["Current Weight %"],
+                    name="Current Weight %",
+                )
+                fig_contrib.add_bar(
+                    x=plan_df["Ticker"],
+                    y=plan_df["Resulting Weight %"],
+                    name="Resulting Weight %",
+                )
+                fig_contrib.add_bar(
+                    x=plan_df["Ticker"],
+                    y=plan_df["Target Weight %"],
+                    name="Max Sharpe Target %",
+                )
+                fig_contrib.update_layout(
+                    barmode="group",
+                    paper_bgcolor="#0b0f14",
+                    plot_bgcolor="#0b0f14",
+                    font=dict(color="#e6e6e6"),
+                    height=350,
+                    margin=dict(t=20, b=20, l=20, r=20),
+                    xaxis_title="Ticker",
+                    yaxis_title="Weight %",
+                    legend=dict(orientation="h", y=1.08, x=0.0),
+                )
+                st.plotly_chart(fig_contrib, use_container_width=True, key="contribution_chart")
 
     required_contribution, required_df, msg = _estimate_required_contribution_without_selling(
         ctx["df"],
