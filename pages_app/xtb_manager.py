@@ -67,13 +67,18 @@ def _render_connection_status(ctx):
 # ── Live positions ─────────────────────────────────────────────────────────────
 
 def _render_positions(ctx):
-    from xtb_client import (
-        load_xtb_positions, trades_to_shares, build_positions_comparison
-    )
+    from xtb_client import load_xtb_positions, trades_to_shares, build_positions_comparison, resolve_ticker
+
+    xtb_source = ctx.get("xtb_source_tickers", [])
+    if xtb_source:
+        st.success(
+            f"Shares de **{', '.join(xtb_source)}** sincronizadas automáticamente desde XTB "
+            f"(actualiza cada 60 s) ✅"
+        )
 
     info_section(
         "Posiciones en XTB",
-        "Posiciones abiertas leídas directamente de XTB en tiempo real (actualiza cada 60 s).",
+        "Posiciones abiertas leídas directamente de XTB (actualiza cada 60 s).",
     )
 
     trades, err = load_xtb_positions()
@@ -85,76 +90,34 @@ def _render_positions(ctx):
         st.info("No hay posiciones abiertas en XTB.")
         return
 
-    # Raw positions table
     ccy = ctx.get("base_currency", "USD")
     rows = []
     total_profit = 0.0
     for t in trades:
         profit = float(t.get("profit", 0.0))
         total_profit += profit
+        sym = str(t.get("symbol", ""))
         rows.append({
-            "Símbolo XTB":   t.get("symbol", ""),
-            "Shares":        round(float(t.get("volume", 0.0)), 4),
-            "Precio apertura": round(float(t.get("open_price", 0.0)), 4),
+            "Símbolo XTB":      sym,
+            "App Ticker":       resolve_ticker(sym) or "—",
+            "Shares":           round(float(t.get("volume", 0.0)), 4),
+            "Precio apertura":  round(float(t.get("open_price", 0.0)), 4),
             "P&L no realizado": round(profit, 2),
-            "Posición ID":   t.get("position", ""),
+            "Posición ID":      t.get("position", ""),
         })
 
     df_pos = pd.DataFrame(rows)
     st.dataframe(df_pos, use_container_width=True, hide_index=True)
     st.caption(f"P&L total no realizado: **{ccy} {total_profit:,.2f}**")
 
-    # Comparison with app-tracked shares
     info_section(
         "Comparación XTB vs App",
-        "Compara las shares que XTB registra con las que tiene guardadas la app.",
+        "Las shares se sincronizan automáticamente — esta tabla confirma el estado.",
     )
     xtb_shares = trades_to_shares(trades)
     app_df = ctx.get("df", pd.DataFrame())
     comp = build_positions_comparison(xtb_shares, app_df)
-
-    out_of_sync = comp[~comp["In Sync"]]
-    if out_of_sync.empty:
-        st.success("Todo sincronizado ✅ — las shares en la app coinciden con XTB.")
-    else:
-        st.warning(f"{len(out_of_sync)} posición(es) fuera de sincronía.")
-
-    comp["In Sync"] = comp["In Sync"].map(lambda v: "✅" if v else "❌")
     st.dataframe(comp, use_container_width=True, hide_index=True)
-
-    # Sync button
-    if not out_of_sync.empty:
-        st.markdown("---")
-        st.markdown("**Sincronizar posiciones** — escribe las shares de XTB en Google Sheets.")
-        if st.button("⬇️ Sincronizar shares desde XTB", type="primary", key="xtb_sync_btn"):
-            _sync_positions_to_sheets(xtb_shares, ctx)
-
-
-def _sync_positions_to_sheets(xtb_shares: dict[str, float], ctx):
-    """Write XTB share counts to Google Sheets positions tab."""
-    try:
-        from app_core import _connect_named_worksheet, _clear_google_sheets_cache, _get_private_positions_sheet_locator
-
-        sheet_id, sheet_url = _get_private_positions_sheet_locator()
-        ws = _connect_named_worksheet("positions", ["ticker", "shares"])
-
-        records = ws.get_all_records()
-        existing = {str(r.get("ticker", "")).strip(): i + 2 for i, r in enumerate(records)}
-
-        updated = 0
-        for ticker, shares in xtb_shares.items():
-            if ticker in existing:
-                row_num = existing[ticker]
-                ws.update_cell(row_num, 2, round(shares, 6))
-            else:
-                ws.append_row([ticker, round(shares, 6)], value_input_option="RAW")
-            updated += 1
-
-        _clear_google_sheets_cache()
-        st.cache_data.clear()
-        st.success(f"✅ {updated} posición(es) sincronizadas en Google Sheets. Recarga la app para ver los cambios.")
-    except Exception as e:
-        st.error(f"Error al sincronizar: {e}")
 
 
 # ── Transaction history import ─────────────────────────────────────────────────
