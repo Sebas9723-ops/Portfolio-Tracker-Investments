@@ -101,7 +101,7 @@ def save_portfolio_snapshot(ctx, notes=""):
         str(notes).strip(),
     ]
 
-    ws.append_row(row, value_input_option="USER_ENTERED")
+    ws.append_row(row, value_input_option="RAW")
 
 
 def load_portfolio_snapshots():
