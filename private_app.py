@@ -23,18 +23,23 @@ apply_bloomberg_style()
 st.sidebar.markdown("## Portfolio Management SA")
 st.sidebar.caption("Private management version")
 
+_NAV_PAGES = [
+    "Dashboard",
+    "Portfolio",
+    "Analytics",
+    "Optimization",
+    "Rebalance Center",
+    "Transactions",
+    "Private Manager",
+]
+
+if st.session_state.get("private_page_navigation") not in _NAV_PAGES:
+    st.session_state["private_page_navigation"] = "Dashboard"
+
 st.sidebar.markdown("### Navigation")
 page_name = st.sidebar.selectbox(
     "Page",
-    [
-        "Dashboard",
-        "Portfolio",
-        "Analytics",
-        "Optimization",
-        "Rebalance Center",
-        "Transactions",
-        "Private Manager",
-    ],
+    _NAV_PAGES,
     key="private_page_navigation",
     label_visibility="collapsed",
 )
