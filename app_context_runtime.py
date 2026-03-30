@@ -1,7 +1,10 @@
+from datetime import datetime, timezone, timedelta
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import pytz
 import streamlit as st
 
 from portfolio import public_portfolio
@@ -38,6 +41,45 @@ from app_core import (
     reset_mode_state,
     simulate_constrained_efficient_frontier,
 )
+
+
+_COLOMBIA_TZ = pytz.timezone("America/Bogota")
+_SNAPSHOT_TRIGGER_HOUR = 18  # 6pm Colombia
+
+
+def _should_auto_snapshot(ctx: dict) -> bool:
+    """True if it's past 6pm Colombia today and no snapshot has been saved yet today."""
+    if ctx.get("app_scope") != "private" or not ctx.get("authenticated"):
+        return False
+
+    now_col = datetime.now(_COLOMBIA_TZ)
+    if now_col.hour < _SNAPSHOT_TRIGGER_HOUR:
+        return False
+
+    today_col = now_col.date()
+
+    # Avoid saving more than once per session per day
+    last_auto = st.session_state.get("last_auto_snapshot_date")
+    if last_auto == str(today_col):
+        return False
+
+    # Check sheets for an existing snapshot today
+    try:
+        from pages_app.portfolio_history import load_portfolio_snapshots, filter_snapshots_for_context
+        snaps = load_portfolio_snapshots()
+        if not snaps.empty:
+            filtered = filter_snapshots_for_context(snaps, ctx.get("mode"), ctx.get("base_currency"))
+            if not filtered.empty:
+                last_ts = pd.to_datetime(filtered["timestamp"].iloc[-1], errors="coerce")
+                if pd.notna(last_ts):
+                    last_date = last_ts.astimezone(_COLOMBIA_TZ).date() if last_ts.tzinfo else last_ts.date()
+                    if last_date >= today_col:
+                        st.session_state["last_auto_snapshot_date"] = str(today_col)
+                        return False
+    except Exception:
+        pass
+
+    return True
 
 
 def _normalize_weight_map(weight_map: dict, tickers: list[str]) -> dict[str, float]:
@@ -676,7 +718,7 @@ def build_app_context_runtime(app_scope: str):
         fx_hist=fx_hist,
     )
 
-    return {
+    ctx = {
         "app_scope": app_scope,
         "mode": mode,
         "data_source_info": data_source_info,
@@ -751,3 +793,13 @@ def build_app_context_runtime(app_scope: str):
         "fx_prices": fx_prices,
         "fx_hist": fx_hist,
     }
+
+    if _should_auto_snapshot(ctx):
+        try:
+            from pages_app.portfolio_history import save_portfolio_snapshot
+            save_portfolio_snapshot(ctx, notes="Auto snapshot — market close 6pm Colombia")
+            st.session_state["last_auto_snapshot_date"] = str(datetime.now(_COLOMBIA_TZ).date())
+        except Exception:
+            pass
+
+    return ctx

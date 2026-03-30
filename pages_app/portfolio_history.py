@@ -170,21 +170,21 @@ def build_snapshot_timeline_figure(snapshots_df, base_currency):
     fig.add_scatter(
         x=snapshots_df["timestamp"],
         y=snapshots_df["total_portfolio_value"],
-        mode="lines",
+        mode="lines+markers",
         name="Total Portfolio",
         hovertemplate="%{x|%Y-%m-%d %H:%M}<br>Total: %{y:,.2f}<extra></extra>",
     )
     fig.add_scatter(
         x=snapshots_df["timestamp"],
         y=snapshots_df["holdings_value"],
-        mode="lines",
+        mode="lines+markers",
         name="Holdings",
         hovertemplate="%{x|%Y-%m-%d %H:%M}<br>Holdings: %{y:,.2f}<extra></extra>",
     )
     fig.add_scatter(
         x=snapshots_df["timestamp"],
         y=snapshots_df["cash_total_value"],
-        mode="lines",
+        mode="lines+markers",
         name="Cash",
         hovertemplate="%{x|%Y-%m-%d %H:%M}<br>Cash: %{y:,.2f}<extra></extra>",
     )
@@ -229,7 +229,7 @@ def build_allocation_history_figure(snapshots_df, top_n=5):
         fig.add_scatter(
             x=series_x,
             y=series_y,
-            mode="lines",
+            mode="lines+markers",
             name=ticker,
             hovertemplate="%{x|%Y-%m-%d %H:%M}<br>" + ticker + ": %{y:.2f}%<extra></extra>",
         )
