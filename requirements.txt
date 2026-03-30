@@ -9,3 +9,4 @@ pytz
 alpaca-py
 Pillow
 reportlab>=4.0
+websocket-client>=1.6
