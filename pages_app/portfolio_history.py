@@ -166,6 +166,9 @@ def build_snapshot_timeline_figure(snapshots_df, base_currency):
     if snapshots_df is None or snapshots_df.empty:
         return None
 
+    y_max = float(snapshots_df["total_portfolio_value"].max()) * 1.15
+    y_max = max(y_max, 1.0)
+
     fig = go.Figure()
     fig.add_scatter(
         x=snapshots_df["timestamp"],
@@ -196,7 +199,7 @@ def build_snapshot_timeline_figure(snapshots_df, base_currency):
         height=390,
         margin=dict(t=20, b=20, l=20, r=20),
         xaxis_title="Snapshot Time",
-        yaxis_title=f"Value ({base_currency})",
+        yaxis=dict(title=f"Value ({base_currency})", range=[0, y_max]),
         legend=dict(orientation="h", y=1.08, x=0.0),
     )
     return fig
@@ -241,7 +244,7 @@ def build_allocation_history_figure(snapshots_df, top_n=5):
         height=390,
         margin=dict(t=20, b=20, l=20, r=20),
         xaxis_title="Snapshot Time",
-        yaxis_title="Weight %",
+        yaxis=dict(title="Weight %", range=[0, 100]),
         legend=dict(orientation="h", y=1.08, x=0.0),
     )
     return fig
