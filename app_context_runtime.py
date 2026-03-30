@@ -19,6 +19,7 @@ from app_core import (
     backfill_missing_proxy_history,
     build_benchmark_returns,
     build_cash_display_df,
+    build_correlation_heatmap,
     build_current_portfolio,
     build_dividend_insights,
     build_fx_data,
@@ -26,7 +27,11 @@ from app_core import (
     build_portfolio_returns,
     build_stress_test_table,
     build_transaction_positions,
+    compute_brinson_attribution,
+    compute_extended_ratios,
+    compute_mwr,
     compute_rolling_metrics,
+    compute_var_cvar,
     convert_historical_to_base,
     get_default_constraints,
     get_mode_prefix,
@@ -710,6 +715,12 @@ def build_app_context_runtime(app_scope: str):
 
     rolling_df = compute_rolling_metrics(portfolio_returns, resolved_benchmark_returns, risk_free_rate, rolling_window)
 
+    var_cvar = compute_var_cvar(portfolio_returns)
+    fig_correlation = build_correlation_heatmap(asset_returns)
+    extended_ratios = compute_extended_ratios(portfolio_returns, resolved_benchmark_returns, risk_free_rate, max_drawdown)
+    mwr_result = compute_mwr(transactions_df, total_portfolio_value)
+    brinson_df = compute_brinson_attribution(df, asset_returns, policy_target_map, resolved_benchmark_returns)
+
     annual_dividend_df, dividend_calendar_df, collected_dividends_df, estimated_annual_dividends, dividends_ytd, dividends_total = build_dividend_insights(
         df=df,
         dividends_df=dividends_df,
@@ -792,6 +803,11 @@ def build_app_context_runtime(app_scope: str):
         "rolling_df": rolling_df,
         "fx_prices": fx_prices,
         "fx_hist": fx_hist,
+        "var_cvar": var_cvar,
+        "fig_correlation": fig_correlation,
+        "extended_ratios": extended_ratios,
+        "mwr_result": mwr_result,
+        "brinson_df": brinson_df,
     }
 
     if _should_auto_snapshot(ctx):
@@ -809,5 +825,14 @@ def build_app_context_runtime(app_scope: str):
             send_monthly_report(ctx, month_str)
     except Exception:
         pass
+
+    try:
+        from alerts import check_alert_conditions, should_send_alerts, send_alert_email
+        active_alerts = check_alert_conditions(ctx)
+        ctx["active_alerts"] = active_alerts
+        if should_send_alerts(ctx, active_alerts):
+            send_alert_email(active_alerts, ctx)
+    except Exception:
+        ctx["active_alerts"] = []
 
     return ctx

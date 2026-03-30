@@ -1,7 +1,7 @@
 import plotly.graph_objects as go
 import streamlit as st
 
-from app_core import info_metric, info_section, render_page_title
+from app_core import info_metric, info_section, render_page_title, compute_twr
 
 
 def _compute_relative_metrics(ctx):
@@ -155,6 +155,95 @@ def _build_rolling_metrics_chart(rolling_df):
     return fig
 
 
+def _fmt(v, fmt=".2%", fallback="—") -> str:
+    try:
+        return format(float(v), fmt)
+    except Exception:
+        return fallback
+
+
+def _render_extended_ratios(ctx):
+    er = ctx.get("extended_ratios", {})
+    if not er:
+        return
+    info_section(
+        "Extended Ratios",
+        "Sortino penalizes only downside volatility. Calmar = return / max drawdown. "
+        "Upside/Downside Capture vs VOO. Omega = gain potential / loss potential.",
+    )
+    c1, c2, c3, c4, c5 = st.columns(5)
+    info_metric(c1, "Sortino", _fmt(er.get("sortino"), ".2f"), "Return per unit of downside risk.")
+    info_metric(c2, "Calmar", _fmt(er.get("calmar"), ".2f"), "Annualized return / |max drawdown|.")
+    info_metric(c3, "Upside Capture", _fmt(er.get("upside_capture"), ".1f") + "%" if er.get("upside_capture") is not None else "—", "% of benchmark upside captured.")
+    info_metric(c4, "Downside Capture", _fmt(er.get("downside_capture"), ".1f") + "%" if er.get("downside_capture") is not None else "—", "% of benchmark downside suffered.")
+    info_metric(c5, "Omega", _fmt(er.get("omega"), ".2f"), "Gain potential over loss potential above risk-free rate.")
+
+
+def _render_returns_comparison(ctx):
+    mwr = ctx.get("mwr_result", {})
+    twr_result: dict = {}
+
+    # TWR — computed lazily from snapshots
+    try:
+        from pages_app.portfolio_history import load_portfolio_snapshots, filter_snapshots_for_context
+        snaps = load_portfolio_snapshots()
+        if not snaps.empty:
+            filtered = filter_snapshots_for_context(snaps, ctx.get("mode"), ctx.get("base_currency"))
+            twr_result = compute_twr(filtered, ctx.get("transactions_df"))
+    except Exception:
+        pass
+
+    twr_val = twr_result.get("twr")
+    mwr_val = mwr.get("mwr")
+    n_periods = twr_result.get("n_periods", 0)
+    n_tx = mwr.get("n_transactions", 0)
+    start = twr_result.get("start_date", "—")
+    end = twr_result.get("end_date", "—")
+
+    info_section(
+        "Return Measures",
+        "TWR (Time-Weighted) is the institutional standard — eliminates the effect of cash flow timing. "
+        "MWR (Money-Weighted / IRR) reflects your actual investor experience including when you deployed capital.",
+    )
+    c1, c2, c3, c4 = st.columns(4)
+    info_metric(c1, "TWR", _fmt(twr_val) if twr_val is not None else "—", f"Chain-linked over {n_periods} snapshots ({start} → {end}).")
+    info_metric(c2, "MWR (IRR)", _fmt(mwr_val) if mwr_val is not None else "—", f"Annualized IRR from {n_tx} transactions.")
+    info_metric(c3, "Historical Return", _fmt(ctx.get("total_return")), "Cumulative return from price history.")
+    excess = (twr_val or 0.0) - (mwr_val or 0.0) if twr_val is not None and mwr_val is not None else None
+    info_metric(c4, "TWR − MWR", _fmt(excess) if excess is not None else "—", "Positive = timing helped; Negative = timing hurt.")
+
+
+def _render_brinson(ctx):
+    brinson_df = ctx.get("brinson_df")
+    if brinson_df is None or brinson_df.empty:
+        return
+
+    info_section(
+        "Brinson-Hood-Beebower Attribution",
+        "Decomposes active return vs VOO benchmark per asset. "
+        "Allocation = effect of over/underweighting. Selection = effect of asset return vs benchmark. "
+        "Interaction = combined weight × return divergence.",
+    )
+    st.dataframe(brinson_df, use_container_width=True, height=300)
+
+    fig = go.Figure()
+    fig.add_bar(x=brinson_df["Ticker"], y=brinson_df["Allocation Effect"], name="Allocation")
+    fig.add_bar(x=brinson_df["Ticker"], y=brinson_df["Selection Effect"], name="Selection")
+    fig.add_bar(x=brinson_df["Ticker"], y=brinson_df["Interaction Effect"], name="Interaction")
+    fig.update_layout(
+        barmode="stack",
+        paper_bgcolor="#0b0f14",
+        plot_bgcolor="#0b0f14",
+        font=dict(color="#e6e6e6"),
+        height=360,
+        margin=dict(t=20, b=20, l=20, r=20),
+        xaxis_title="Ticker",
+        yaxis_title="Attribution (%)",
+        legend=dict(orientation="h", y=1.08, x=0.0),
+    )
+    st.plotly_chart(fig, use_container_width=True, key="analytics_brinson_chart")
+
+
 def render_analytics_page(ctx):
     render_page_title("Analytics")
 
@@ -182,6 +271,10 @@ def render_analytics_page(ctx):
             use_container_width=True,
             key="analytics_performance_pct_chart_fixed_v2",
         )
+
+    _render_extended_ratios(ctx)
+    _render_returns_comparison(ctx)
+    _render_brinson(ctx)
 
     rolling_fig = _build_rolling_metrics_chart(ctx.get("rolling_df"))
     if rolling_fig is not None:

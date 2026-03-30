@@ -7,7 +7,9 @@ from pages_app.dashboard import render_dashboard
 from pages_app.optimization import render_optimization_page
 from pages_app.portfolio_page import render_portfolio_page
 from pages_app.private_manager import render_private_manager_page
+from pages_app.projections import render_projections_page
 from pages_app.rebalancing import render_rebalancing_page
+from pages_app.risk import render_risk_page
 from pages_app.transactions import render_transactions_page
 
 
@@ -27,6 +29,8 @@ _NAV_PAGES = [
     "Dashboard",
     "Portfolio",
     "Analytics",
+    "Risk",
+    "Projections",
     "Optimization",
     "Rebalance Center",
     "Transactions",
@@ -54,6 +58,10 @@ elif page_name == "Portfolio":
     render_portfolio_page(ctx)
 elif page_name == "Analytics":
     render_analytics_page(ctx)
+elif page_name == "Risk":
+    render_risk_page(ctx)
+elif page_name == "Projections":
+    render_projections_page(ctx)
 elif page_name == "Optimization":
     render_optimization_page(ctx)
 elif page_name == "Rebalance Center":

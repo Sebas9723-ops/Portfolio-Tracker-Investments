@@ -2203,6 +2203,360 @@ def compute_rolling_metrics(portfolio_returns: pd.Series, benchmark_returns: pd.
 
 
 # =========================
+# INSTITUTIONAL RISK METRICS
+# =========================
+
+def compute_var_cvar(
+    portfolio_returns: pd.Series,
+    confidence_levels: list | None = None,
+) -> dict:
+    """Historical and parametric VaR/CVaR at 95% and 99%."""
+    if confidence_levels is None:
+        confidence_levels = [0.95, 0.99]
+
+    result: dict = {}
+    if portfolio_returns is None or portfolio_returns.empty:
+        return result
+
+    r = pd.to_numeric(portfolio_returns, errors="coerce").dropna()
+    if len(r) < 30:
+        return result
+
+    mu = float(r.mean())
+    sigma = float(r.std())
+    _Z = {0.95: 1.6449, 0.99: 2.3263}
+
+    for c in confidence_levels:
+        lbl = int(c * 100)
+        # Historical
+        hist_var = -float(np.percentile(r, (1 - c) * 100))
+        tail = r[r <= -hist_var]
+        hist_cvar = -float(tail.mean()) if not tail.empty else hist_var
+        # Parametric (normal)
+        z = _Z.get(c, 1.6449)
+        param_var = float(-(mu - z * sigma))
+        # Parametric CVaR: E[loss | loss > VaR] = -mu + sigma * phi(z) / (1-c)
+        phi_z = float(np.exp(-0.5 * z ** 2) / np.sqrt(2 * np.pi))
+        param_cvar = float(-(mu - sigma * phi_z / (1 - c)))
+
+        result[f"hist_var_{lbl}"] = hist_var
+        result[f"hist_cvar_{lbl}"] = hist_cvar
+        result[f"param_var_{lbl}"] = param_var
+        result[f"param_cvar_{lbl}"] = param_cvar
+
+    result["n_observations"] = len(r)
+    return result
+
+
+def build_correlation_heatmap(asset_returns: pd.DataFrame) -> go.Figure | None:
+    """Correlation heatmap for all assets."""
+    if asset_returns is None or asset_returns.empty or asset_returns.shape[1] < 2:
+        return None
+
+    corr = asset_returns.corr().round(2)
+    tickers = corr.columns.tolist()
+    z = corr.values
+
+    fig = go.Figure(go.Heatmap(
+        z=z,
+        x=tickers,
+        y=tickers,
+        zmin=-1,
+        zmax=1,
+        colorscale="RdBu",
+        text=[[f"{v:.2f}" for v in row] for row in z],
+        texttemplate="%{text}",
+        hovertemplate="%{y} / %{x}: %{z:.2f}<extra></extra>",
+        showscale=True,
+    ))
+    fig.update_layout(
+        paper_bgcolor="#0b0f14",
+        plot_bgcolor="#0b0f14",
+        font=dict(color="#e6e6e6"),
+        height=420,
+        margin=dict(t=20, b=80, l=80, r=20),
+    )
+    return fig
+
+
+def compute_extended_ratios(
+    portfolio_returns: pd.Series,
+    benchmark_returns: pd.Series | None,
+    risk_free_rate: float,
+    max_drawdown: float,
+) -> dict:
+    """Sortino, Calmar, Upside/Downside Capture, Omega."""
+    result = {
+        "sortino": None,
+        "calmar": None,
+        "upside_capture": None,
+        "downside_capture": None,
+        "omega": None,
+    }
+
+    if portfolio_returns is None or portfolio_returns.empty:
+        return result
+
+    r = pd.to_numeric(portfolio_returns, errors="coerce").dropna()
+    if len(r) < 30:
+        return result
+
+    ann_return = float((1 + r).prod() ** (252 / len(r)) - 1)
+
+    # Sortino
+    downside = r[r < 0]
+    if not downside.empty:
+        ds_std = float(downside.std() * np.sqrt(252))
+        if ds_std > 0:
+            result["sortino"] = (ann_return - risk_free_rate) / ds_std
+
+    # Calmar
+    if max_drawdown < 0:
+        result["calmar"] = ann_return / abs(max_drawdown)
+
+    # Upside / Downside Capture
+    if benchmark_returns is not None and not benchmark_returns.empty:
+        aligned = (
+            r.rename("P")
+            .to_frame()
+            .join(pd.to_numeric(benchmark_returns, errors="coerce").rename("B"), how="inner")
+            .dropna()
+        )
+        if not aligned.empty:
+            up = aligned[aligned["B"] > 0]
+            dn = aligned[aligned["B"] < 0]
+            if not up.empty and float(up["B"].mean()) != 0:
+                result["upside_capture"] = float(up["P"].mean() / up["B"].mean() * 100)
+            if not dn.empty and float(dn["B"].mean()) != 0:
+                result["downside_capture"] = float(dn["P"].mean() / dn["B"].mean() * 100)
+
+    # Omega
+    threshold = risk_free_rate / 252
+    gains = float((r - threshold).clip(lower=0).sum())
+    losses = float((threshold - r).clip(lower=0).sum())
+    if losses > 0:
+        result["omega"] = gains / losses
+
+    return result
+
+
+def compute_mwr(transactions_df: pd.DataFrame, current_value: float) -> dict:
+    """Money-Weighted Return (IRR) from transaction cash flows."""
+    result: dict = {"mwr": None, "n_transactions": 0}
+
+    if transactions_df is None or transactions_df.empty or current_value <= 0:
+        return result
+
+    tx = transactions_df.copy()
+    tx["date"] = pd.to_datetime(tx["date"], errors="coerce")
+    tx["shares"] = pd.to_numeric(tx["shares"], errors="coerce").fillna(0.0)
+    tx["price"] = pd.to_numeric(tx["price"], errors="coerce").fillna(0.0)
+    tx["fees"] = pd.to_numeric(tx["fees"], errors="coerce").fillna(0.0)
+    tx = tx.dropna(subset=["date"]).sort_values("date")
+
+    cash_flows: list[tuple] = []
+    for _, row in tx.iterrows():
+        gross = float(row["shares"]) * float(row["price"]) + float(row["fees"])
+        tx_type = str(row.get("type", "")).upper()
+        if tx_type == "BUY":
+            cash_flows.append((row["date"], -gross))
+        elif tx_type == "SELL":
+            cash_flows.append((row["date"], gross))
+
+    if not cash_flows:
+        return result
+
+    result["n_transactions"] = len(cash_flows)
+    today = pd.Timestamp.now().normalize()
+    cash_flows.append((today, float(current_value)))
+
+    start = cash_flows[0][0]
+    offsets = [int((d - start).days) for d, _ in cash_flows]
+    amounts = [a for _, a in cash_flows]
+    max_days = max(offsets) if offsets else 1
+
+    def npv(daily_rate: float) -> float:
+        return sum(a / (1 + daily_rate) ** t for a, t in zip(amounts, offsets))
+
+    try:
+        lo = -0.9999 / max(max_days, 1)
+        hi = 5.0 / max(max_days, 1)
+        npv_lo, npv_hi = npv(lo), npv(hi)
+        if npv_lo * npv_hi > 0:
+            return result
+        for _ in range(150):
+            mid = (lo + hi) / 2.0
+            if npv(mid) * npv_lo < 0:
+                hi = mid
+            else:
+                lo = mid
+                npv_lo = npv(lo)
+        daily_irr = (lo + hi) / 2.0
+        result["mwr"] = float((1 + daily_irr) ** 252 - 1)
+    except Exception:
+        pass
+
+    return result
+
+
+def compute_twr(
+    snapshots_df: pd.DataFrame,
+    transactions_df: pd.DataFrame | None = None,
+) -> dict:
+    """Time-Weighted Return chained across saved portfolio snapshots."""
+    result: dict = {"twr": None, "n_periods": 0, "start_date": None, "end_date": None}
+
+    if snapshots_df is None or snapshots_df.empty or len(snapshots_df) < 2:
+        return result
+
+    work = snapshots_df.sort_values("timestamp").copy()
+    work["total_portfolio_value"] = pd.to_numeric(work["total_portfolio_value"], errors="coerce")
+    work = work.dropna(subset=["total_portfolio_value"]).reset_index(drop=True)
+
+    if len(work) < 2:
+        return result
+
+    # Build per-period net external cash flows from transactions
+    cf_map: dict[int, float] = {}
+    if transactions_df is not None and not transactions_df.empty:
+        tx = transactions_df.copy()
+        tx["date"] = pd.to_datetime(tx["date"], errors="coerce")
+        tx["shares"] = pd.to_numeric(tx["shares"], errors="coerce").fillna(0.0)
+        tx["price"] = pd.to_numeric(tx["price"], errors="coerce").fillna(0.0)
+        tx["fees"] = pd.to_numeric(tx["fees"], errors="coerce").fillna(0.0)
+        tx = tx.dropna(subset=["date"])
+
+        for i in range(1, len(work)):
+            t0 = work["timestamp"].iloc[i - 1]
+            t1 = work["timestamp"].iloc[i]
+            period_tx = tx[(tx["date"] > t0) & (tx["date"] <= t1)]
+            net = 0.0
+            for _, row in period_tx.iterrows():
+                gross = float(row["shares"]) * float(row["price"]) + float(row["fees"])
+                if str(row.get("type", "")).upper() == "BUY":
+                    net += gross
+                elif str(row.get("type", "")).upper() == "SELL":
+                    net -= gross
+            cf_map[i] = net
+
+    compound = 1.0
+    for i in range(1, len(work)):
+        v0 = float(work["total_portfolio_value"].iloc[i - 1])
+        v1 = float(work["total_portfolio_value"].iloc[i])
+        cf = cf_map.get(i, 0.0)
+        denominator = v0 + cf
+        if denominator > 0:
+            compound *= v1 / denominator
+
+    result["twr"] = float(compound - 1)
+    result["n_periods"] = len(work) - 1
+    result["start_date"] = str(pd.to_datetime(work["timestamp"].iloc[0]).date())
+    result["end_date"] = str(pd.to_datetime(work["timestamp"].iloc[-1]).date())
+    return result
+
+
+def compute_brinson_attribution(
+    df: pd.DataFrame,
+    asset_returns: pd.DataFrame,
+    policy_target_map: dict,
+    benchmark_returns: pd.Series | None,
+) -> pd.DataFrame | None:
+    """Brinson-Hood-Beebower single-period attribution at the asset level."""
+    if df is None or df.empty:
+        return None
+    if benchmark_returns is None or benchmark_returns.empty:
+        return None
+
+    bench_total = float((1 + pd.to_numeric(benchmark_returns, errors="coerce").dropna()).prod() - 1)
+
+    rows = []
+    for _, row in df.iterrows():
+        ticker = str(row["Ticker"])
+        w_p = float(row.get("Weight", 0.0))
+        w_b = float(policy_target_map.get(ticker, 0.0))
+
+        if asset_returns is not None and ticker in asset_returns.columns:
+            r_p = float((1 + pd.to_numeric(asset_returns[ticker], errors="coerce").dropna()).prod() - 1)
+        else:
+            r_p = 0.0
+
+        # BHB decomposition (R_bi = bench_total for all assets)
+        allocation = (w_p - w_b) * bench_total
+        selection = w_b * (r_p - bench_total)
+        interaction = (w_p - w_b) * (r_p - bench_total)
+        total = allocation + selection + interaction
+
+        rows.append({
+            "Ticker": ticker,
+            "Portfolio W%": round(w_p * 100, 2),
+            "Target W%": round(w_b * 100, 2),
+            "Asset Return": round(r_p * 100, 2),
+            "Benchmark Return": round(bench_total * 100, 2),
+            "Allocation Effect": round(allocation * 100, 2),
+            "Selection Effect": round(selection * 100, 2),
+            "Interaction Effect": round(interaction * 100, 2),
+            "Total Attribution": round(total * 100, 2),
+        })
+
+    return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def run_monte_carlo_projection(
+    portfolio_returns: pd.Series,
+    current_value: float,
+    horizons_years: tuple = (1, 3, 5, 10),
+    monthly_contribution: float = 0.0,
+    n_sims: int = 500,
+    seed: int = 42,
+) -> dict:
+    """Bootstrap Monte Carlo projection for multiple time horizons."""
+    result: dict = {}
+    if portfolio_returns is None or portfolio_returns.empty or len(portfolio_returns) < 60:
+        return result
+
+    rng = np.random.default_rng(seed)
+    r = pd.to_numeric(portfolio_returns, errors="coerce").dropna().values
+
+    for h in horizons_years:
+        n_months = h * 12
+        paths = np.zeros((n_sims, n_months + 1))
+        paths[:, 0] = current_value
+
+        for m in range(n_months):
+            sampled = rng.choice(r, size=(n_sims, 21), replace=True)
+            monthly_r = (1 + sampled).prod(axis=1) - 1
+            paths[:, m + 1] = paths[:, m] * (1 + monthly_r) + monthly_contribution
+
+        pcts = np.percentile(paths, [10, 25, 50, 75, 90], axis=0)
+        result[h] = pd.DataFrame(
+            {"p10": pcts[0], "p25": pcts[1], "p50": pcts[2], "p75": pcts[3], "p90": pcts[4]},
+            index=range(n_months + 1),
+        )
+
+    return result
+
+
+def compute_goal_contribution(
+    current_value: float,
+    target_value: float,
+    years: int,
+    expected_annual_return: float,
+) -> float:
+    """Required monthly contribution to reach target_value in given years."""
+    if years <= 0 or target_value <= 0:
+        return 0.0
+    n = years * 12
+    r = (1 + expected_annual_return) ** (1.0 / 12) - 1
+    fv_pv = current_value * (1 + r) ** n
+    if fv_pv >= target_value:
+        return 0.0
+    if r == 0:
+        return (target_value - fv_pv) / n
+    return float((target_value - fv_pv) * r / ((1 + r) ** n - 1))
+
+
+# =========================
 # CONTEXT
 # =========================
 def build_app_context():
