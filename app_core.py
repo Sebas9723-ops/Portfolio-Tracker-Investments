@@ -1540,6 +1540,7 @@ def build_portfolio_df(
     total_invested_base = 0.0
     total_unrealized_base = 0.0
     total_realized_base = 0.0
+    any_base_shares_differ = False
 
     tx_stats_map = tx_stats_map or {}
 
@@ -1555,6 +1556,8 @@ def build_portfolio_df(
 
         shares = float(meta["shares"])
         base_shares = float(meta.get("base_shares", meta["shares"]))
+        if abs(base_shares - shares) > 1e-9:
+            any_base_shares_differ = True
         target_weight_override = meta.get("target_weight")
 
         tx_stat = tx_stats_map.get(ticker)
@@ -1622,8 +1625,13 @@ def build_portfolio_df(
         else:
             df["Target Weight"] = 0.0
     else:
-        if base_total_value > 0:
+        # Only use base_shares-derived targets when at least one ticker has
+        # base_shares explicitly different from current shares — otherwise
+        # Base Value == Value and Target Weight would mirror Current Weight.
+        if any_base_shares_differ and base_total_value > 0:
             df["Target Weight"] = df["Base Value"] / base_total_value
+        elif len(df) > 0:
+            df["Target Weight"] = 1.0 / len(df)
         else:
             df["Target Weight"] = 0.0
 
