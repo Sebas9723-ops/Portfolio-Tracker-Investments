@@ -2,21 +2,26 @@
 Portfolio alert system.
 
 Checks drawdown, weight deviation, and daily drop thresholds on every app load.
-Sends an email alert when conditions are triggered (max once per day per condition).
+Sends a Telegram message when conditions are triggered (max once per day per condition).
 Tracks sent alerts in Google Sheets tab 'alerts_log'.
+
+Requires in .streamlit/secrets.toml:
+    [telegram]
+    bot_token = "xxxx:yyyy"
+    chat_id   = "123456789"
 
 Optional secrets (defaults apply if absent):
     [alerts]
-    drawdown_threshold        = -0.10   # e.g. -0.10 = alert when drawdown < -10%
-    weight_deviation_threshold = 0.05   # e.g. 0.05 = alert when any ticker is >5% off target
-    daily_drop_threshold       = -0.03  # e.g. -0.03 = alert when portfolio drops >3% in a day
+    drawdown_threshold         = -0.10
+    weight_deviation_threshold = 0.05
+    daily_drop_threshold       = -0.03
 """
 from __future__ import annotations
 
-import smtplib
+import json
+import urllib.request
+import urllib.error
 from datetime import datetime
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
 import pandas as pd
 import pytz
@@ -34,9 +39,8 @@ def _connect_alerts_log():
 
 
 def _alerts_sent_today(alert_types: list[str]) -> set[str]:
-    """Return the set of alert types already sent today."""
     try:
-        from app_core import _get_spreadsheet_cached, _get_private_positions_sheet_locator, _get_worksheet_records_cached
+        from app_core import _get_private_positions_sheet_locator, _get_worksheet_records_cached
         sheet_id, sheet_url = _get_private_positions_sheet_locator()
         records = _get_worksheet_records_cached(sheet_id, sheet_url, "alerts_log")
         today = datetime.now(_COLOMBIA_TZ).strftime("%Y-%m-%d")
@@ -72,10 +76,6 @@ def _get_threshold(key: str, default: float) -> float:
 
 
 def check_alert_conditions(ctx: dict) -> list[dict]:
-    """
-    Returns a list of triggered alert dicts:
-    {"type": str, "message": str, "severity": "warning" | "critical"}
-    """
     alerts: list[dict] = []
 
     drawdown_threshold = _get_threshold("drawdown_threshold", -0.10)
@@ -140,116 +140,71 @@ def should_send_alerts(ctx: dict, alerts: list[dict]) -> bool:
     if not alerts:
         return False
 
-    alert_types = [a["type"] for a in alerts]
-
-    # Session-level dedup
     sent_session = st.session_state.get("alerts_sent_session", set())
     new_alerts = [a for a in alerts if a["type"] not in sent_session]
     if not new_alerts:
         return False
 
-    # Sheets-level dedup (once per day)
-    sent_today = _alerts_sent_today(alert_types)
+    sent_today = _alerts_sent_today([a["type"] for a in new_alerts])
     truly_new = [a for a in new_alerts if a["type"] not in sent_today]
     if not truly_new:
-        # Update session cache so we don't keep hitting Sheets
         st.session_state["alerts_sent_session"] = sent_session | sent_today
         return False
 
-    # Mutate alerts in place to only send truly new ones
     alerts.clear()
     alerts.extend(truly_new)
     return True
 
 
-# ── HTML builder ───────────────────────────────────────────────────────────────
+# ── Telegram sender ────────────────────────────────────────────────────────────
 
-_table = "border-collapse:collapse;width:100%;margin-top:8px"
-_th = "background:#1a1f2e;color:#f3a712;padding:8px 12px;text-align:left;border:1px solid #2a2f3e;font-family:monospace"
-_td = "padding:7px 12px;border:1px solid #1e2430;color:#e6e6e6;font-family:monospace"
-
-
-def _build_alert_html(alerts: list[dict], ctx: dict) -> str:
+def _build_telegram_message(alerts: list[dict], ctx: dict) -> str:
     now_col = datetime.now(_COLOMBIA_TZ)
     ccy = ctx.get("base_currency", "USD")
     total = float(ctx.get("total_portfolio_value", 0.0))
 
-    color_map = {"critical": "#f44336", "warning": "#f3a712"}
-    rows = ""
+    emoji_map = {"critical": "🚨", "warning": "⚠️"}
+    lines = [
+        f"<b>PORTAFOLIO MANAGEMENT SA</b>",
+        f"📅 {now_col.strftime('%Y-%m-%d %H:%M')} Colombia",
+        f"💼 Portfolio: <b>{ccy} {total:,.2f}</b>",
+        "",
+    ]
+
     for a in alerts:
-        color = color_map.get(a["severity"], "#e6e6e6")
-        rows += f"""
-        <tr>
-            <td style="{_td};color:{color};font-weight:bold">{a['severity'].upper()}</td>
-            <td style="{_td}">{a['type'].replace('_', ' ').title()}</td>
-            <td style="{_td}">{a['message']}</td>
-        </tr>"""
+        emoji = emoji_map.get(a["severity"], "ℹ️")
+        label = a["severity"].upper()
+        lines.append(f"{emoji} <b>[{label}]</b> {a['message']}")
 
-    return f"""
-    <!DOCTYPE html>
-    <html>
-    <head><meta charset="utf-8"></head>
-    <body style="background-color:#0b0f14;color:#e6e6e6;font-family:monospace;padding:32px;margin:0">
-      <h1 style="color:#f44336;font-size:22px;margin-bottom:4px">PORTFOLIO ALERT</h1>
-      <h2 style="color:#aaa;font-size:14px;margin-top:0">Portafolio Management SA · {now_col.strftime('%Y-%m-%d %H:%M')} Colombia</h2>
-
-      <p style="color:#e6e6e6">
-        Portfolio value at time of alert: <b>{ccy} {total:,.2f}</b>
-      </p>
-
-      <table style="{_table}">
-        <tr>
-          <th style="{_th}">Severity</th>
-          <th style="{_th}">Type</th>
-          <th style="{_th}">Detail</th>
-        </tr>
-        {rows}
-      </table>
-
-      <hr style="border-color:#333;margin-top:40px">
-      <p style="color:#555;font-size:11px">
-        Generated automatically by Portafolio Management SA · {now_col.strftime('%Y-%m-%d %H:%M')} Colombia time
-      </p>
-    </body>
-    </html>
-    """
+    return "\n".join(lines)
 
 
-# ── Send ───────────────────────────────────────────────────────────────────────
+def send_alert_telegram(alerts: list[dict], ctx: dict):
+    tg = st.secrets.get("telegram", {})
+    bot_token = str(tg.get("bot_token", "")).strip()
+    chat_id = str(tg.get("chat_id", "")).strip()
 
-def send_alert_email(alerts: list[dict], ctx: dict):
-    email_cfg = st.secrets.get("email", {})
-    smtp_host = str(email_cfg.get("smtp_host", "smtp.gmail.com"))
-    smtp_port = int(email_cfg.get("smtp_port", 587))
-    sender = str(email_cfg.get("sender", ""))
-    password = str(email_cfg.get("app_password", ""))
-    recipient = str(email_cfg.get("recipient", ""))
-
-    if not all([sender, password, recipient]):
+    if not bot_token or not chat_id:
         return
 
-    severities = [a["severity"] for a in alerts]
-    subject_prefix = "CRITICAL" if "critical" in severities else "WARNING"
-    now_col = datetime.now(_COLOMBIA_TZ)
-    subject = f"[{subject_prefix}] Portfolio Alert · {now_col.strftime('%Y-%m-%d %H:%M')} · Portafolio Management SA"
-
-    html_body = _build_alert_html(alerts, ctx)
-
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = sender
-    msg["To"] = recipient
-    msg.attach(MIMEText(html_body, "html", "utf-8"))
+    text = _build_telegram_message(alerts, ctx)
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    payload = json.dumps({
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+    }).encode("utf-8")
 
     try:
-        with smtplib.SMTP(smtp_host, smtp_port) as server:
-            server.ehlo()
-            server.starttls()
-            server.login(sender, password)
-            server.sendmail(sender, recipient, msg.as_string())
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=10)
 
         _mark_alerts_sent(alerts)
-
         sent_session = st.session_state.get("alerts_sent_session", set())
         st.session_state["alerts_sent_session"] = sent_session | {a["type"] for a in alerts}
     except Exception:

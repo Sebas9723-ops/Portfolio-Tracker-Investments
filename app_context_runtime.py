@@ -827,11 +827,11 @@ def build_app_context_runtime(app_scope: str):
         pass
 
     try:
-        from alerts import check_alert_conditions, should_send_alerts, send_alert_email
+        from alerts import check_alert_conditions, should_send_alerts, send_alert_telegram
         active_alerts = check_alert_conditions(ctx)
         ctx["active_alerts"] = active_alerts
         if should_send_alerts(ctx, active_alerts):
-            send_alert_email(active_alerts, ctx)
+            send_alert_telegram(active_alerts, ctx)
     except Exception:
         ctx["active_alerts"] = []
 
