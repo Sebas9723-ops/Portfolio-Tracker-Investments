@@ -1,14 +1,52 @@
 import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from app_core import (
-    compute_goal_contribution,
-    info_metric,
-    info_section,
-    render_page_title,
-    run_monte_carlo_projection,
-)
+from app_core import info_metric, info_section, render_page_title
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _run_monte_carlo(
+    portfolio_returns: pd.Series,
+    current_value: float,
+    horizons_years: tuple = (1, 3, 5, 10),
+    monthly_contribution: float = 0.0,
+    n_sims: int = 500,
+    seed: int = 42,
+) -> dict:
+    result: dict = {}
+    if portfolio_returns is None or portfolio_returns.empty or len(portfolio_returns) < 60:
+        return result
+    rng = np.random.default_rng(seed)
+    r = pd.to_numeric(portfolio_returns, errors="coerce").dropna().values
+    for h in horizons_years:
+        n_months = h * 12
+        paths = np.zeros((n_sims, n_months + 1))
+        paths[:, 0] = current_value
+        for m in range(n_months):
+            sampled = rng.choice(r, size=(n_sims, 21), replace=True)
+            monthly_r = (1 + sampled).prod(axis=1) - 1
+            paths[:, m + 1] = paths[:, m] * (1 + monthly_r) + monthly_contribution
+        pcts = np.percentile(paths, [10, 25, 50, 75, 90], axis=0)
+        result[h] = pd.DataFrame(
+            {"p10": pcts[0], "p25": pcts[1], "p50": pcts[2], "p75": pcts[3], "p90": pcts[4]},
+            index=range(n_months + 1),
+        )
+    return result
+
+
+def _goal_contribution(current_value: float, target_value: float, years: int, expected_annual_return: float) -> float:
+    if years <= 0 or target_value <= 0:
+        return 0.0
+    n = years * 12
+    r = (1 + expected_annual_return) ** (1.0 / 12) - 1
+    fv_pv = current_value * (1 + r) ** n
+    if fv_pv >= target_value:
+        return 0.0
+    if r == 0:
+        return (target_value - fv_pv) / n
+    return float((target_value - fv_pv) * r / ((1 + r) ** n - 1))
 
 _HORIZONS = (1, 3, 5, 10)
 _HORIZON_LABELS = {1: "1 Year", 3: "3 Years", 5: "5 Years", 10: "10 Years"}
@@ -124,7 +162,7 @@ def render_projections_page(ctx):
             key="proj_horizon",
         )
 
-    mc_data = run_monte_carlo_projection(
+    mc_data = _run_monte_carlo(
         portfolio_returns=portfolio_returns,
         current_value=current_value,
         horizons_years=_HORIZONS,
@@ -186,7 +224,7 @@ def render_projections_page(ctx):
             help="Use historical return as a starting point.",
         )
 
-    required_pmt = compute_goal_contribution(
+    required_pmt = _goal_contribution(
         current_value=current_value,
         target_value=float(target_value),
         years=int(goal_years),
