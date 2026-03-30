@@ -1,3 +1,7 @@
 private_portfolio.py
 private_state.json
 .streamlit/secrets.toml
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
