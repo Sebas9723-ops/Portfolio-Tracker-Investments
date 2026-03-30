@@ -45,11 +45,6 @@ def _build_compare_chart(df, policy_map, max_sharpe_map):
     )
     fig.add_bar(
         x=df["Ticker"],
-        y=[float(policy_map.get(t, 0.0)) * 100.0 for t in df["Ticker"]],
-        name="Policy Target %",
-    )
-    fig.add_bar(
-        x=df["Ticker"],
         y=[float(max_sharpe_map.get(t, 0.0)) * 100.0 for t in df["Ticker"]],
         name="Max Sharpe Weight %",
     )
