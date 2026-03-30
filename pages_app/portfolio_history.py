@@ -106,7 +106,7 @@ def save_portfolio_snapshot(ctx, notes=""):
 
 def load_portfolio_snapshots():
     ws = connect_snapshots_worksheet()
-    records = ws.get_all_records()
+    records = ws.get_all_records(value_render_option="UNFORMATTED_VALUE")
 
     if not records:
         return pd.DataFrame(columns=SNAPSHOT_HEADERS)
@@ -257,6 +257,10 @@ def build_snapshot_report_table(snapshots_df):
     work["Holdings Change"] = work["holdings_value"].diff().fillna(0.0)
     work["Cash Change"] = work["cash_total_value"].diff().fillna(0.0)
 
+    for col in ["total_return", "volatility", "max_drawdown", "benchmark_cum_return", "excess_vs_benchmark"]:
+        if col in work.columns:
+            work[col] = pd.to_numeric(work[col], errors="coerce").mul(100).round(2)
+
     out = work.rename(
         columns={
             "timestamp": "Timestamp",
@@ -264,13 +268,12 @@ def build_snapshot_report_table(snapshots_df):
             "holdings_value": "Holdings",
             "cash_total_value": "Cash",
             "unrealized_pnl": "Unrealized PnL",
-            "realized_pnl": "Realized PnL",
-            "total_return": "Total Return",
-            "volatility": "Volatility",
+            "total_return": "Total Return %",
+            "volatility": "Volatility %",
             "sharpe": "Sharpe",
-            "max_drawdown": "Max Drawdown",
-            "benchmark_cum_return": "Benchmark Return",
-            "excess_vs_benchmark": "Excess vs Benchmark",
+            "max_drawdown": "Max Drawdown %",
+            "benchmark_cum_return": "Benchmark Return %",
+            "excess_vs_benchmark": "Excess vs Benchmark %",
             "notes": "Notes",
         }
     ).copy()
@@ -286,13 +289,12 @@ def build_snapshot_report_table(snapshots_df):
             "Cash",
             "Cash Change",
             "Unrealized PnL",
-            "Realized PnL",
-            "Total Return",
-            "Volatility",
+            "Total Return %",
+            "Volatility %",
             "Sharpe",
-            "Max Drawdown",
-            "Benchmark Return",
-            "Excess vs Benchmark",
+            "Max Drawdown %",
+            "Benchmark Return %",
+            "Excess vs Benchmark %",
             "Notes",
         ]
     ].copy()
@@ -313,19 +315,23 @@ def build_monthly_snapshot_summary(snapshots_df):
     monthly["MoM Change"] = monthly["total_portfolio_value"].diff().fillna(0.0)
     monthly["MoM Change %"] = np.where(
         monthly["total_portfolio_value"].shift(1).fillna(0.0) > 0,
-        monthly["MoM Change"] / monthly["total_portfolio_value"].shift(1),
+        (monthly["MoM Change"] / monthly["total_portfolio_value"].shift(1) * 100).round(2),
         0.0,
     )
+
+    for col in ["total_return", "volatility", "max_drawdown"]:
+        if col in monthly.columns:
+            monthly[col] = pd.to_numeric(monthly[col], errors="coerce").mul(100).round(2)
 
     out = monthly.rename(
         columns={
             "total_portfolio_value": "Total Portfolio",
             "holdings_value": "Holdings",
             "cash_total_value": "Cash",
-            "total_return": "Total Return",
-            "volatility": "Volatility",
+            "total_return": "Total Return %",
+            "volatility": "Volatility %",
             "sharpe": "Sharpe",
-            "max_drawdown": "Max Drawdown",
+            "max_drawdown": "Max Drawdown %",
         }
     ).copy()
 
@@ -337,10 +343,10 @@ def build_monthly_snapshot_summary(snapshots_df):
             "MoM Change %",
             "Holdings",
             "Cash",
-            "Total Return",
-            "Volatility",
+            "Total Return %",
+            "Volatility %",
             "Sharpe",
-            "Max Drawdown",
+            "Max Drawdown %",
         ]
     ].copy()
 

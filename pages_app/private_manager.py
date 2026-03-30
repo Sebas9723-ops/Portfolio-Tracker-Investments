@@ -44,12 +44,18 @@ def _render_control_buttons(ctx):
 
 def _build_current_positions_map(ctx):
     positions = {}
+    portfolio_data = ctx.get("portfolio_data", {})
     for _, row in ctx["df"].iterrows():
-        positions[str(row["Ticker"])] = {
+        ticker = str(row["Ticker"])
+        # Only show avg_cost in the form if it was explicitly set by the user
+        # (stored in portfolio_data), not the current market price fallback.
+        explicit_avg_cost = portfolio_data.get(ticker, {}).get("avg_cost")
+        avg_cost_native = float(explicit_avg_cost) if explicit_avg_cost and float(explicit_avg_cost) > 0 else 0.0
+        positions[ticker] = {
             "name": str(row["Name"]),
             "shares": float(row["Shares"]),
             "native_price": float(row["Native Price"]),
-            "avg_cost_native": float(row.get("Avg Cost Native", 0.0)),
+            "avg_cost_native": avg_cost_native,
             "base_price": float(row["Price"]),
             "value": float(row["Value"]),
             "weight_pct": float(row["Weight %"]),
