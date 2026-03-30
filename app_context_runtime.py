@@ -692,6 +692,7 @@ def build_app_context_runtime(app_scope: str):
         "updated_portfolio": updated_portfolio,
         "prefix": prefix,
         "df": df,
+        "asset_hist_native": asset_hist_native,
         "display_df": display_df,
         "transactions_df": transactions_df,
         "cash_balances_df": cash_balances_df,

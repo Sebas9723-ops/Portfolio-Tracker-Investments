@@ -2,9 +2,97 @@ from datetime import datetime
 
 import pandas as pd
 import plotly.graph_objects as go
+import pytz
 import streamlit as st
 
 from app_core import build_portfolio_df, info_metric, info_section, render_page_title
+
+
+def _market_status(ticker: str) -> str:
+    now_utc = datetime.now(pytz.utc)
+    wd = now_utc.weekday()  # 0=Mon, 6=Sun
+    t = ticker.upper()
+
+    if t.endswith(".L"):
+        tz, oh, om, ch, cm = pytz.timezone("Europe/London"), 8, 0, 16, 30
+    elif t.endswith(".DE") or t.endswith(".AS"):
+        tz, oh, om, ch, cm = pytz.timezone("Europe/Berlin"), 9, 0, 17, 30
+    elif "." in t:
+        tz, oh, om, ch, cm = pytz.timezone("Europe/Paris"), 9, 0, 17, 30
+    else:
+        tz, oh, om, ch, cm = pytz.timezone("America/New_York"), 9, 30, 16, 0
+
+    if wd >= 5:
+        return "Closed"
+    now_local = now_utc.astimezone(tz)
+    opens = now_local.replace(hour=oh, minute=om, second=0, microsecond=0)
+    closes = now_local.replace(hour=ch, minute=cm, second=0, microsecond=0)
+    return "Open" if opens <= now_local <= closes else "Closed"
+
+
+def _build_intraday_table(df: pd.DataFrame, hist: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for _, row in df.iterrows():
+        ticker = str(row["Ticker"])
+        current = float(row["Native Price"])
+        prev = current
+        sparkline = []
+
+        if not hist.empty and ticker in hist.columns:
+            series = pd.to_numeric(hist[ticker], errors="coerce").dropna()
+            if len(series) >= 2:
+                prev = float(series.iloc[-2])
+                sparkline = [round(v, 4) for v in series.iloc[-10:].tolist()]
+            elif len(series) == 1:
+                sparkline = [round(float(series.iloc[-1]), 4)]
+
+        day_pct = (current / prev - 1) * 100 if prev > 0 else 0.0
+        day_abs = current - prev
+
+        rows.append({
+            "Ticker": ticker,
+            "Name": str(row["Name"]),
+            "Ccy": str(row["Native Currency"]),
+            "Price": round(current, 4),
+            "Prev Close": round(prev, 4),
+            "Day Δ": round(day_abs, 4),
+            "Day Δ%": round(day_pct, 2),
+            "Trend (10d)": sparkline,
+            "Market": _market_status(ticker),
+        })
+
+    return pd.DataFrame(rows)
+
+
+def _build_monthly_table(df: pd.DataFrame, hist: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for _, row in df.iterrows():
+        ticker = str(row["Ticker"])
+        current = float(row["Native Price"])
+        month_ago = current
+
+        if not hist.empty and ticker in hist.columns:
+            series = pd.to_numeric(hist[ticker], errors="coerce").dropna()
+            if not series.empty:
+                cutoff = series.index[-1] - pd.DateOffset(days=30)
+                past = series[series.index <= cutoff]
+                if not past.empty:
+                    month_ago = float(past.iloc[-1])
+
+        month_pct = (current / month_ago - 1) * 100 if month_ago > 0 else 0.0
+        month_abs = current - month_ago
+
+        rows.append({
+            "Ticker": ticker,
+            "Name": str(row["Name"]),
+            "Ccy": str(row["Native Currency"]),
+            "Price": round(current, 4),
+            "1M Ago": round(month_ago, 4),
+            "Month Δ": round(month_abs, 4),
+            "Month Δ%": round(month_pct, 2),
+        })
+
+    return pd.DataFrame(rows)
 
 
 def _build_weights_vs_targets_chart(ctx):
@@ -163,6 +251,40 @@ def render_portfolio_page(ctx):
         st.caption(f"Prices as of {datetime.now().strftime('%H:%M:%S')}")
 
     _live_prices_section()
+
+    hist = ctx.get("asset_hist_native", pd.DataFrame())
+
+    info_section(
+        "Intraday Variation",
+        "Day change vs previous close in native currency, recent 10-day trend, and market status.",
+    )
+    intraday_df = _build_intraday_table(ctx["df"], hist)
+    st.dataframe(
+        intraday_df,
+        use_container_width=True,
+        height=250,
+        column_config={
+            "Trend (10d)": st.column_config.LineChartColumn(
+                "Trend (10d)", width="medium", y_min=None, y_max=None
+            ),
+            "Day Δ%": st.column_config.NumberColumn("Day Δ%", format="%.2f%%"),
+            "Market": st.column_config.TextColumn("Market", width="small"),
+        },
+    )
+
+    info_section(
+        "Monthly Variation",
+        "Price change vs approximately 30 calendar days ago in native currency.",
+    )
+    monthly_df = _build_monthly_table(ctx["df"], hist)
+    st.dataframe(
+        monthly_df,
+        use_container_width=True,
+        height=250,
+        column_config={
+            "Month Δ%": st.column_config.NumberColumn("Month Δ%", format="%.2f%%"),
+        },
+    )
 
     left, right = st.columns(2)
 
