@@ -171,7 +171,7 @@ def _render_drawdown_analysis(ctx):
 
 
 def render_performance_calendar_page(ctx):
-    render_page_title("Performance Calendar & Drawdowns", "Monthly tearsheet and drawdown deep-dive")
+    render_page_title("Performance Calendar & Drawdowns")
     tab1, tab2 = st.tabs(["Monthly Returns Calendar", "Drawdown Analysis"])
     with tab1:
         _render_monthly_calendar(ctx)

@@ -269,7 +269,7 @@ def _render_close_entry_form(journal_df: pd.DataFrame):
 
 
 def render_trade_journal_page(ctx):
-    render_page_title("Trade Journal", "Record and track investment theses")
+    render_page_title("Trade Journal")
 
     if ctx.get("app_scope") != "private":
         st.info("Trade Journal is only available in Private mode.")
