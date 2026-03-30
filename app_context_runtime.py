@@ -72,26 +72,26 @@ def _build_policy_target_map(portfolio_data: dict, df: pd.DataFrame) -> dict[str
         raw = {t: (explicit[t] if np.isfinite(explicit[t]) else 0.0) for t in tickers}
         return _normalize_weight_map(raw, tickers)
 
-    # Only use base_shares fallback when at least one ticker has it explicitly
-    # configured — otherwise base_shares == shares == current weights, which
-    # makes the Policy Target bar identical to the Current Weight bar.
-    has_explicit_base_shares = any(
-        "base_shares" in portfolio_data.get(t, {}) for t in tickers
-    )
+    # Only use base_shares fallback when at least one ticker has base_shares
+    # meaningfully different from current shares — otherwise base_shares * price
+    # equals current value, making Policy Target identical to Current Weight.
+    any_base_shares_differ = False
+    price_map = df.set_index("Ticker")["Price"].to_dict()
+    raw = {}
+    for ticker in tickers:
+        meta = portfolio_data.get(ticker, {})
+        try:
+            base_shares = float(meta.get("base_shares", meta.get("shares", 0.0)))
+            current_shares = float(meta.get("shares", 0.0))
+        except Exception:
+            base_shares = 0.0
+            current_shares = 0.0
+        if abs(base_shares - current_shares) > 1e-9:
+            any_base_shares_differ = True
+        raw[ticker] = base_shares * float(price_map.get(ticker, 0.0))
 
-    if has_explicit_base_shares:
-        price_map = df.set_index("Ticker")["Price"].to_dict()
-        raw = {}
-        for ticker in tickers:
-            meta = portfolio_data.get(ticker, {})
-            try:
-                base_shares = float(meta.get("base_shares", meta.get("shares", 0.0)))
-            except Exception:
-                base_shares = 0.0
-            raw[ticker] = base_shares * float(price_map.get(ticker, 0.0))
-
-        if sum(raw.values()) > 0:
-            return _normalize_weight_map(raw, tickers)
+    if any_base_shares_differ and sum(raw.values()) > 0:
+        return _normalize_weight_map(raw, tickers)
 
     if "Target Weight" in df.columns:
         raw_df = df.set_index("Ticker")["Target Weight"].to_dict()
