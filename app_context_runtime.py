@@ -249,6 +249,7 @@ def build_app_context_runtime(app_scope: str):
                 "shares": float(meta["shares"]),
                 "base_shares": float(meta.get("base_shares", meta["shares"])),
                 "target_weight": meta.get("target_weight"),
+                "avg_cost": meta.get("avg_cost"),
             }
             for ticker, meta in portfolio_data.items()
         }

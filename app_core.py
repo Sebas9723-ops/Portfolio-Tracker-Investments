@@ -35,7 +35,7 @@ TICKER_CURRENCY_OVERRIDE = {
     "IGLN.L": "USD",  # iShares Physical Gold ETC — quoted in USD on LSE, not GBP
 }
 
-PRIVATE_POSITIONS_HEADERS = ["Ticker", "Name", "Shares"]
+PRIVATE_POSITIONS_HEADERS = ["Ticker", "Name", "Shares", "AvgCost"]
 TRANSACTIONS_HEADERS = ["date", "ticker", "type", "shares", "price", "fees", "notes"]
 CASH_BALANCES_HEADERS = ["currency", "amount"]
 DIVIDENDS_HEADERS = ["date", "ticker", "amount", "currency", "notes"]
@@ -844,14 +844,23 @@ def load_private_positions_from_sheets():
         ticker = str(row.get("Ticker", "")).strip().upper()
         name = str(row.get("Name", "")).strip()
         shares = row.get("Shares", 0)
+        avg_cost_raw = row.get("AvgCost", None)
 
         if ticker and name:
             try:
-                positions[ticker] = {
+                entry = {
                     "name": name,
                     "shares": float(shares),
                     "base_shares": float(shares),
                 }
+                if avg_cost_raw not in (None, "", "0", 0):
+                    try:
+                        avg_cost = float(avg_cost_raw)
+                        if avg_cost > 0:
+                            entry["avg_cost"] = avg_cost
+                    except Exception:
+                        pass
+                positions[ticker] = entry
             except Exception:
                 continue
 
@@ -864,7 +873,8 @@ def save_private_positions_to_sheets(positions: dict):
     rows = [PRIVATE_POSITIONS_HEADERS]
     for ticker in sorted(positions.keys()):
         meta = positions[ticker]
-        rows.append([ticker, meta["name"], float(meta["shares"])])
+        avg_cost = float(meta.get("avg_cost", 0.0))
+        rows.append([ticker, meta["name"], float(meta["shares"]), avg_cost])
 
     ws.clear()
     ws.update(range_name="A1", values=rows)
@@ -1074,6 +1084,8 @@ def merge_private_portfolios(base_private: dict, custom_private: dict):
             merged[ticker]["shares"] = meta["shares"]
             merged[ticker]["base_shares"] = meta.get("base_shares", meta["shares"])
             merged[ticker]["name"] = meta["name"]
+            if "avg_cost" in meta:
+                merged[ticker]["avg_cost"] = meta["avg_cost"]
         else:
             merged[ticker] = dict(meta)
     return merged
@@ -1561,11 +1573,17 @@ def build_portfolio_df(
         target_weight_override = meta.get("target_weight")
 
         tx_stat = tx_stats_map.get(ticker)
+        manual_avg_cost = meta.get("avg_cost")
         if tx_stat and tx_stat.get("tracked", False):
             avg_cost_native = float(tx_stat["avg_cost_native"])
             invested_native = float(tx_stat["invested_capital_native"])
             realized_native = float(tx_stat["realized_pnl_native"])
             source = "Transactions"
+        elif manual_avg_cost and float(manual_avg_cost) > 0:
+            avg_cost_native = float(manual_avg_cost)
+            invested_native = shares * avg_cost_native
+            realized_native = 0.0
+            source = "Manual Avg Cost"
         else:
             avg_cost_native = native_price if shares > 0 else 0.0
             invested_native = shares * native_price
@@ -1596,6 +1614,7 @@ def build_portfolio_df(
                 "Native Currency": native_currency,
                 "Shares": round(shares, 4),
                 "Native Price": round(native_price, 2),
+                "Avg Cost Native": round(avg_cost_native, 4),
                 "FX Rate": round(fx_rate, 6),
                 "Price": round(price, 2),
                 "Avg Cost": round(avg_cost_base, 2),

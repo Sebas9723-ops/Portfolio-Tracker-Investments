@@ -49,6 +49,7 @@ def _build_current_positions_map(ctx):
             "name": str(row["Name"]),
             "shares": float(row["Shares"]),
             "native_price": float(row["Native Price"]),
+            "avg_cost_native": float(row.get("Avg Cost Native", 0.0)),
             "base_price": float(row["Price"]),
             "value": float(row["Value"]),
             "weight_pct": float(row["Weight %"]),
@@ -136,7 +137,7 @@ def render_private_manager_page(ctx):
         for ticker in sorted(current_positions.keys()):
             meta = current_positions[ticker]
 
-            c1, c2 = st.columns([2, 1])
+            c1, c2, c3 = st.columns([2, 1, 1])
 
             with c1:
                 st.markdown(f"**{ticker}** — {meta['name']}")
@@ -151,12 +152,25 @@ def render_private_manager_page(ctx):
                     key=f"pm_shares_{ticker}",
                 )
 
+            with c3:
+                new_avg_cost = st.number_input(
+                    f"{ticker} avg cost (native)",
+                    min_value=0.0,
+                    value=float(meta["avg_cost_native"]) if float(meta["avg_cost_native"]) > 0 else 0.0,
+                    step=0.01,
+                    format="%.4f",
+                    key=f"pm_avg_cost_{ticker}",
+                    help="Average cost per share in the native currency of this ticker",
+                )
+
             edited_positions[ticker] = {
                 "name": meta["name"],
                 "shares": float(new_shares),
+                "avg_cost": float(new_avg_cost) if new_avg_cost > 0 else None,
             }
 
             delta = float(new_shares) - float(meta["shares"])
+            avg_cost_changed = abs(float(new_avg_cost) - float(meta["avg_cost_native"])) > 1e-6
             if abs(delta) > 1e-12:
                 action = "BUY" if delta > 0 else "SELL"
                 preview_rows.append(
@@ -167,6 +181,20 @@ def render_private_manager_page(ctx):
                         "New Shares": round(float(new_shares), 4),
                         "Delta Shares": round(abs(delta), 4),
                         "Action": action,
+                        "Avg Cost (native)": round(float(new_avg_cost), 4) if new_avg_cost > 0 else "—",
+                        "Reference Native Price": round(float(meta["native_price"]), 2),
+                    }
+                )
+            elif avg_cost_changed and new_avg_cost > 0:
+                preview_rows.append(
+                    {
+                        "Ticker": ticker,
+                        "Name": meta["name"],
+                        "Current Shares": round(float(meta["shares"]), 4),
+                        "New Shares": round(float(meta["shares"]), 4),
+                        "Delta Shares": 0.0,
+                        "Action": "Avg Cost Update",
+                        "Avg Cost (native)": round(float(new_avg_cost), 4),
                         "Reference Native Price": round(float(meta["native_price"]), 2),
                     }
                 )
@@ -212,13 +240,12 @@ def render_private_manager_page(ctx):
                 }
             )
 
-        save_payload = {
-            ticker: {
-                "name": meta["name"],
-                "shares": float(meta["shares"]),
-            }
-            for ticker, meta in edited_positions.items()
-        }
+        save_payload = {}
+        for ticker, meta in edited_positions.items():
+            entry = {"name": meta["name"], "shares": float(meta["shares"])}
+            if meta.get("avg_cost") and float(meta["avg_cost"]) > 0:
+                entry["avg_cost"] = float(meta["avg_cost"])
+            save_payload[ticker] = entry
 
         try:
             save_private_positions_to_sheets(save_payload)
