@@ -27,6 +27,17 @@ def _badge(ok: bool) -> str:
 
 # ── Connection test ────────────────────────────────────────────────────────────
 
+_DNS_ERRORS = ("name or service not known", "nodename nor servname", "errno -2",
+               "getaddrinfo failed", "name resolution")
+_NET_ERRORS  = ("timed out", "connection refused", "network is unreachable",
+                "no route to host", "errno 111")
+
+
+def _is_network_blocked(err: str) -> bool:
+    low = err.lower()
+    return any(k in low for k in _DNS_ERRORS + _NET_ERRORS)
+
+
 def _render_connection_status(ctx):
     from xtb_client import xtb_configured, load_xtb_account
 
@@ -47,7 +58,16 @@ def _render_connection_status(ctx):
         info, err = load_xtb_account()
 
     if err:
-        st.error(f"Error de conexión XTB: {err}")
+        if _is_network_blocked(err):
+            st.info(
+                "**XTB no disponible desde Streamlit Cloud** — "
+                "la plataforma bloquea conexiones salientes a brokers externos.\n\n"
+                "✅ Todo lo demás de la app funciona normalmente (Google Sheets sigue siendo la fuente de datos).\n\n"
+                "🖥️ Para usar XTB Manager con todas sus funciones, corre la app **localmente**:\n"
+                "```\nstreamlit run private_app.py\n```"
+            )
+        else:
+            st.error(f"Error de conexión XTB: {err}")
         return False
 
     equity     = float(info.get("equity",  info.get("balance", 0.0)))
