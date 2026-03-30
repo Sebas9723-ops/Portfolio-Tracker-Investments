@@ -14,6 +14,9 @@ from pages_app.risk import render_risk_page
 from pages_app.scenarios import render_scenarios_page
 from pages_app.trade_journal import render_trade_journal_page
 from pages_app.transactions import render_transactions_page
+from pages_app.market_overview import render_market_overview_page
+from pages_app.order_blotter import render_order_blotter_page
+from pages_app.ticker_lookup import render_ticker_lookup_page
 
 
 from PIL import Image as _Image
@@ -88,6 +91,9 @@ _NAV_PAGES = [
     "Transactions",
     "Performance Calendar",
     "Trade Journal",
+    "Market Overview",
+    "Order Blotter",
+    "Ticker Lookup",
     "Private Manager",
 ]
 
@@ -132,5 +138,11 @@ elif page_name == "Performance Calendar":
     render_performance_calendar_page(ctx)
 elif page_name == "Trade Journal":
     render_trade_journal_page(ctx)
+elif page_name == "Market Overview":
+    render_market_overview_page(ctx)
+elif page_name == "Order Blotter":
+    render_order_blotter_page(ctx)
+elif page_name == "Ticker Lookup":
+    render_ticker_lookup_page(ctx)
 elif page_name == "Private Manager":
     render_private_manager_page(ctx)

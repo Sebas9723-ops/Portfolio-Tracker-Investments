@@ -1,3 +1,4 @@
+import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
@@ -141,6 +142,77 @@ def _render_compliance(ctx):
     )
 
 
+def _render_fx_exposure(ctx):
+    fx_df = ctx.get("fx_exposure_df")
+    if fx_df is None or fx_df.empty:
+        return
+
+    info_section(
+        "FX Exposure",
+        "Portfolio holdings grouped by native currency. Impact of 1% FX move shows potential gain/loss for non-base currencies.",
+    )
+
+    base_ccy = ctx.get("base_currency", "USD")
+    c1, c2 = st.columns([1, 1])
+
+    with c1:
+        pie_fig = px.pie(
+            fx_df, names="Currency", values="Exposure",
+            hole=0.4,
+            color_discrete_sequence=["#f3a712", "#00c8ff", "#00e676", "#ce93d8", "#ff7043", "#aaa"],
+        )
+        pie_fig.update_traces(textposition="inside", textinfo="percent+label")
+        pie_fig.update_layout(
+            paper_bgcolor="#0b0f14", plot_bgcolor="#0b0f14",
+            font=dict(color="#e6e6e6"), height=320,
+            margin=dict(t=20, b=20, l=20, r=20),
+            legend=dict(orientation="h", y=-0.1),
+        )
+        st.plotly_chart(pie_fig, use_container_width=True, key="risk_fx_exposure_pie")
+
+    with c2:
+        display = fx_df.copy()
+        display["Exposure"] = display["Exposure"].map(lambda v: f"{v:,.2f}")
+        display["Weight %"] = display["Weight %"].map(lambda v: f"{v:.2f}%")
+        display["1% FX Move Impact"] = display["1% FX Move Impact"].map(
+            lambda v: f"{v:,.2f} {base_ccy}" if v != 0 else f"Base ({base_ccy})"
+        )
+        st.dataframe(display, use_container_width=True, hide_index=True)
+
+
+def _render_alert_summary(ctx):
+    active_alerts = ctx.get("active_alerts")
+    if active_alerts is None:
+        return
+    if not active_alerts:
+        return
+
+    info_section(
+        "Alert Summary",
+        "Active portfolio alerts triggered by current market conditions.",
+    )
+
+    alert_colors = {
+        "BREACH": "#ff1744",
+        "WARNING": "#ff7043",
+        "INFO": "#00c8ff",
+    }
+
+    for alert in active_alerts:
+        level = str(alert.get("level", "INFO")).upper()
+        title = str(alert.get("title", alert.get("name", "Alert")))
+        message = str(alert.get("message", alert.get("detail", "")))
+        color = alert_colors.get(level, "#f3a712")
+        st.markdown(
+            f"<div style='padding:10px 14px;border-radius:6px;margin-bottom:8px;"
+            f"background:#1a1f2e;border-left:4px solid {color}'>"
+            f"<span style='color:{color};font-weight:bold;font-size:13px'>[{level}] {title}</span>"
+            f"{'<br><span style=\"color:#aaa;font-size:12px\">' + message + '</span>' if message else ''}"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+
 def render_risk_page(ctx):
     render_page_title("Risk")
 
@@ -190,3 +262,5 @@ def render_risk_page(ctx):
     _render_risk_budget(ctx)
     _render_fixed_income(ctx)
     _render_compliance(ctx)
+    _render_fx_exposure(ctx)
+    _render_alert_summary(ctx)

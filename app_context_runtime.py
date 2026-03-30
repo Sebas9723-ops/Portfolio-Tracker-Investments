@@ -24,6 +24,8 @@ from app_core import (
     build_current_portfolio,
     build_dividend_insights,
     build_fx_data,
+    build_fx_exposure_summary,
+    build_multi_benchmark_comparison,
     build_portfolio_df,
     build_portfolio_returns,
     build_stress_test_table,
@@ -33,6 +35,7 @@ from app_core import (
     compute_extended_ratios,
     compute_ff3_exposure,
     compute_fixed_income_analytics,
+    compute_volatility_regime,
     check_mandate_compliance,
     compute_monthly_returns_calendar,
     compute_mwr,
@@ -760,6 +763,16 @@ def build_app_context_runtime(app_scope: str):
         fx_hist=fx_hist,
     )
 
+    # ── New Bloomberg features ─────────────────────────────────────────────────
+    volatility_regime = compute_volatility_regime(portfolio_returns)
+    fx_exposure_df = build_fx_exposure_summary(df, base_currency)
+    try:
+        multi_benchmark = build_multi_benchmark_comparison(
+            portfolio_returns, base_currency, fx_hist, risk_free_rate
+        )
+    except Exception:
+        multi_benchmark = {"fig": None, "summary_df": pd.DataFrame()}
+
     ctx = {
         "app_scope": app_scope,
         "mode": mode,
@@ -850,6 +863,9 @@ def build_app_context_runtime(app_scope: str):
         "drawdown_episodes_df": drawdown_episodes_df,
         "risk_parity_result": risk_parity_result,
         "compliance_results": compliance_results,
+        "volatility_regime": volatility_regime,
+        "fx_exposure_df": fx_exposure_df,
+        "multi_benchmark": multi_benchmark,
     }
 
     if _should_auto_snapshot(ctx):

@@ -3124,6 +3124,511 @@ def check_mandate_compliance(
     return results
 
 
+# =========================
+# BLOOMBERG FEATURES — ECONOMIC CALENDAR
+# =========================
+
+def get_macro_calendar() -> pd.DataFrame:
+    """Return hardcoded 2026 macro events."""
+    events = []
+    # Fed meetings 2026
+    fed_dates = [
+        "2026-01-29", "2026-03-19", "2026-05-07", "2026-06-18",
+        "2026-07-30", "2026-09-17", "2026-11-05", "2026-12-17",
+    ]
+    for d in fed_dates:
+        events.append({"Date": pd.Timestamp(d), "Event": "FOMC Meeting", "Type": "Fed"})
+
+    # CPI releases — roughly 2nd week each month
+    cpi_dates = [
+        "2026-01-14", "2026-02-11", "2026-03-11", "2026-04-10",
+        "2026-05-13", "2026-06-10", "2026-07-14", "2026-08-12",
+        "2026-09-11", "2026-10-14", "2026-11-12", "2026-12-10",
+    ]
+    for d in cpi_dates:
+        events.append({"Date": pd.Timestamp(d), "Event": "CPI Release", "Type": "CPI"})
+
+    # NFP — first Friday each month (approximate)
+    nfp_dates = [
+        "2026-01-09", "2026-02-06", "2026-03-06", "2026-04-03",
+        "2026-05-01", "2026-06-05", "2026-07-10", "2026-08-07",
+        "2026-09-04", "2026-10-02", "2026-11-06", "2026-12-04",
+    ]
+    for d in nfp_dates:
+        events.append({"Date": pd.Timestamp(d), "Event": "Non-Farm Payrolls", "Type": "NFP"})
+
+    df = pd.DataFrame(events).sort_values("Date").reset_index(drop=True)
+    today = pd.Timestamp.today().normalize()
+    df = df[df["Date"] >= today]
+    return df
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_upcoming_earnings(tickers: list) -> pd.DataFrame:
+    """Fetch upcoming earnings dates for held tickers via yfinance."""
+    import yfinance as yf
+    rows = []
+    for ticker in tickers:
+        try:
+            cal = yf.Ticker(ticker).calendar
+            if cal is None:
+                continue
+            if isinstance(cal, dict):
+                earnings_dates = cal.get("Earnings Date")
+                if earnings_dates is None:
+                    continue
+                if isinstance(earnings_dates, (list, tuple)):
+                    for ed in earnings_dates:
+                        try:
+                            rows.append({"Date": pd.Timestamp(ed), "Event": f"Earnings: {ticker}", "Type": "Earnings", "Ticker": ticker})
+                        except Exception:
+                            pass
+                else:
+                    try:
+                        rows.append({"Date": pd.Timestamp(earnings_dates), "Event": f"Earnings: {ticker}", "Type": "Earnings", "Ticker": ticker})
+                    except Exception:
+                        pass
+            elif isinstance(cal, pd.DataFrame):
+                for col in ["Earnings Date", "earnings date"]:
+                    if col in cal.index:
+                        dates_val = cal.loc[col]
+                        if hasattr(dates_val, "__iter__") and not isinstance(dates_val, str):
+                            for ed in dates_val:
+                                try:
+                                    rows.append({"Date": pd.Timestamp(ed), "Event": f"Earnings: {ticker}", "Type": "Earnings", "Ticker": ticker})
+                                except Exception:
+                                    pass
+                        else:
+                            try:
+                                rows.append({"Date": pd.Timestamp(dates_val), "Event": f"Earnings: {ticker}", "Type": "Earnings", "Ticker": ticker})
+                            except Exception:
+                                pass
+        except Exception:
+            pass
+    if not rows:
+        return pd.DataFrame(columns=["Date", "Event", "Type", "Ticker"])
+    df = pd.DataFrame(rows).sort_values("Date").reset_index(drop=True)
+    today = pd.Timestamp.today().normalize()
+    df = df[df["Date"] >= today]
+    return df
+
+
+# =========================
+# BLOOMBERG FEATURES — SECTOR HEATMAP
+# =========================
+
+SECTOR_ETF_MAP = {
+    "XLK": "Technology",
+    "XLE": "Energy",
+    "XLF": "Financials",
+    "XLV": "Health Care",
+    "XLY": "Consumer Discr.",
+    "XLP": "Consumer Staples",
+    "XLI": "Industrials",
+    "XLB": "Materials",
+    "XLRE": "Real Estate",
+    "XLU": "Utilities",
+    "XLC": "Communication",
+}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def build_sector_heatmap_data() -> pd.DataFrame:
+    """Fetch 1-day and 5-day returns for sector ETFs."""
+    import yfinance as yf
+    etfs = list(SECTOR_ETF_MAP.keys())
+    try:
+        raw = yf.download(etfs, period="10d", auto_adjust=True, progress=False)
+        if raw.empty:
+            return pd.DataFrame(columns=["ETF", "Sector", "return_1d", "return_5d"])
+        if isinstance(raw.columns, pd.MultiIndex):
+            close = raw["Close"] if "Close" in raw.columns.get_level_values(0) else raw.xs("Close", axis=1, level=0)
+        else:
+            close = raw[["Close"]] if "Close" in raw.columns else raw
+        close = close.dropna(how="all")
+        rows = []
+        for etf in etfs:
+            if etf not in close.columns:
+                continue
+            s = close[etf].dropna()
+            if len(s) < 2:
+                continue
+            r1d = float(s.iloc[-1] / s.iloc[-2] - 1) if len(s) >= 2 else 0.0
+            r5d = float(s.iloc[-1] / s.iloc[0] - 1) if len(s) >= 2 else 0.0
+            rows.append({"ETF": etf, "Sector": SECTOR_ETF_MAP[etf], "return_1d": r1d, "return_5d": r5d})
+        return pd.DataFrame(rows)
+    except Exception:
+        return pd.DataFrame(columns=["ETF", "Sector", "return_1d", "return_5d"])
+
+
+# =========================
+# BLOOMBERG FEATURES — NEWS FEED
+# =========================
+
+@st.cache_data(ttl=900, show_spinner=False)
+def fetch_ticker_news(tickers: list, max_per_ticker: int = 3) -> list:
+    """Fetch Yahoo Finance RSS headlines for each ticker."""
+    import urllib.request
+    import xml.etree.ElementTree as ET
+    results = []
+    for ticker in tickers:
+        try:
+            url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                content = resp.read()
+            root = ET.fromstring(content)
+            ns = {"dc": "http://purl.org/dc/elements/1.1/"}
+            items = root.findall(".//item")
+            count = 0
+            for item in items:
+                if count >= max_per_ticker:
+                    break
+                title_el = item.find("title")
+                link_el = item.find("link")
+                pub_el = item.find("pubDate")
+                title = title_el.text.strip() if title_el is not None and title_el.text else ""
+                link = link_el.text.strip() if link_el is not None and link_el.text else ""
+                pub = pub_el.text.strip() if pub_el is not None and pub_el.text else ""
+                if title:
+                    results.append({"ticker": ticker, "title": title, "link": link, "pubDate": pub})
+                    count += 1
+        except Exception:
+            pass
+    return results
+
+
+# =========================
+# BLOOMBERG FEATURES — VOLATILITY REGIME
+# =========================
+
+def compute_volatility_regime(portfolio_returns: pd.Series) -> dict:
+    """
+    Compute EWMA vol, rolling vols, and classify regime.
+    EWMA: sigma^2_t = lambda * sigma^2_{t-1} + (1-lambda) * r^2_t (RiskMetrics, lambda=0.94)
+    """
+    empty = {
+        "ewma_vol_series": pd.Series(dtype=float),
+        "current_regime": "UNKNOWN",
+        "current_ewma_vol": float("nan"),
+        "rolling_21d": pd.Series(dtype=float),
+        "rolling_63d": pd.Series(dtype=float),
+    }
+    if portfolio_returns is None or len(portfolio_returns) < 5:
+        return empty
+
+    r = portfolio_returns.dropna()
+    if len(r) < 5:
+        return empty
+
+    lam = 0.94
+    r2 = r.values ** 2
+    n = len(r2)
+    ewma_var = np.empty(n)
+    ewma_var[0] = r2[0]
+    for i in range(1, n):
+        ewma_var[i] = lam * ewma_var[i - 1] + (1 - lam) * r2[i]
+
+    ewma_vol_daily = np.sqrt(ewma_var)
+    ewma_vol_annual = ewma_vol_daily * np.sqrt(252)
+    ewma_series = pd.Series(ewma_vol_annual, index=r.index, name="EWMA Vol (Ann.)")
+
+    rolling_21 = r.rolling(21).std() * np.sqrt(252)
+    rolling_63 = r.rolling(63).std() * np.sqrt(252)
+
+    current_ewma = float(ewma_series.iloc[-1])
+    if current_ewma < 0.10:
+        regime = "LOW"
+    elif current_ewma < 0.20:
+        regime = "NORMAL"
+    elif current_ewma < 0.35:
+        regime = "HIGH"
+    else:
+        regime = "CRISIS"
+
+    return {
+        "ewma_vol_series": ewma_series,
+        "current_regime": regime,
+        "current_ewma_vol": current_ewma,
+        "rolling_21d": rolling_21,
+        "rolling_63d": rolling_63,
+    }
+
+
+# =========================
+# BLOOMBERG FEATURES — FX EXPOSURE
+# =========================
+
+def build_fx_exposure_summary(df: pd.DataFrame, base_currency: str) -> pd.DataFrame:
+    """
+    Group portfolio holdings by native currency.
+    Returns: Currency | Exposure | Weight % | Impact of 1% FX Move
+    """
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["Currency", "Exposure", "Weight %", "1% FX Move Impact"])
+
+    required = {"Native Currency", "Value"}
+    if not required.issubset(df.columns):
+        return pd.DataFrame(columns=["Currency", "Exposure", "Weight %", "1% FX Move Impact"])
+
+    sub = df[df["Value"] > 0][["Native Currency", "Value"]].copy()
+    if sub.empty:
+        return pd.DataFrame(columns=["Currency", "Exposure", "Weight %", "1% FX Move Impact"])
+
+    grouped = sub.groupby("Native Currency")["Value"].sum().reset_index()
+    grouped.columns = ["Currency", "Exposure"]
+    total = grouped["Exposure"].sum()
+    if total > 0:
+        grouped["Weight %"] = (grouped["Exposure"] / total * 100).round(2)
+    else:
+        grouped["Weight %"] = 0.0
+
+    grouped["1% FX Move Impact"] = grouped.apply(
+        lambda row: 0.0 if row["Currency"] == base_currency else row["Exposure"] * 0.01,
+        axis=1,
+    )
+    grouped = grouped.sort_values("Exposure", ascending=False).reset_index(drop=True)
+    return grouped
+
+
+# =========================
+# BLOOMBERG FEATURES — MULTI-BENCHMARK COMPARISON
+# =========================
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def build_multi_benchmark_comparison(
+    portfolio_returns: pd.Series,
+    base_currency: str,
+    _fx_hist: pd.DataFrame,
+    risk_free_rate: float,
+) -> dict:
+    """
+    Build cumulative return chart + summary table comparing portfolio vs SPY, ACWI, BND, and blended 60/40.
+    _fx_hist is prefixed with _ so Streamlit won't hash it (unhashable DataFrame).
+    """
+    import yfinance as yf
+
+    empty = {"fig": go.Figure(), "summary_df": pd.DataFrame()}
+
+    if portfolio_returns is None or portfolio_returns.empty:
+        return empty
+
+    benchmarks = {"SPY": "S&P 500", "ACWI": "MSCI World", "BND": "Bonds"}
+    bench_tickers = list(benchmarks.keys())
+
+    try:
+        raw = yf.download(bench_tickers, period="2y", auto_adjust=True, progress=False)
+        if raw.empty:
+            return empty
+        if isinstance(raw.columns, pd.MultiIndex):
+            close = raw["Close"]
+        else:
+            close = raw[["Close"]] if "Close" in raw.columns else raw
+        close = close.dropna(how="all")
+    except Exception:
+        return empty
+
+    # FX-adjust if base currency is not USD
+    fx_adj: dict[str, pd.Series] = {}
+    if base_currency != "USD" and _fx_hist is not None and not _fx_hist.empty:
+        fx_col = f"{base_currency}=X"
+        alt_col = f"USD{base_currency}=X"
+        if fx_col in _fx_hist.columns:
+            fx_adj_series = _fx_hist[fx_col].reindex(close.index, method="ffill")
+        elif alt_col in _fx_hist.columns:
+            fx_adj_series = (1.0 / _fx_hist[alt_col]).reindex(close.index, method="ffill")
+        else:
+            fx_adj_series = None
+        if fx_adj_series is not None:
+            for t in bench_tickers:
+                if t in close.columns:
+                    fx_adj[t] = fx_adj_series
+
+    bench_returns: dict[str, pd.Series] = {}
+    for t in bench_tickers:
+        if t not in close.columns:
+            continue
+        s = close[t].dropna()
+        if t in fx_adj:
+            fx_s = fx_adj[t].reindex(s.index, method="ffill")
+            s = s * fx_s
+        r = s.pct_change().dropna()
+        bench_returns[t] = r
+
+    # Blended 60/40
+    if "SPY" in bench_returns and "BND" in bench_returns:
+        spy_r = bench_returns["SPY"]
+        bnd_r = bench_returns["BND"]
+        aligned_blend = pd.concat([spy_r.rename("SPY"), bnd_r.rename("BND")], axis=1).dropna()
+        if not aligned_blend.empty:
+            blend_r = aligned_blend["SPY"] * 0.60 + aligned_blend["BND"] * 0.40
+            bench_returns["Blend 60/40"] = blend_r
+
+    fig = go.Figure()
+    colors = {"Portfolio": "#f3a712", "SPY": "#00c8ff", "ACWI": "#00e676", "BND": "#ce93d8", "Blend 60/40": "#ff7043"}
+
+    p_cum = (1 + portfolio_returns).cumprod() - 1
+    fig.add_scatter(x=p_cum.index, y=p_cum, mode="lines", name=f"Portfolio ({p_cum.iloc[-1]:.2%})",
+                    line=dict(color=colors["Portfolio"], width=2),
+                    hovertemplate="%{x|%Y-%m-%d}<br>Portfolio: %{y:.2%}<extra></extra>")
+
+    bench_labels = {"SPY": "S&P 500 (SPY)", "ACWI": "MSCI World (ACWI)", "BND": "Bonds (BND)", "Blend 60/40": "Blend 60/40"}
+    for key, r in bench_returns.items():
+        aligned = pd.concat([portfolio_returns.rename("P"), r.rename(key)], axis=1).dropna()
+        if aligned.empty:
+            continue
+        b_cum = (1 + aligned[key]).cumprod() - 1
+        label = bench_labels.get(key, key)
+        fig.add_scatter(x=b_cum.index, y=b_cum, mode="lines", name=f"{label} ({b_cum.iloc[-1]:.2%})",
+                        line=dict(color=colors.get(key, "#aaa"), width=1.5, dash="dot"),
+                        hovertemplate=f"%{{x|%Y-%m-%d}}<br>{label}: %{{y:.2%}}<extra></extra>")
+
+    fig.update_layout(
+        paper_bgcolor="#0b0f14", plot_bgcolor="#0b0f14",
+        font=dict(color="#e6e6e6"), height=430,
+        margin=dict(t=20, b=20, l=20, r=20),
+        xaxis_title="Date", yaxis_title="Cumulative Return",
+        yaxis=dict(tickformat=".0%"),
+        legend=dict(orientation="h", y=1.10, x=0.0),
+    )
+
+    # Summary table
+    def _stats(r_series: pd.Series, name: str, p_total: float) -> dict:
+        if r_series.empty:
+            return {}
+        cum = float((1 + r_series).prod() - 1)
+        vol = float(r_series.std() * np.sqrt(252))
+        sharpe_v = float((r_series.mean() * 252 - risk_free_rate) / vol) if vol > 0 else float("nan")
+        cum_s = (1 + r_series).cumprod()
+        dd = float((cum_s / cum_s.cummax() - 1).min())
+        vs_portfolio = cum - p_total
+        return {
+            "Benchmark": name, "Return": f"{cum:.2%}", "Volatility": f"{vol:.2%}",
+            "Sharpe": f"{sharpe_v:.2f}", "Max DD": f"{dd:.2%}",
+            "vs Portfolio": f"{vs_portfolio:+.2%}",
+        }
+
+    p_cum_total = float((1 + portfolio_returns).prod() - 1)
+    p_vol = float(portfolio_returns.std() * np.sqrt(252))
+    p_sharpe = float((portfolio_returns.mean() * 252 - risk_free_rate) / p_vol) if p_vol > 0 else float("nan")
+    p_cum_s = (1 + portfolio_returns).cumprod()
+    p_dd = float((p_cum_s / p_cum_s.cummax() - 1).min())
+
+    summary_rows = [{"Benchmark": "Portfolio", "Return": f"{p_cum_total:.2%}", "Volatility": f"{p_vol:.2%}",
+                     "Sharpe": f"{p_sharpe:.2f}", "Max DD": f"{p_dd:.2%}", "vs Portfolio": "—"}]
+
+    bench_name_map = {"SPY": "S&P 500 (SPY)", "ACWI": "MSCI World (ACWI)", "BND": "Bonds (BND)", "Blend 60/40": "Blend 60/40"}
+    for key, r in bench_returns.items():
+        aligned = pd.concat([portfolio_returns.rename("P"), r.rename(key)], axis=1).dropna()
+        if aligned.empty:
+            continue
+        row = _stats(aligned[key], bench_name_map.get(key, key), p_cum_total)
+        if row:
+            summary_rows.append(row)
+
+    summary_df = pd.DataFrame(summary_rows)
+    return {"fig": fig, "summary_df": summary_df}
+
+
+# =========================
+# BLOOMBERG FEATURES — TICKER DEEP DIVE
+# =========================
+
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_ticker_deep_dive(ticker: str) -> dict:
+    """Fetch comprehensive ticker data from yfinance."""
+    import yfinance as yf
+    try:
+        t = yf.Ticker(ticker)
+        info = t.info or {}
+        hist = t.history(period="6mo")
+        return {
+            "info": info,
+            "hist": hist,
+            "ticker": ticker.upper(),
+        }
+    except Exception as e:
+        return {"info": {}, "hist": pd.DataFrame(), "ticker": ticker.upper(), "error": str(e)}
+
+
+# =========================
+# BLOOMBERG FEATURES — ORDER BLOTTER
+# =========================
+
+ORDER_BLOTTER_HEADERS = [
+    "id", "date", "ticker", "direction", "quantity",
+    "limit_price", "status", "filled_price", "filled_qty", "notes",
+]
+
+
+def connect_order_blotter_worksheet():
+    return _connect_named_worksheet("order_blotter", ORDER_BLOTTER_HEADERS)
+
+
+@st.cache_data(ttl=GOOGLE_SHEETS_CACHE_TTL, show_spinner=False)
+def load_order_blotter_from_sheets() -> pd.DataFrame:
+    sheet_id, sheet_url = _get_private_positions_sheet_locator()
+    try:
+        connect_order_blotter_worksheet()
+        records = _get_worksheet_records_cached(sheet_id, sheet_url, "order_blotter")
+    except Exception:
+        return pd.DataFrame(columns=ORDER_BLOTTER_HEADERS)
+
+    if not records:
+        return pd.DataFrame(columns=ORDER_BLOTTER_HEADERS)
+
+    df = pd.DataFrame(records)
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    for col in ORDER_BLOTTER_HEADERS:
+        if col not in df.columns:
+            df[col] = ""
+    for col in ["quantity", "limit_price", "filled_price", "filled_qty"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["ticker"] = df["ticker"].astype(str).str.strip().str.upper()
+    df["direction"] = df["direction"].astype(str).str.strip().str.upper()
+    df["status"] = df["status"].astype(str).str.strip()
+    return df[ORDER_BLOTTER_HEADERS].reset_index(drop=True)
+
+
+def append_order_to_blotter(order: dict):
+    ws = connect_order_blotter_worksheet()
+    row = [
+        str(order.get("id", "")),
+        str(order.get("date", "")),
+        str(order.get("ticker", "")).upper().strip(),
+        str(order.get("direction", "")).upper().strip(),
+        float(order.get("quantity", 0.0)),
+        float(order.get("limit_price", 0.0)) if order.get("limit_price") else "",
+        str(order.get("status", "Pending")).strip(),
+        float(order.get("filled_price", 0.0)) if order.get("filled_price") else "",
+        float(order.get("filled_qty", 0.0)) if order.get("filled_qty") else "",
+        str(order.get("notes", "")).strip(),
+    ]
+    ws.append_row(row, value_input_option="USER_ENTERED")
+    _clear_google_sheets_cache()
+
+
+def update_order_status(order_id: str, updates: dict):
+    """Update an existing order blotter row by its id column."""
+    ws = connect_order_blotter_worksheet()
+    records = ws.get_all_values()
+    if len(records) < 2:
+        return
+    header = [str(h).strip().lower() for h in records[0]]
+    id_col = header.index("id") + 1 if "id" in header else None
+    if id_col is None:
+        return
+    for i, row in enumerate(records[1:], start=2):
+        if len(row) >= id_col and str(row[id_col - 1]).strip() == str(order_id).strip():
+            for field, value in updates.items():
+                if field in header:
+                    col_idx = header.index(field) + 1
+                    ws.update_cell(i, col_idx, str(value))
+            break
+    _clear_google_sheets_cache()
+
+
 def compute_goal_contribution(
     current_value: float,
     target_value: float,

@@ -1,3 +1,4 @@
+import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
 
@@ -264,6 +265,95 @@ def _render_ff3(ctx):
     st.caption(f"Factor proxy source: {ff3.get('source', 'ETF Proxy')}")
 
 
+def _render_volatility_regime(ctx):
+    vr = ctx.get("volatility_regime")
+    if not vr or vr.get("ewma_vol_series") is None or vr["ewma_vol_series"].empty:
+        return
+
+    regime = vr.get("current_regime", "UNKNOWN")
+    current_ewma = vr.get("current_ewma_vol", float("nan"))
+    ewma_series = vr["ewma_vol_series"]
+    rolling_21 = vr.get("rolling_21d")
+    rolling_63 = vr.get("rolling_63d")
+
+    regime_colors = {"LOW": "#00e676", "NORMAL": "#f3a712", "HIGH": "#ff7043", "CRISIS": "#ff1744", "UNKNOWN": "#888"}
+    badge_color = regime_colors.get(regime, "#888")
+
+    info_section(
+        "Volatility Regime",
+        "EWMA volatility (RiskMetrics λ=0.94) annualized. Regimes: LOW (<10%), NORMAL (10–20%), HIGH (20–35%), CRISIS (>35%).",
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(
+        f"<div style='text-align:center;padding:12px 8px;border-radius:6px;background:#1a1f2e;border:2px solid {badge_color}'>"
+        f"<div style='color:{badge_color};font-size:20px;font-weight:bold'>{regime}</div>"
+        f"<div style='color:#888;font-size:12px;margin-top:4px'>Current Regime</div></div>",
+        unsafe_allow_html=True,
+    )
+    info_metric(c2, "EWMA Vol (Ann.)", f"{current_ewma:.2%}" if not np.isnan(current_ewma) else "—", "Current annualized EWMA volatility.")
+    if rolling_21 is not None and not rolling_21.empty:
+        info_metric(c3, "21-day Hist. Vol", f"{rolling_21.iloc[-1]:.2%}" if not np.isnan(rolling_21.iloc[-1]) else "—", "Rolling 21-day historical volatility.")
+    if rolling_63 is not None and not rolling_63.empty:
+        info_metric(c4, "63-day Hist. Vol", f"{rolling_63.iloc[-1]:.2%}" if not np.isnan(rolling_63.iloc[-1]) else "—", "Rolling 63-day historical volatility.")
+
+    # Background band shading by regime thresholds
+    fig = go.Figure()
+    for threshold, color, label in [
+        (0.10, "rgba(0,230,118,0.08)", "LOW <10%"),
+        (0.20, "rgba(243,167,18,0.08)", "NORMAL 10-20%"),
+        (0.35, "rgba(255,112,67,0.08)", "HIGH 20-35%"),
+    ]:
+        fig.add_hrect(
+            y0=0, y1=threshold,
+            fillcolor=color, line_width=0,
+            annotation_text=label, annotation_position="right",
+            annotation=dict(font=dict(color="#888", size=10)),
+        )
+    fig.add_hrect(y0=0.35, y1=1.0, fillcolor="rgba(255,23,68,0.06)", line_width=0,
+                  annotation_text="CRISIS >35%", annotation_position="right",
+                  annotation=dict(font=dict(color="#888", size=10)))
+
+    fig.add_scatter(x=ewma_series.index, y=ewma_series, mode="lines", name="EWMA Vol",
+                    line=dict(color="#f3a712", width=2),
+                    hovertemplate="%{x|%Y-%m-%d}<br>EWMA Vol: %{y:.2%}<extra></extra>")
+    if rolling_21 is not None and not rolling_21.empty:
+        fig.add_scatter(x=rolling_21.index, y=rolling_21, mode="lines", name="21-day Rolling",
+                        line=dict(color="#00c8ff", width=1, dash="dot"),
+                        hovertemplate="%{x|%Y-%m-%d}<br>21d Vol: %{y:.2%}<extra></extra>")
+    if rolling_63 is not None and not rolling_63.empty:
+        fig.add_scatter(x=rolling_63.index, y=rolling_63, mode="lines", name="63-day Rolling",
+                        line=dict(color="#ce93d8", width=1, dash="dash"),
+                        hovertemplate="%{x|%Y-%m-%d}<br>63d Vol: %{y:.2%}<extra></extra>")
+
+    fig.update_layout(
+        paper_bgcolor="#0b0f14", plot_bgcolor="#0b0f14",
+        font=dict(color="#e6e6e6"), height=380,
+        margin=dict(t=20, b=20, l=20, r=80),
+        xaxis_title="Date", yaxis_title="Annualized Volatility",
+        yaxis=dict(tickformat=".0%"),
+        legend=dict(orientation="h", y=1.08, x=0.0),
+    )
+    st.plotly_chart(fig, use_container_width=True, key="analytics_vol_regime_chart")
+
+
+def _render_multi_benchmark(ctx):
+    mb = ctx.get("multi_benchmark")
+    if not mb:
+        return
+    fig = mb.get("fig")
+    summary_df = mb.get("summary_df")
+
+    info_section(
+        "Multi-Benchmark Comparison",
+        "Portfolio vs S&P 500 (SPY), MSCI World (ACWI), Bonds (BND), and blended 60/40 since inception.",
+    )
+    if fig is not None:
+        st.plotly_chart(fig, use_container_width=True, key="analytics_multi_benchmark_chart")
+    if summary_df is not None and not summary_df.empty:
+        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+
+
 def render_analytics_page(ctx):
     render_page_title("Analytics")
 
@@ -308,3 +398,6 @@ def render_analytics_page(ctx):
             use_container_width=True,
             key="analytics_rolling_metrics_chart_fixed_v2",
         )
+
+    _render_volatility_regime(ctx)
+    _render_multi_benchmark(ctx)
