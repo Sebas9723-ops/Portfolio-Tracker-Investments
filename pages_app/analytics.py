@@ -244,6 +244,26 @@ def _render_brinson(ctx):
     st.plotly_chart(fig, use_container_width=True, key="analytics_brinson_chart")
 
 
+def _render_ff3(ctx):
+    ff3 = ctx.get("ff3_result")
+    if not ff3:
+        return
+
+    info_section(
+        "Fama-French 3-Factor Exposure",
+        "OLS regression of portfolio excess returns on Market (Mkt-RF), Size (SMB), and Value (HML) factors. "
+        "Factors are proxied by IVV / IWM / IVE / IVW ETFs. t-stats shown as tooltip.",
+    )
+    c1, c2, c3, c4, c5 = st.columns(5)
+    alpha_ann = float(ff3.get("alpha", 0))
+    info_metric(c1, "FF3 Alpha (ann.)", _fmt(alpha_ann), f"t = {ff3.get('alpha_tstat', 0):.2f}")
+    info_metric(c2, "Market β", _fmt(ff3.get("mkt_beta"), ".2f"), f"t = {ff3.get('mkt_tstat', 0):.2f}")
+    info_metric(c3, "SMB β (Size)", _fmt(ff3.get("smb_beta"), ".2f"), f"t = {ff3.get('smb_tstat', 0):.2f}  (+) = small-cap tilt")
+    info_metric(c4, "HML β (Value)", _fmt(ff3.get("hml_beta"), ".2f"), f"t = {ff3.get('hml_tstat', 0):.2f}  (+) = value tilt")
+    info_metric(c5, "R²", _fmt(ff3.get("r_squared"), ".2%"), f"{ff3.get('n_obs', 0)} observations")
+    st.caption(f"Factor proxy source: {ff3.get('source', 'ETF Proxy')}")
+
+
 def render_analytics_page(ctx):
     render_page_title("Analytics")
 
@@ -275,6 +295,7 @@ def render_analytics_page(ctx):
     _render_extended_ratios(ctx)
     _render_returns_comparison(ctx)
     _render_brinson(ctx)
+    _render_ff3(ctx)
 
     rolling_fig = _build_rolling_metrics_chart(ctx.get("rolling_df"))
     if rolling_fig is not None:

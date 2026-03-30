@@ -1,7 +1,7 @@
 import plotly.graph_objects as go
 import streamlit as st
 
-from app_core import render_page_title, info_section, info_metric
+from app_core import info_metric, info_section, render_page_title
 
 
 def _fmt_pct(v, decimals=2) -> str:
@@ -60,6 +60,51 @@ def _render_var_section(ctx):
         info_metric(a4, f"Annual CVaR 99% ({ccy})", f"{ann_cvar_99:,.2f}", "Estimated annual tail loss at 99%.")
 
 
+def _render_risk_budget(ctx):
+    risk_budget_df = ctx.get("risk_budget_df")
+    if risk_budget_df is None or risk_budget_df.empty:
+        return
+
+    info_section(
+        "Risk Budgeting — Component VaR",
+        "How much each asset contributes to total portfolio VaR (95%, annualized). "
+        "Component VaR sums to total VaR. Risk Contribution % shows each asset's relative share.",
+    )
+    st.dataframe(risk_budget_df, use_container_width=True, hide_index=True)
+
+    fig = go.Figure()
+    fig.add_bar(
+        x=risk_budget_df["Ticker"],
+        y=risk_budget_df["Risk Contribution %"],
+        marker_color="#f3a712",
+        text=[f"{v:.1f}%" for v in risk_budget_df["Risk Contribution %"]],
+        textposition="outside",
+    )
+    fig.update_layout(
+        paper_bgcolor="#0b0f14",
+        plot_bgcolor="#0b0f14",
+        font=dict(color="#e6e6e6"),
+        height=320,
+        margin=dict(t=20, b=20, l=20, r=20),
+        xaxis_title="Ticker",
+        yaxis_title="Risk Contribution %",
+    )
+    st.plotly_chart(fig, use_container_width=True, key="risk_budget_chart")
+
+
+def _render_fixed_income(ctx):
+    fi_df = ctx.get("fixed_income_df")
+    if fi_df is None or fi_df.empty:
+        return
+
+    info_section(
+        "Fixed Income Analytics",
+        "Duration and rate sensitivity for bond ETFs in the portfolio. "
+        "DV01 = dollar value change per 1bp rate move. Rate +1% = estimated impact of a 100bps parallel shift.",
+    )
+    st.dataframe(fi_df, use_container_width=True, hide_index=True)
+
+
 def render_risk_page(ctx):
     render_page_title("Risk")
 
@@ -105,3 +150,6 @@ def render_risk_page(ctx):
             yaxis=dict(tickformat=".0%"),
         )
         st.plotly_chart(dd_fig, use_container_width=True, key="risk_rolling_drawdown_chart")
+
+    _render_risk_budget(ctx)
+    _render_fixed_income(ctx)

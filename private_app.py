@@ -10,6 +10,7 @@ from pages_app.private_manager import render_private_manager_page
 from pages_app.projections import render_projections_page
 from pages_app.rebalancing import render_rebalancing_page
 from pages_app.risk import render_risk_page
+from pages_app.scenarios import render_scenarios_page
 from pages_app.transactions import render_transactions_page
 
 
@@ -30,6 +31,7 @@ _NAV_PAGES = [
     "Portfolio",
     "Analytics",
     "Risk",
+    "Scenarios",
     "Projections",
     "Optimization",
     "Rebalance Center",
@@ -60,6 +62,8 @@ elif page_name == "Analytics":
     render_analytics_page(ctx)
 elif page_name == "Risk":
     render_risk_page(ctx)
+elif page_name == "Scenarios":
+    render_scenarios_page(ctx)
 elif page_name == "Projections":
     render_projections_page(ctx)
 elif page_name == "Optimization":

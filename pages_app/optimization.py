@@ -1,12 +1,129 @@
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 from app_core import (
     build_recommended_shares_table,
+    compute_black_litterman,
     info_metric,
     info_section,
     render_page_title,
     weights_table,
 )
+
+
+def _render_black_litterman(ctx):
+    asset_returns = ctx.get("asset_returns")
+    usable = list(ctx.get("usable", []))
+    df = ctx.get("df", pd.DataFrame())
+
+    if asset_returns is None or asset_returns.empty or not usable or df.empty:
+        return
+
+    info_section(
+        "Black-Litterman Optimization",
+        "Posterior expected returns blending CAPM equilibrium (reverse-optimized from current weights) "
+        "with your investor views. Add views to tilt the portfolio away from equilibrium.",
+    )
+
+    # Derive current weights from df
+    weight_col = df.set_index("Ticker").reindex(usable)["Weight"].fillna(0)
+    total_w = weight_col.sum()
+    current_weights = (weight_col.values / total_w) if total_w > 0 else np.ones(len(usable)) / len(usable)
+
+    risk_free_rate = float(ctx.get("risk_free_rate", 0.02))
+
+    # Views management
+    if "bl_views" not in st.session_state:
+        st.session_state["bl_views"] = []
+
+    with st.expander("Add Investor Views (optional)", expanded=False):
+        st.caption("Specify your expected annual return for an asset. Confidence 0–1 (higher = stronger view).")
+        v1, v2, v3, v4 = st.columns([2, 2, 2, 1])
+        with v1:
+            view_ticker = st.selectbox("Ticker", usable, key="bl_view_ticker")
+        with v2:
+            view_return = st.number_input("Expected Annual Return", -0.5, 1.0, 0.10, 0.01,
+                                          format="%.2f", key="bl_view_return")
+        with v3:
+            view_conf = st.number_input("Confidence", 0.01, 0.99, 0.50, 0.05,
+                                        format="%.2f", key="bl_view_conf")
+        with v4:
+            st.write("")
+            st.write("")
+            if st.button("Add View", key="bl_add_view"):
+                st.session_state["bl_views"].append({
+                    "ticker": view_ticker,
+                    "expected_return": float(view_return),
+                    "confidence": float(view_conf),
+                })
+                st.rerun()
+
+        if st.session_state["bl_views"]:
+            views_df = pd.DataFrame(st.session_state["bl_views"])
+            st.dataframe(views_df, use_container_width=True, hide_index=True)
+            if st.button("Clear All Views", key="bl_clear_views"):
+                st.session_state["bl_views"] = []
+                st.rerun()
+
+    bl = compute_black_litterman(
+        asset_returns=asset_returns,
+        current_weights=current_weights,
+        tickers=usable,
+        views=st.session_state.get("bl_views", []),
+        risk_free_rate=risk_free_rate,
+    )
+
+    if bl is None:
+        st.info("Black-Litterman requires at least 2 assets with return history.")
+        return
+
+    eq_returns = bl["equilibrium_returns"]
+    post_returns = bl["posterior_returns"]
+
+    # Side-by-side chart
+    fig = go.Figure()
+    fig.add_bar(x=usable, y=[eq_returns.get(t, 0) for t in usable],
+                name="Equilibrium (CAPM)", marker_color="#4db8ff",
+                hovertemplate="%{x}<br>Equilibrium: %{y:.2%}<extra></extra>")
+    fig.add_bar(x=usable, y=[post_returns.get(t, 0) for t in usable],
+                name="BL Posterior", marker_color="#f3a712",
+                hovertemplate="%{x}<br>Posterior: %{y:.2%}<extra></extra>")
+    fig.update_layout(
+        barmode="group",
+        paper_bgcolor="#0b0f14",
+        plot_bgcolor="#0b0f14",
+        font=dict(color="#e6e6e6"),
+        height=380,
+        margin=dict(t=20, b=20, l=20, r=20),
+        xaxis_title="Asset",
+        yaxis_title="Expected Annual Return",
+        yaxis=dict(tickformat=".1%"),
+        legend=dict(orientation="h", y=1.08, x=0.0),
+    )
+    st.plotly_chart(fig, use_container_width=True, key="bl_returns_chart")
+
+    # Summary table
+    rows = [
+        {
+            "Ticker": t,
+            "Equilibrium Return": f"{eq_returns.get(t, 0):.2%}",
+            "BL Posterior Return": f"{post_returns.get(t, 0):.2%}",
+            "Δ vs Equilibrium": f"{post_returns.get(t, 0) - eq_returns.get(t, 0):+.2%}",
+            "Current Weight": f"{current_weights[i]:.2%}",
+        }
+        for i, t in enumerate(usable)
+    ]
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    if st.session_state.get("bl_views"):
+        st.caption(
+            f"Posterior blends equilibrium with {len(st.session_state['bl_views'])} investor "
+            f"view(s). τ=0.05, λ=2.5."
+        )
+    else:
+        st.caption("No views added — posterior equals CAPM equilibrium. Add views above to see BL adjustment.")
 
 
 def _annualized_voo_return(ctx):
@@ -62,3 +179,5 @@ def render_optimization_page(ctx):
 
         info_section("Min Volatility Shares", "Recommended shares to move the current portfolio toward the minimum volatility allocation.")
         st.dataframe(mv_rec, use_container_width=True, height=300)
+
+    _render_black_litterman(ctx)

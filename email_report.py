@@ -314,36 +314,133 @@ _td = "padding:7px 12px;border:1px solid #1e2430;color:#e6e6e6;font-family:monos
 _td_r = "padding:7px 12px;border:1px solid #1e2430;color:#e6e6e6;font-family:monospace;text-align:right"
 
 
-# ── PDF builder ────────────────────────────────────────────────────────────────
+# ── PDF builder (reportlab) ────────────────────────────────────────────────────
 
-def _build_pdf_html(html_body: str) -> str:
-    """Return a PDF-friendly variant of the report HTML (light background, xhtml2pdf-safe CSS)."""
-    return html_body.replace(
-        "background-color:#0b0f14", "background-color:#ffffff"
-    ).replace(
-        "color:#e6e6e6", "color:#111111"
-    ).replace(
-        "color:#aaa", "color:#444444"
-    ).replace(
-        "color:#555", "color:#666666"
-    ).replace(
-        "background:#1a1f2e", "background:#f0f0f0"
-    ).replace(
-        "border:1px solid #2a2f3e", "border:1px solid #cccccc"
-    ).replace(
-        "border:1px solid #1e2430", "border:1px solid #dddddd"
-    )
-
-
-def _html_to_pdf_bytes(html: str) -> bytes | None:
+def _build_pdf_reportlab(ctx: dict) -> bytes | None:
+    """Generate a structured PDF report using reportlab Platypus."""
     try:
-        from xhtml2pdf import pisa
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import cm
+        from reportlab.platypus import (
+            Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+        )
 
-        pdf_html = _build_pdf_html(html)
         buf = io.BytesIO()
-        result = pisa.CreatePDF(io.StringIO(pdf_html), dest=buf)
-        if result.err:
-            return None
+        doc = SimpleDocTemplate(buf, pagesize=A4,
+                                leftMargin=2*cm, rightMargin=2*cm,
+                                topMargin=2*cm, bottomMargin=2*cm)
+
+        styles = getSampleStyleSheet()
+        gold = colors.HexColor("#f3a712")
+        dark_bg = colors.HexColor("#1a1f2e")
+        light_text = colors.HexColor("#222222")
+
+        title_style = ParagraphStyle("title", parent=styles["Heading1"],
+                                     textColor=gold, fontSize=18, spaceAfter=4)
+        h2_style = ParagraphStyle("h2", parent=styles["Heading2"],
+                                  textColor=gold, fontSize=13, spaceBefore=14, spaceAfter=4)
+        body_style = ParagraphStyle("body", parent=styles["Normal"],
+                                    textColor=light_text, fontSize=9)
+
+        _tbl_style = TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), dark_bg),
+            ("TEXTCOLOR", (0, 0), (-1, 0), gold),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f5f5")]),
+            ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ])
+
+        now_col = datetime.now(_COLOMBIA_TZ)
+        ccy = ctx.get("base_currency", "USD")
+        df: pd.DataFrame = ctx.get("df", pd.DataFrame()).copy()
+
+        def _p(v):
+            try: return f"{float(v):.2f}%"
+            except Exception: return "—"
+
+        def _m(v):
+            try: return f"{ccy} {float(v):,.2f}"
+            except Exception: return "—"
+
+        story = []
+
+        # Header
+        story.append(Paragraph("PORTAFOLIO MANAGEMENT SA", title_style))
+        story.append(Paragraph(f"Monthly Report · {now_col.strftime('%B %Y')}", body_style))
+        story.append(Spacer(1, 0.4*cm))
+
+        # Portfolio Summary
+        story.append(Paragraph("PORTFOLIO SUMMARY", h2_style))
+        summary_data = [
+            ["Metric", "Value"],
+            ["Total Portfolio", _m(ctx.get("total_portfolio_value"))],
+            ["Holdings", _m(ctx.get("holdings_value"))],
+            ["Cash", _m(ctx.get("cash_total_value"))],
+            ["Invested Capital", _m(ctx.get("invested_capital"))],
+            ["Unrealized PnL", _m(ctx.get("unrealized_pnl"))],
+        ]
+        t = Table(summary_data, colWidths=[9*cm, 8*cm])
+        t.setStyle(_tbl_style)
+        story.append(t)
+
+        # Performance Metrics
+        story.append(Paragraph("PERFORMANCE METRICS", h2_style))
+        perf_data = [
+            ["Metric", "Value"],
+            ["Total Return", _p(ctx.get("total_return", 0) * 100)],
+            ["Ann. Volatility", _p(ctx.get("volatility", 0) * 100)],
+            ["Sharpe Ratio", f"{float(ctx.get('sharpe', 0)):.4f}"],
+            ["Max Drawdown", _p(ctx.get("max_drawdown", 0) * 100)],
+            ["Alpha", _p(ctx.get("alpha", 0) * 100)],
+            ["Beta", f"{float(ctx.get('beta', 0)):.4f}"],
+            ["Tracking Error", _p(ctx.get("tracking_error", 0) * 100)],
+            ["Information Ratio", f"{float(ctx.get('information_ratio', 0)):.4f}"],
+        ]
+        t2 = Table(perf_data, colWidths=[9*cm, 8*cm])
+        t2.setStyle(_tbl_style)
+        story.append(t2)
+
+        # Holdings
+        if not df.empty:
+            story.append(Paragraph("HOLDINGS", h2_style))
+            usable = ctx.get("usable", [])
+            ms_row = ctx.get("max_sharpe_row")
+            ms_map: dict = {}
+            if ms_row is not None and usable:
+                arr = np.array(ms_row["Weights"], dtype=float)
+                ms_map = dict(zip(usable, arr.tolist())) if len(arr) == len(usable) else {}
+
+            hold_data = [["Ticker", "Shares", f"Price ({ccy})", f"Value ({ccy})", "Weight %", "Unreal. PnL"]]
+            for _, row in df.iterrows():
+                hold_data.append([
+                    str(row.get("Ticker", "")),
+                    f"{row.get('Shares', 0):.4f}",
+                    f"{row.get('Price', 0):,.2f}",
+                    f"{row.get('Value', 0):,.2f}",
+                    f"{row.get('Weight %', 0):.2f}%",
+                    f"{row.get('Unrealized PnL', 0):,.2f}",
+                ])
+            col_widths = [2.5*cm, 2.5*cm, 3*cm, 3*cm, 2.5*cm, 3*cm]
+            t3 = Table(hold_data, colWidths=col_widths)
+            t3.setStyle(_tbl_style)
+            story.append(t3)
+
+        # Footer
+        story.append(Spacer(1, 0.6*cm))
+        story.append(Paragraph(
+            f"Generated {now_col.strftime('%Y-%m-%d %H:%M')} Colombia time · Portafolio Management SA",
+            ParagraphStyle("footer", parent=styles["Normal"], textColor=colors.grey, fontSize=7),
+        ))
+
+        doc.build(story)
         return buf.getvalue()
     except Exception:
         return None
@@ -378,7 +475,7 @@ def send_monthly_report(ctx: dict, month_str: str):
     msg.attach(alt)
 
     # PDF attachment
-    pdf_bytes = _html_to_pdf_bytes(html_body)
+    pdf_bytes = _build_pdf_reportlab(ctx)
     if pdf_bytes:
         filename = f"portfolio_report_{now_col.strftime('%Y_%m')}.pdf"
         attachment = MIMEApplication(pdf_bytes, _subtype="pdf")

@@ -2204,6 +2204,24 @@ def compute_rolling_metrics(portfolio_returns: pd.Series, benchmark_returns: pd.
 
 
 # =========================
+# INSTITUTIONAL CONSTANTS
+# =========================
+
+HISTORICAL_SCENARIOS: dict = {
+    "2008 GFC":       {"Equities": -0.50, "Bonds":  0.05, "Gold":  0.05},
+    "2020 COVID":     {"Equities": -0.34, "Bonds":  0.08, "Gold":  0.06},
+    "2022 Rate Hike": {"Equities": -0.19, "Bonds": -0.13, "Gold": -0.02},
+    "2001 Dot-com":   {"Equities": -0.49, "Bonds":  0.10, "Gold":  0.08},
+    "2018 Q4 Selloff":{"Equities": -0.20, "Bonds":  0.02, "Gold":  0.03},
+}
+
+BOND_DURATION_MAP: dict = {
+    "BND": 6.5, "AGG": 6.3, "IEF": 7.5,
+    "TLT": 17.0, "VGIT": 5.4, "BNDX": 8.2,
+}
+
+
+# =========================
 # INSTITUTIONAL RISK METRICS
 # =========================
 
@@ -2536,6 +2554,289 @@ def run_monte_carlo_projection(
         )
 
     return result
+
+
+def compute_risk_budget(
+    asset_returns: pd.DataFrame,
+    weights: pd.Series,
+    confidence_level: float = 0.95,
+) -> pd.DataFrame | None:
+    """Component VaR / Marginal VaR / Risk Contribution per asset."""
+    if asset_returns is None or asset_returns.empty or weights is None or weights.empty:
+        return None
+
+    tickers = [t for t in weights.index if t in asset_returns.columns]
+    if len(tickers) < 2:
+        return None
+
+    w = weights.loc[tickers].values.astype(float)
+    total_w = w.sum()
+    if total_w <= 0:
+        return None
+    w = w / total_w
+
+    cov = asset_returns[tickers].cov().values * 252
+    port_var = float(w @ cov @ w)
+    port_vol = float(np.sqrt(max(port_var, 1e-12)))
+
+    _Z = {0.95: 1.6449, 0.99: 2.3263}
+    z = _Z.get(confidence_level, 1.6449)
+
+    port_var_daily = port_var / 252
+    port_vol_daily = float(np.sqrt(max(port_var_daily, 1e-12)))
+
+    marginal_var = (cov @ w) / port_vol * z / np.sqrt(252)
+    component_var = w * marginal_var
+    total_cvar = component_var.sum()
+    risk_contribution = component_var / total_cvar if total_cvar > 0 else np.ones(len(w)) / len(w)
+
+    rows = []
+    for i, ticker in enumerate(tickers):
+        rows.append({
+            "Ticker": ticker,
+            "Weight %": round(w[i] * 100, 2),
+            "Marginal VaR (daily)": round(float(marginal_var[i]), 4),
+            "Component VaR (daily)": round(float(component_var[i]), 4),
+            "Risk Contribution %": round(float(risk_contribution[i]) * 100, 2),
+        })
+    return pd.DataFrame(rows).sort_values("Risk Contribution %", ascending=False).reset_index(drop=True)
+
+
+def run_historical_scenarios(
+    df: pd.DataFrame,
+    current_total_value: float,
+) -> pd.DataFrame:
+    """Apply hardcoded historical crisis shocks to the current portfolio."""
+    if df is None or df.empty or current_total_value <= 0:
+        return pd.DataFrame()
+
+    rows = []
+    for scenario_name, shocks in HISTORICAL_SCENARIOS.items():
+        shocked_value = 0.0
+        for _, row in df.iterrows():
+            ticker = str(row["Ticker"])
+            value = float(row.get("Value", 0.0))
+            bucket = bucket_for_ticker(ticker)
+            shock = shocks.get(bucket, 0.0)
+            shocked_value += value * (1 + shock)
+
+        pnl = shocked_value - current_total_value
+        ret = pnl / current_total_value if current_total_value > 0 else 0.0
+        rows.append({
+            "Scenario": scenario_name,
+            "Current Value": round(current_total_value, 2),
+            "Shocked Value": round(shocked_value, 2),
+            "Scenario PnL": round(pnl, 2),
+            "Scenario Return %": round(ret * 100, 2),
+        })
+    return pd.DataFrame(rows)
+
+
+def compute_fixed_income_analytics(
+    df: pd.DataFrame,
+    base_currency: str,
+) -> pd.DataFrame | None:
+    """Duration, DV01 and rate sensitivity for bond ETFs in portfolio."""
+    if df is None or df.empty:
+        return None
+
+    rows = []
+    for _, row in df.iterrows():
+        ticker = str(row["Ticker"])
+        if bucket_for_ticker(ticker) != "Bonds":
+            continue
+        duration = BOND_DURATION_MAP.get(ticker)
+        if duration is None:
+            continue
+        value = float(row.get("Value", 0.0))
+        dv01 = duration / 10000 * value
+        rate_1pct_abs = -duration / 100 * value
+        rate_1pct_pct = -duration / 100
+        rows.append({
+            "Ticker": ticker,
+            "Name": str(row.get("Name", "")),
+            f"Value ({base_currency})": round(value, 2),
+            "Duration (yrs)": duration,
+            f"DV01 ({base_currency})": round(dv01, 2),
+            f"Rate +1% Impact ({base_currency})": round(rate_1pct_abs, 2),
+            "Rate +1% Impact %": round(rate_1pct_pct * 100, 2),
+        })
+
+    return pd.DataFrame(rows) if rows else None
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def build_blended_benchmark_returns(
+    base_currency: str,
+    fx_hist: pd.DataFrame,
+    voo_weight: float = 0.60,
+    bnd_weight: float = 0.40,
+) -> pd.Series:
+    """Blended benchmark = voo_weight * VOO + bnd_weight * BND, in base currency."""
+    tickers = []
+    if voo_weight > 0:
+        tickers.append("VOO")
+    if bnd_weight > 0:
+        tickers.append("BND")
+    if not tickers:
+        return pd.Series(dtype=float)
+
+    raw = get_historical_data(tickers, period="2y")
+    if raw.empty:
+        return pd.Series(dtype=float)
+
+    frames = {}
+    for t in tickers:
+        if t not in raw.columns:
+            continue
+        s = pd.to_numeric(raw[t], errors="coerce").dropna()
+        if base_currency != "USD":
+            fx = get_fx_series("USD", base_currency, fx_hist)
+            if fx is not None:
+                aligned = pd.concat([s, fx.rename("FX")], axis=1).dropna()
+                s = (aligned.iloc[:, 0] * aligned["FX"])
+        frames[t] = s.pct_change().dropna()
+
+    if not frames:
+        return pd.Series(dtype=float)
+
+    combined = pd.concat(frames, axis=1).dropna()
+    blended = pd.Series(0.0, index=combined.index)
+    if "VOO" in combined.columns:
+        blended += combined["VOO"] * voo_weight
+    if "BND" in combined.columns:
+        blended += combined["BND"] * bnd_weight
+    return blended.dropna()
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def compute_ff3_exposure(
+    portfolio_returns: pd.Series,
+    risk_free_rate: float = 0.02,
+) -> dict | None:
+    """Fama-French 3-factor OLS regression using ETF proxies (IVV, IWM, IVE, IVW)."""
+    if portfolio_returns is None or portfolio_returns.empty or len(portfolio_returns) < 60:
+        return None
+
+    try:
+        proxy_data = get_historical_data(["IVV", "IWM", "IVE", "IVW"], period="2y")
+        if proxy_data.empty or proxy_data.shape[1] < 3:
+            return None
+
+        rets = proxy_data.pct_change().dropna()
+        required = ["IVV", "IWM", "IVE", "IVW"]
+        if not all(c in rets.columns for c in required):
+            return None
+
+        rf_daily = risk_free_rate / 252
+        mkt_rf = rets["IVV"] - rf_daily
+        smb = rets["IWM"] - rets["IVV"]
+        hml = rets["IVE"] - rets["IVW"]
+
+        factors = pd.concat([mkt_rf.rename("Mkt_RF"), smb.rename("SMB"), hml.rename("HML")], axis=1)
+        aligned = pd.concat([portfolio_returns.rename("Port"), factors], axis=1).dropna()
+
+        if len(aligned) < 60:
+            return None
+
+        y = aligned["Port"].values - rf_daily
+        X = np.column_stack([np.ones(len(y)), aligned["Mkt_RF"].values, aligned["SMB"].values, aligned["HML"].values])
+
+        betas, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
+        y_hat = X @ betas
+        residuals = y - y_hat
+        n, k = len(y), X.shape[1]
+        s2 = float(np.dot(residuals, residuals) / (n - k))
+        XtX_inv = np.linalg.pinv(X.T @ X)
+        se = np.sqrt(np.maximum(np.diag(XtX_inv) * s2, 0))
+        t_stats = betas / np.where(se > 0, se, np.nan)
+        ss_res = float(np.dot(residuals, residuals))
+        ss_tot = float(np.dot(y - y.mean(), y - y.mean()))
+        r_sq = 1 - ss_res / ss_tot if ss_tot > 0 else 0.0
+
+        return {
+            "alpha": float(betas[0] * 252),
+            "alpha_tstat": float(t_stats[0]),
+            "mkt_beta": float(betas[1]),
+            "mkt_tstat": float(t_stats[1]),
+            "smb_beta": float(betas[2]),
+            "smb_tstat": float(t_stats[2]),
+            "hml_beta": float(betas[3]),
+            "hml_tstat": float(t_stats[3]),
+            "r_squared": float(r_sq),
+            "n_obs": n,
+            "source": "ETF Proxy (IVV/IWM/IVE/IVW)",
+        }
+    except Exception:
+        return None
+
+
+def compute_black_litterman(
+    asset_returns: pd.DataFrame,
+    current_weights: np.ndarray,
+    tickers: list,
+    views: list,
+    risk_free_rate: float = 0.02,
+    risk_aversion: float = 2.5,
+    tau: float = 0.05,
+) -> dict | None:
+    """Black-Litterman posterior expected returns given investor views."""
+    if asset_returns is None or asset_returns.empty or len(tickers) < 2:
+        return None
+    try:
+        sigma = asset_returns[tickers].cov().values * 252
+        w = np.array(current_weights, dtype=float)
+        if w.sum() <= 0:
+            w = np.ones(len(tickers)) / len(tickers)
+        else:
+            w = w / w.sum()
+
+        pi = risk_aversion * sigma @ w  # equilibrium excess returns
+
+        if not views:
+            posterior = pi + risk_free_rate
+            return {
+                "posterior_returns": pd.Series(posterior, index=tickers),
+                "equilibrium_returns": pd.Series(pi + risk_free_rate, index=tickers),
+                "sigma": pd.DataFrame(sigma, index=tickers, columns=tickers),
+                "tickers": tickers,
+            }
+
+        n_assets = len(tickers)
+        n_views = len(views)
+        ticker_idx = {t: i for i, t in enumerate(tickers)}
+
+        P = np.zeros((n_views, n_assets))
+        Q = np.zeros(n_views)
+        omega_diag = np.zeros(n_views)
+
+        for i, view in enumerate(views):
+            t = view["ticker"]
+            if t not in ticker_idx:
+                continue
+            P[i, ticker_idx[t]] = 1.0
+            Q[i] = float(view["expected_return"]) - risk_free_rate
+            conf = float(view.get("confidence", 0.5))
+            conf = max(0.01, min(0.99, conf))
+            p_row = P[i:i+1]
+            omega_diag[i] = float((1 - conf) / conf * (p_row @ (tau * sigma) @ p_row.T)[0, 0])
+
+        omega = np.diag(omega_diag)
+        tau_sigma_inv = np.linalg.pinv(tau * sigma)
+        P_T_omega_inv = P.T @ np.linalg.pinv(omega)
+        M_inv = tau_sigma_inv + P_T_omega_inv @ P
+        M = np.linalg.pinv(M_inv)
+        mu_bl = M @ (tau_sigma_inv @ pi + P_T_omega_inv @ Q)
+        posterior = mu_bl + risk_free_rate
+
+        return {
+            "posterior_returns": pd.Series(posterior, index=tickers),
+            "equilibrium_returns": pd.Series(pi + risk_free_rate, index=tickers),
+            "sigma": pd.DataFrame(sigma, index=tickers, columns=tickers),
+            "tickers": tickers,
+        }
+    except Exception:
+        return None
 
 
 def compute_goal_contribution(

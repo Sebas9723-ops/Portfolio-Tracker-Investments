@@ -18,6 +18,7 @@ from app_core import (
     TRANSACTIONS_HEADERS,
     backfill_missing_proxy_history,
     build_benchmark_returns,
+    build_blended_benchmark_returns,
     build_cash_display_df,
     build_correlation_heatmap,
     build_current_portfolio,
@@ -29,7 +30,10 @@ from app_core import (
     build_transaction_positions,
     compute_brinson_attribution,
     compute_extended_ratios,
+    compute_ff3_exposure,
+    compute_fixed_income_analytics,
     compute_mwr,
+    compute_risk_budget,
     compute_rolling_metrics,
     compute_var_cvar,
     convert_historical_to_base,
@@ -44,6 +48,7 @@ from app_core import (
     load_transactions_from_sheets,
     merge_private_portfolios,
     reset_mode_state,
+    run_historical_scenarios,
     simulate_constrained_efficient_frontier,
 )
 
@@ -410,6 +415,10 @@ def build_app_context_runtime(app_scope: str):
     gold_shock = st.sidebar.number_input("Gold Shock", -1.00, 1.00, 0.05, 0.01, format="%.2f")
     rolling_window = st.sidebar.slider("Rolling Window (days)", 21, 252, 63, 21)
 
+    st.sidebar.header("Blended Benchmark")
+    blended_voo_weight = st.sidebar.slider("VOO weight (%)", 0, 100, 60, 5) / 100.0
+    blended_bnd_weight = round(1.0 - blended_voo_weight, 2)
+
     stress_shocks = {"Equities": equity_shock, "Bonds": bonds_shock, "Gold": gold_shock}
 
     tickers = list(updated_portfolio.keys())
@@ -715,6 +724,18 @@ def build_app_context_runtime(app_scope: str):
 
     rolling_df = compute_rolling_metrics(portfolio_returns, resolved_benchmark_returns, risk_free_rate, rolling_window)
 
+    # ── Institutional metrics ──────────────────────────────────────────────────
+    weights_series = df.set_index("Ticker")["Weight"] if not df.empty else pd.Series(dtype=float)
+    risk_budget_df = compute_risk_budget(asset_returns, weights_series)
+    scenarios_df = run_historical_scenarios(df, current_total_value)
+    fixed_income_df = compute_fixed_income_analytics(df, base_currency)
+    blended_benchmark_returns = build_blended_benchmark_returns(base_currency, fx_hist, blended_voo_weight, blended_bnd_weight)
+    ff3_result = None
+    try:
+        ff3_result = compute_ff3_exposure(portfolio_returns, risk_free_rate)
+    except Exception:
+        pass
+
     var_cvar = compute_var_cvar(portfolio_returns)
     fig_correlation = build_correlation_heatmap(asset_returns)
     extended_ratios = compute_extended_ratios(portfolio_returns, resolved_benchmark_returns, risk_free_rate, max_drawdown)
@@ -808,6 +829,13 @@ def build_app_context_runtime(app_scope: str):
         "extended_ratios": extended_ratios,
         "mwr_result": mwr_result,
         "brinson_df": brinson_df,
+        "risk_budget_df": risk_budget_df,
+        "scenarios_df": scenarios_df,
+        "fixed_income_df": fixed_income_df,
+        "blended_benchmark_returns": blended_benchmark_returns,
+        "blended_voo_weight": blended_voo_weight,
+        "blended_bnd_weight": blended_bnd_weight,
+        "ff3_result": ff3_result,
     }
 
     if _should_auto_snapshot(ctx):
