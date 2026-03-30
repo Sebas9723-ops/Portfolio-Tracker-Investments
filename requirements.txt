@@ -8,3 +8,4 @@ oauth2client
 pytz
 alpaca-py
 Pillow
+xhtml2pdf

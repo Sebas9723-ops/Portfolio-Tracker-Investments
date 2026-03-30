@@ -14,8 +14,10 @@ Requires in .streamlit/secrets.toml:
 """
 from __future__ import annotations
 
+import io
 import smtplib
 from datetime import datetime
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -312,6 +314,41 @@ _td = "padding:7px 12px;border:1px solid #1e2430;color:#e6e6e6;font-family:monos
 _td_r = "padding:7px 12px;border:1px solid #1e2430;color:#e6e6e6;font-family:monospace;text-align:right"
 
 
+# ── PDF builder ────────────────────────────────────────────────────────────────
+
+def _build_pdf_html(html_body: str) -> str:
+    """Return a PDF-friendly variant of the report HTML (light background, xhtml2pdf-safe CSS)."""
+    return html_body.replace(
+        "background-color:#0b0f14", "background-color:#ffffff"
+    ).replace(
+        "color:#e6e6e6", "color:#111111"
+    ).replace(
+        "color:#aaa", "color:#444444"
+    ).replace(
+        "color:#555", "color:#666666"
+    ).replace(
+        "background:#1a1f2e", "background:#f0f0f0"
+    ).replace(
+        "border:1px solid #2a2f3e", "border:1px solid #cccccc"
+    ).replace(
+        "border:1px solid #1e2430", "border:1px solid #dddddd"
+    )
+
+
+def _html_to_pdf_bytes(html: str) -> bytes | None:
+    try:
+        from xhtml2pdf import pisa
+
+        pdf_html = _build_pdf_html(html)
+        buf = io.BytesIO()
+        result = pisa.CreatePDF(io.StringIO(pdf_html), dest=buf)
+        if result.err:
+            return None
+        return buf.getvalue()
+    except Exception:
+        return None
+
+
 # ── Send ───────────────────────────────────────────────────────────────────────
 
 def send_monthly_report(ctx: dict, month_str: str):
@@ -329,11 +366,24 @@ def send_monthly_report(ctx: dict, month_str: str):
     subject = f"Portfolio Report · {now_col.strftime('%B %Y')} · Portafolio Management SA"
     html_body = build_monthly_report_html(ctx)
 
-    msg = MIMEMultipart("alternative")
+    # Outer container: mixed (text + attachments)
+    msg = MIMEMultipart("mixed")
     msg["Subject"] = subject
     msg["From"] = sender
     msg["To"] = recipient
-    msg.attach(MIMEText(html_body, "html", "utf-8"))
+
+    # HTML body in an "alternative" sub-part
+    alt = MIMEMultipart("alternative")
+    alt.attach(MIMEText(html_body, "html", "utf-8"))
+    msg.attach(alt)
+
+    # PDF attachment
+    pdf_bytes = _html_to_pdf_bytes(html_body)
+    if pdf_bytes:
+        filename = f"portfolio_report_{now_col.strftime('%Y_%m')}.pdf"
+        attachment = MIMEApplication(pdf_bytes, _subtype="pdf")
+        attachment.add_header("Content-Disposition", "attachment", filename=filename)
+        msg.attach(attachment)
 
     with smtplib.SMTP(smtp_host, smtp_port) as server:
         server.ehlo()
