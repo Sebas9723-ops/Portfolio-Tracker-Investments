@@ -12,7 +12,6 @@ from pages_app.rebalancing import render_rebalancing_page
 from pages_app.risk import render_risk_page
 from pages_app.scenarios import render_scenarios_page
 from pages_app.transactions import render_transactions_page
-from pages_app.xtb_manager import render_xtb_manager_page
 
 
 from PIL import Image as _Image
@@ -89,7 +88,6 @@ _NAV_PAGES = [
     "Optimization",
     "Rebalance Center",
     "Transactions",
-    "XTB Manager",
     "Private Manager",
 ]
 
@@ -130,7 +128,5 @@ elif page_name == "Rebalance Center":
     render_rebalancing_page(ctx)
 elif page_name == "Transactions":
     render_transactions_page(ctx)
-elif page_name == "XTB Manager":
-    render_xtb_manager_page(ctx)
 elif page_name == "Private Manager":
     render_private_manager_page(ctx)

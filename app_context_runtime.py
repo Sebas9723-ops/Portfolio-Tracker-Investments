@@ -243,8 +243,6 @@ def build_app_context_runtime(app_scope: str):
     if app_scope not in {"public", "private"}:
         raise ValueError("app_scope must be 'public' or 'private'")
 
-    xtb_source_tickers: list[str] = []
-
     if app_scope == "public":
         mode = "Public"
         authenticated = False
@@ -301,20 +299,6 @@ def build_app_context_runtime(app_scope: str):
             }
             for ticker, meta in portfolio_data.items()
         }
-
-        # Auto-sync shares from XTB (overrides Google Sheets shares)
-        try:
-            from xtb_client import xtb_configured, load_xtb_positions, trades_to_shares
-            if xtb_configured():
-                xtb_trades, xtb_err = load_xtb_positions()
-                if not xtb_err and xtb_trades:
-                    xtb_shares = trades_to_shares(xtb_trades)
-                    for ticker, shares in xtb_shares.items():
-                        if ticker in updated_portfolio:
-                            updated_portfolio[ticker]["shares"] = shares
-                            xtb_source_tickers.append(ticker)
-        except Exception:
-            pass
 
     else:
         st.sidebar.header("Portfolio Inputs")
@@ -847,7 +831,6 @@ def build_app_context_runtime(app_scope: str):
         "blended_voo_weight": blended_voo_weight,
         "blended_bnd_weight": blended_bnd_weight,
         "ff3_result": ff3_result,
-        "xtb_source_tickers": xtb_source_tickers,
     }
 
     if _should_auto_snapshot(ctx):
