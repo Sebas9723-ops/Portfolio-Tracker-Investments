@@ -117,6 +117,7 @@ def _alpaca_historical(tickers: list[str], period: str = "2y") -> pd.DataFrame:
 
 # ── Public interface ───────────────────────────────────────────────────────────
 
+@st.cache_data(ttl=300, show_spinner=False)
 def get_prices_private(tickers: list[str]) -> dict[str, float]:
     """
     Drop-in replacement for utils.get_prices() in private mode.
@@ -139,6 +140,7 @@ def get_prices_private(tickers: list[str]) -> dict[str, float]:
     return prices
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_historical_data_private(tickers: list[str], period: str = "2y") -> pd.DataFrame:
     """
     Drop-in replacement for utils.get_historical_data() in private mode.
@@ -172,6 +174,7 @@ def get_historical_data_private(tickers: list[str], period: str = "2y") -> pd.Da
     return combined.sort_index().ffill().dropna(how="all")
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def load_market_data_private(tickers: list[str], period: str = "2y"):
     """
     Drop-in replacement for app_core.load_market_data_with_proxies() in private mode.

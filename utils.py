@@ -5,9 +5,11 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import pytz
+import streamlit as st
 import yfinance as yf
 
 
+@st.cache_data(ttl=300, show_spinner=False)
 def get_prices(tickers: list[str]) -> dict[str, float]:
     if not tickers:
         return {}
@@ -29,6 +31,7 @@ def get_prices(tickers: list[str]) -> dict[str, float]:
     return prices
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_historical_data(tickers: list[str], period: str = "2y") -> pd.DataFrame:
     if not tickers:
         return pd.DataFrame()
