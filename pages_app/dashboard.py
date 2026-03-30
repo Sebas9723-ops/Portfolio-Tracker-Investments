@@ -502,7 +502,9 @@ def render_dashboard(ctx):
     info_metric(c5, "Return", f"{ctx['total_return']:.2%}", "Cumulative return over the available history.")
     info_metric(c6, "Volatility", f"{ctx['volatility']:.2%}", "Annualized portfolio volatility.")
     info_metric(c7, "Sharpe Ratio", f"{ctx['sharpe']:.2f}", "Portfolio Sharpe ratio.")
-    info_metric(c8, "Max Drawdown", f"{ctx['max_drawdown']:.2%}", "Maximum peak-to-trough drawdown.")
+    portfolio_cum_return = ctx.get("portfolio_cum_return")
+    cr_str = f"{portfolio_cum_return:.2%}" if portfolio_cum_return is not None else "—"
+    info_metric(c8, "Current Return", cr_str, "Cumulative portfolio return since inception of the historical window.")
 
     summary_df = _build_decision_summary(ctx)
     actions_df, source_label = _build_top_actions_table(ctx)

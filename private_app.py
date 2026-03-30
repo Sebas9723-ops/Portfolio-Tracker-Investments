@@ -48,13 +48,9 @@ def _render_login_page():
     st.markdown("<br><br>", unsafe_allow_html=True)
     _, col, _ = st.columns([1, 1.4, 1])
     with col:
+        st.image("static/logo_pm_sa.png", use_container_width=True)
         st.markdown(
-            "<h1 style='color:#f3a712;font-family:monospace;text-align:center;margin-bottom:4px'>"
-            "PORTAFOLIO<br>MANAGEMENT SA</h1>",
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            "<p style='color:#888;font-family:monospace;text-align:center;margin-top:0;margin-bottom:32px'>"
+            "<p style='color:#888;font-family:monospace;text-align:center;margin-top:8px;margin-bottom:32px'>"
             "Private Access</p>",
             unsafe_allow_html=True,
         )
