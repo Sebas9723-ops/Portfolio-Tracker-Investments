@@ -802,4 +802,12 @@ def build_app_context_runtime(app_scope: str):
         except Exception:
             pass
 
+    try:
+        from email_report import should_send_monthly_report, send_monthly_report
+        ok, month_str = should_send_monthly_report(ctx)
+        if ok:
+            send_monthly_report(ctx, month_str)
+    except Exception:
+        pass
+
     return ctx
