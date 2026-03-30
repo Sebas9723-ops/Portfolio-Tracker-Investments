@@ -208,7 +208,7 @@ def _import_transactions_to_sheets(df: pd.DataFrame):
 # ── Rebalancing execution ──────────────────────────────────────────────────────
 
 def _render_execution(ctx):
-    from xtb_client import xtb_configured, XTBClient, _get_xtb_cfg, preferred_xtb_symbol
+    from xtb_client import xtb_configured, preferred_xtb_symbol
 
     info_section(
         "Ejecutar Rebalanceo via XTB",
@@ -286,47 +286,44 @@ def _render_execution(ctx):
 
 
 def _execute_orders(orders: list[dict], ctx):
-    from xtb_client import XTBClient, _get_xtb_cfg
+    import time
+    from xtb_client import place_xtb_order, get_xtb_order_status
 
-    account_id, password, mode = _get_xtb_cfg()
     results = []
-
     progress = st.progress(0, text="Ejecutando órdenes...")
     total = len(orders)
 
     try:
-        with XTBClient(account_id, password, mode) as client:
-            for i, order in enumerate(orders):
-                progress.progress((i + 1) / total, text=f"Ejecutando {order['Ticker']}...")
-                result = client.place_order(
-                    symbol=order["XTB Symbol"],
-                    action=order["Acción"],
-                    volume=order["Shares"],
-                )
-                if "order" in result:
-                    # Check status
-                    import time
-                    time.sleep(0.5)
-                    status = client.get_order_status(result["order"])
-                    results.append({
-                        "Ticker": order["Ticker"],
-                        "Acción": order["Acción"],
-                        "Shares": order["Shares"],
-                        "Estado": status.get("requestStatus", "Desconocido"),
-                        "Mensaje": status.get("message", ""),
-                        "Order ID": result["order"],
-                    })
-                else:
-                    results.append({
-                        "Ticker": order["Ticker"],
-                        "Acción": order["Acción"],
-                        "Shares": order["Shares"],
-                        "Estado": "ERROR",
-                        "Mensaje": result.get("error", "Error desconocido"),
-                        "Order ID": 0,
+        for i, order in enumerate(orders):
+            progress.progress((i + 1) / total, text=f"Ejecutando {order['Ticker']}...")
+            result = place_xtb_order(
+                symbol=order["XTB Symbol"],
+                action=order["Acción"],
+                volume=order["Shares"],
+            )
+            if "order" in result:
+                time.sleep(0.5)
+                status = get_xtb_order_status(result["order"])
+                results.append({
+                    "Ticker": order["Ticker"],
+                    "Acción": order["Acción"],
+                    "Shares": order["Shares"],
+                    "Estado": status.get("requestStatus", "Enviado"),
+                    "Mensaje": status.get("message", ""),
+                    "Order ID": result["order"],
+                })
+            else:
+                results.append({
+                    "Ticker": order["Ticker"],
+                    "Acción": order["Acción"],
+                    "Shares": order["Shares"],
+                    "Estado": "ERROR",
+                    "Mensaje": result.get("error", "Error desconocido"),
+                    "Order ID": 0,
                     })
 
     except Exception as e:
+        progress.empty()
         st.error(f"Error durante la ejecución: {e}")
         return
 

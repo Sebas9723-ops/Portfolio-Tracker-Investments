@@ -1,10 +1,11 @@
 """
 XTB xStation API client.
 
-Uses raw SSL sockets (xAPI protocol) — NOT WebSocket.
-Official protocol: JSON messages terminated with \\n\\n over SSL TCP.
+Uses WebSocket over port 443 (wss://) via the `websockets` library which is
+already a Streamlit dependency — no extra requirements needed.
 
-Official connector reference: https://github.com/X-trade-Brokers/xAPIConnector
+Async coroutines are executed in a dedicated background thread to avoid
+conflicts with Streamlit's own event loop.
 
 Requires in .streamlit/secrets.toml:
     [xtb]
@@ -14,18 +15,25 @@ Requires in .streamlit/secrets.toml:
 """
 from __future__ import annotations
 
+import asyncio
 import json
-import socket
-import ssl
+import queue
+import threading
 from typing import Any
 
 import pandas as pd
 import streamlit as st
 
-# ── Endpoints (SSL TCP, not WebSocket) ────────────────────────────────────────
-_HOSTS = {
-    "real": ("xapia.x-trade.com", 5124),
-    "demo": ("xapia.x-trade.com", 5124),
+# ── WebSocket endpoints (port 443, not blocked by GCP/Streamlit Cloud) ────────
+_WS_URLS: dict[str, list[str]] = {
+    "real": [
+        "wss://ws.xtb.com/real",
+        "wss://x-api.xtb.com/real",
+    ],
+    "demo": [
+        "wss://ws.xtb.com/demo",
+        "wss://x-api.xtb.com/demo",
+    ],
 }
 
 # ── Symbol mapping ─────────────────────────────────────────────────────────────
@@ -56,145 +64,113 @@ def preferred_xtb_symbol(ticker: str) -> str:
     return _TICKER_PRIMARY_XTB.get(ticker, ticker)
 
 
-# ── SSL socket client ─────────────────────────────────────────────────────────
+# ── Async helpers ─────────────────────────────────────────────────────────────
 
-class XTBClient:
-    """Synchronous XTB xStation API client using SSL TCP sockets."""
+def _run_async(coro, timeout: int = 20) -> Any:
+    """
+    Run an async coroutine in a dedicated background thread with its own
+    event loop — avoids conflicts with Streamlit's event loop.
+    """
+    result_q: queue.Queue = queue.Queue()
 
-    def __init__(self, account_id: str, password: str, mode: str = "real"):
-        self._account_id = str(account_id)
-        self._password = password
-        host, port = _HOSTS.get(mode.lower(), _HOSTS["real"])
-        self._host = host
-        self._port = port
-        self._conn: ssl.SSLSocket | None = None
-        self._file = None
-        self.stream_session_id: str = ""
-
-    # ── Connection ─────────────────────────────────────────────────────────
-
-    def connect(self, timeout: int = 15):
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        raw.settimeout(timeout)
-        self._conn = ctx.wrap_socket(raw)
-        self._conn.connect((self._host, self._port))
-        self._file = self._conn.makefile("r", encoding="utf-8")
-
-    def disconnect(self):
+    def _target():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
-            if self._file:
-                self._file.close()
-            if self._conn:
-                self._conn.close()
-        except Exception:
-            pass
-        self._conn = None
-        self._file = None
+            result_q.put(("ok", loop.run_until_complete(coro)))
+        except Exception as exc:
+            result_q.put(("err", exc))
+        finally:
+            loop.close()
 
-    # ── Low-level send / receive ───────────────────────────────────────────
+    t = threading.Thread(target=_target, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
 
-    def _send(self, command: str, arguments: dict | None = None) -> dict:
-        payload: dict[str, Any] = {"command": command}
-        if arguments:
-            payload["arguments"] = arguments
-        msg = json.dumps(payload) + "\n\n"
-        self._conn.sendall(msg.encode("utf-8"))
-        return self._recv()
+    if t.is_alive():
+        raise TimeoutError("XTB connection timed out after 20 s")
 
-    def _recv(self) -> dict:
-        buf = ""
-        while True:
-            chunk = self._file.read(4096)
-            if not chunk:
-                break
-            buf += chunk
-            if buf.endswith("\n\n"):
-                break
-        return json.loads(buf.strip())
+    status, value = result_q.get_nowait()
+    if status == "err":
+        raise value
+    return value
 
-    # ── Auth ───────────────────────────────────────────────────────────────
 
-    def login(self) -> bool:
-        resp = self._send("login", {
-            "userId":  self._account_id,
-            "password": self._password,
-            "appId":   "PortafolioManagementSA",
-            "appName": "PortafolioManagementSA",
-        })
-        if resp.get("status"):
-            self.stream_session_id = resp.get("streamSessionId", "")
-            return True
-        err = resp.get("errorDescr", "Login failed")
+async def _ws_session(
+    mode: str,
+    account_id: str,
+    password: str,
+    commands: list[tuple[str, dict | None]],
+) -> list[dict]:
+    """
+    Opens one WebSocket connection, logs in, runs all commands, disconnects.
+    Tries each URL in _WS_URLS[mode] and moves on if one fails.
+    Returns list of response dicts (one per command).
+    """
+    import websockets
+
+    urls = _WS_URLS.get(mode, _WS_URLS["real"])
+    last_exc: Exception = RuntimeError("No XTB endpoint reachable")
+
+    for url in urls:
+        try:
+            # Try with and without extra headers to handle version differences
+            connect_kwargs: dict[str, Any] = {"open_timeout": 15, "close_timeout": 5}
+            try:
+                # websockets >= 10 uses extra_headers or additional_headers
+                async with websockets.connect(url, extra_headers={
+                    "Origin": "https://www.xtb.com",
+                }, **connect_kwargs) as ws:
+                    return await _execute_commands(ws, account_id, password, commands)
+            except TypeError:
+                async with websockets.connect(url, **connect_kwargs) as ws:
+                    return await _execute_commands(ws, account_id, password, commands)
+
+        except Exception as exc:
+            last_exc = exc
+            continue
+
+    raise last_exc
+
+
+async def _execute_commands(ws, account_id: str, password: str,
+                             commands: list[tuple[str, dict | None]]) -> list[dict]:
+    """Login then execute each command on an already-open WebSocket."""
+    # Login
+    await ws.send(json.dumps({
+        "command": "login",
+        "arguments": {
+            "userId":   account_id,
+            "password": password,
+            "appId":    "PortafolioManagementSA",
+            "appName":  "PortafolioManagementSA",
+        },
+    }))
+    login_resp = json.loads(await ws.recv())
+    if not login_resp.get("status"):
+        err = login_resp.get("errorDescr", "Login failed")
         raise RuntimeError(f"XTB login error: {err}")
 
-    # ── Account ────────────────────────────────────────────────────────────
+    results: list[dict] = []
+    for cmd, args in commands:
+        payload: dict[str, Any] = {"command": cmd}
+        if args:
+            payload["arguments"] = args
+        await ws.send(json.dumps(payload))
+        results.append(json.loads(await ws.recv()))
 
-    def get_account_info(self) -> dict:
-        resp = self._send("getMarginLevel")
-        return resp.get("returnData", {}) if resp.get("status") else {}
-
-    # ── Positions ──────────────────────────────────────────────────────────
-
-    def get_open_trades(self) -> list[dict]:
-        resp = self._send("getTrades", {"openedOnly": True})
-        return resp.get("returnData", []) if resp.get("status") else []
-
-    def get_trades_history(self, start_ms: int = 0) -> list[dict]:
-        resp = self._send("getTradesHistory", {"end": 0, "start": start_ms})
-        return resp.get("returnData", []) if resp.get("status") else []
-
-    # ── Prices ─────────────────────────────────────────────────────────────
-
-    def get_tick_prices(self, symbols: list[str]) -> dict[str, dict]:
-        resp = self._send("getTickPrices", {
-            "level": 0,
-            "symbols": symbols,
-            "timestamp": 0,
-        })
-        if not resp.get("status"):
-            return {}
-        return {q["symbol"]: q for q in resp.get("returnData", {}).get("quotations", [])}
-
-    # ── Order execution ────────────────────────────────────────────────────
-
-    def place_order(self, symbol: str, action: str, volume: float,
-                    comment: str = "PortafolioManagementSA") -> dict:
-        cmd = 0 if action.upper() == "BUY" else 1
-        resp = self._send("tradeTransaction", {
-            "tradeTransInfo": {
-                "cmd":        cmd,
-                "symbol":     symbol,
-                "volume":     round(float(volume), 4),
-                "price":      0.0,
-                "type":       0,
-                "order":      0,
-                "comment":    comment,
-                "expiration": 0,
-            }
-        })
-        if resp.get("status"):
-            return {"order": resp.get("returnData", {}).get("order", 0)}
-        return {"error": resp.get("errorDescr", "Unknown error")}
-
-    def get_order_status(self, order_id: int) -> dict:
-        resp = self._send("tradeTransactionStatus", {"order": order_id})
-        return resp.get("returnData", {}) if resp.get("status") else {}
-
-    # ── Context manager ────────────────────────────────────────────────────
-
-    def __enter__(self):
-        self.connect()
-        self.login()
-        return self
-
-    def __exit__(self, *args):
-        self.disconnect()
+    return results
 
 
-# ── Streamlit helpers ─────────────────────────────────────────────────────────
+# ── Convenience function ──────────────────────────────────────────────────────
+
+def xtb_call(mode: str, account_id: str, password: str,
+             commands: list[tuple[str, dict | None]]) -> list[dict]:
+    """Synchronous wrapper around _ws_session for use in Streamlit."""
+    return _run_async(_ws_session(mode, account_id, password, commands))
+
+
+# ── Streamlit cached helpers ──────────────────────────────────────────────────
 
 def _get_xtb_cfg() -> tuple[str, str, str]:
     cfg = st.secrets.get("xtb", {})
@@ -217,9 +193,11 @@ def load_xtb_positions() -> tuple[list[dict], str]:
     if not account_id or not password:
         return [], "XTB no configurado."
     try:
-        with XTBClient(account_id, password, mode) as client:
-            trades = client.get_open_trades()
-        return trades, ""
+        results = xtb_call(mode, account_id, password, [
+            ("getTrades", {"openedOnly": True}),
+        ])
+        resp = results[0]
+        return resp.get("returnData", []) if resp.get("status") else [], ""
     except Exception as e:
         return [], str(e)
 
@@ -231,9 +209,11 @@ def load_xtb_account() -> tuple[dict, str]:
     if not account_id or not password:
         return {}, "XTB no configurado."
     try:
-        with XTBClient(account_id, password, mode) as client:
-            info = client.get_account_info()
-        return info, ""
+        results = xtb_call(mode, account_id, password, [
+            ("getMarginLevel", None),
+        ])
+        resp = results[0]
+        return resp.get("returnData", {}) if resp.get("status") else {}, ""
     except Exception as e:
         return {}, str(e)
 
@@ -247,17 +227,54 @@ def load_xtb_history(start_year: int = 2023) -> tuple[list[dict], str]:
         return [], "XTB no configurado."
     try:
         start_ms = int(calendar.timegm((start_year, 1, 1, 0, 0, 0)) * 1000)
-        with XTBClient(account_id, password, mode) as client:
-            history = client.get_trades_history(start_ms)
-        return history, ""
+        results = xtb_call(mode, account_id, password, [
+            ("getTradesHistory", {"end": 0, "start": start_ms}),
+        ])
+        resp = results[0]
+        return resp.get("returnData", []) if resp.get("status") else [], ""
     except Exception as e:
         return [], str(e)
+
+
+def place_xtb_order(symbol: str, action: str, volume: float,
+                    comment: str = "PortafolioManagementSA") -> dict:
+    """Place a single market order. Returns {"order": id} or {"error": msg}."""
+    account_id, password, mode = _get_xtb_cfg()
+    cmd = 0 if action.upper() == "BUY" else 1
+    try:
+        results = xtb_call(mode, account_id, password, [
+            ("tradeTransaction", {
+                "tradeTransInfo": {
+                    "cmd": cmd, "symbol": symbol,
+                    "volume": round(float(volume), 4),
+                    "price": 0.0, "type": 0, "order": 0,
+                    "comment": comment, "expiration": 0,
+                }
+            }),
+        ])
+        resp = results[0]
+        if resp.get("status"):
+            return {"order": resp.get("returnData", {}).get("order", 0)}
+        return {"error": resp.get("errorDescr", "Unknown error")}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def get_xtb_order_status(order_id: int) -> dict:
+    account_id, password, mode = _get_xtb_cfg()
+    try:
+        results = xtb_call(mode, account_id, password, [
+            ("tradeTransactionStatus", {"order": order_id}),
+        ])
+        resp = results[0]
+        return resp.get("returnData", {}) if resp.get("status") else {}
+    except Exception:
+        return {}
 
 
 # ── Data conversion helpers ───────────────────────────────────────────────────
 
 def trades_to_shares(trades: list[dict]) -> dict[str, float]:
-    """Convert open XTB trades to {app_ticker: total_shares}."""
     result: dict[str, float] = {}
     for t in trades:
         sym = str(t.get("symbol", ""))
@@ -268,7 +285,6 @@ def trades_to_shares(trades: list[dict]) -> dict[str, float]:
 
 
 def history_to_transactions(history: list[dict]) -> pd.DataFrame:
-    """Convert XTB closed trade history to transactions DataFrame."""
     from datetime import datetime, timezone
 
     rows = []
@@ -277,29 +293,29 @@ def history_to_transactions(history: list[dict]) -> pd.DataFrame:
         ticker = resolve_ticker(sym)
         if not ticker:
             continue
-
         volume = float(t.get("volume", 0.0))
-        cmd = int(t.get("cmd", -1))
+        if int(t.get("cmd", -1)) != 0:
+            continue
 
-        if cmd == 0:  # Long position
-            open_ts = t.get("open_time", 0)
-            open_price = float(t.get("open_price", 0.0))
-            if open_ts and open_price > 0:
-                date_str = datetime.fromtimestamp(open_ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
-                rows.append({
-                    "date": date_str, "ticker": ticker, "type": "BUY",
-                    "shares": round(volume, 6), "price": round(open_price, 4),
-                    "notes": f"XTB #{t.get('position', '')}",
-                })
-            close_price = float(t.get("close_price", 0.0))
-            close_ts = t.get("close_time", 0)
-            if close_ts and close_price > 0:
-                date_str = datetime.fromtimestamp(close_ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
-                rows.append({
-                    "date": date_str, "ticker": ticker, "type": "SELL",
-                    "shares": round(volume, 6), "price": round(close_price, 4),
-                    "notes": f"XTB #{t.get('position', '')}",
-                })
+        open_ts = t.get("open_time", 0)
+        open_price = float(t.get("open_price", 0.0))
+        if open_ts and open_price > 0:
+            rows.append({
+                "date": datetime.fromtimestamp(open_ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d"),
+                "ticker": ticker, "type": "BUY",
+                "shares": round(volume, 6), "price": round(open_price, 4),
+                "notes": f"XTB #{t.get('position', '')}",
+            })
+
+        close_price = float(t.get("close_price", 0.0))
+        close_ts = t.get("close_time", 0)
+        if close_ts and close_price > 0:
+            rows.append({
+                "date": datetime.fromtimestamp(close_ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d"),
+                "ticker": ticker, "type": "SELL",
+                "shares": round(volume, 6), "price": round(close_price, 4),
+                "notes": f"XTB #{t.get('position', '')}",
+            })
 
     if not rows:
         return pd.DataFrame(columns=["date", "ticker", "type", "shares", "price", "notes"])
@@ -310,7 +326,6 @@ def history_to_transactions(history: list[dict]) -> pd.DataFrame:
 
 
 def build_positions_comparison(xtb_shares: dict[str, float], app_df: pd.DataFrame) -> pd.DataFrame:
-    """XTB shares vs app-tracked shares comparison."""
     tickers = sorted(set(xtb_shares) | set(app_df["Ticker"].tolist() if not app_df.empty else []))
     app_map = app_df.set_index("Ticker")["Shares"].to_dict() if not app_df.empty else {}
     rows = []
@@ -319,10 +334,7 @@ def build_positions_comparison(xtb_shares: dict[str, float], app_df: pd.DataFram
         app = round(float(app_map.get(t, 0.0)), 4)
         delta = round(xtb - app, 4)
         rows.append({
-            "Ticker": t,
-            "XTB Shares": xtb,
-            "App Shares": app,
-            "Δ Shares": delta,
-            "Sincronizado": "✅" if abs(delta) < 0.001 else "❌",
+            "Ticker": t, "XTB Shares": xtb, "App Shares": app,
+            "Δ Shares": delta, "Sincronizado": "✅" if abs(delta) < 0.001 else "❌",
         })
     return pd.DataFrame(rows)
