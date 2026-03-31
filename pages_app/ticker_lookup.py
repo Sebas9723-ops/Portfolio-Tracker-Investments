@@ -10,6 +10,16 @@ from app_core import (
 )
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_deep_dive(ticker: str) -> dict:
+    return fetch_ticker_deep_dive(ticker)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_news(ticker: str) -> list:
+    return fetch_ticker_news([ticker], max_per_ticker=5)
+
+
 def _fmt_large(v) -> str:
     try:
         v = float(v)
@@ -105,7 +115,7 @@ def _render_description(info: dict):
 
 def _render_news(ticker: str):
     info_section("Latest News", f"Last 5 headlines for {ticker}.")
-    news = fetch_ticker_news([ticker], max_per_ticker=5)
+    news = _cached_news(ticker)
     if not news:
         st.info("No news found.")
         return
@@ -136,20 +146,21 @@ def render_ticker_lookup_page(ctx):
 
     st.markdown("#### Enter a ticker symbol to look up any security")
 
-    c_input, c_btn, _ = st.columns([2, 1, 3])
-    ticker_input = c_input.text_input(
-        "Ticker",
-        placeholder="Enter ticker symbol...",
-        label_visibility="collapsed",
-        key="ticker_lookup_input",
-    )
-    go_clicked = c_btn.button("GO", type="primary", use_container_width=True)
+    # Use a form so pressing Enter also triggers the search
+    with st.form(key="ticker_lookup_form", border=False):
+        c_input, c_btn, _ = st.columns([2, 1, 3])
+        ticker_input = c_input.text_input(
+            "Ticker",
+            placeholder="Enter ticker symbol...",
+            label_visibility="collapsed",
+        )
+        go_clicked = c_btn.form_submit_button("GO", type="primary", use_container_width=True)
 
-    # Also fire on Enter (if ticker in session state from previous run)
-    ticker = st.session_state.get("ticker_lookup_last", "")
     if go_clicked and ticker_input:
         ticker = ticker_input.upper().strip()
         st.session_state["ticker_lookup_last"] = ticker
+    else:
+        ticker = st.session_state.get("ticker_lookup_last", "")
 
     if not ticker:
         st.info("Enter a ticker symbol above and press GO to look up any security.")
@@ -158,7 +169,7 @@ def render_ticker_lookup_page(ctx):
     st.markdown(f"### {ticker}")
 
     with st.spinner(f"Loading data for {ticker}..."):
-        data = fetch_ticker_deep_dive(ticker)
+        data = _cached_deep_dive(ticker)
 
     if data.get("error"):
         st.error(f"Could not load data for {ticker}: {data['error']}")
