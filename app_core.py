@@ -20,7 +20,7 @@ from utils import get_prices, get_historical_data, get_market_times
 
 
 DEFAULT_RISK_FREE_RATE = 0.02
-N_SIMULATIONS = 4000
+N_SIMULATIONS = 8000
 SUPPORTED_BASE_CCY = ["USD", "EUR", "GBP", "COP", "CHF", "AUD"]
 PUBLIC_DEFAULTS_VERSION = "public_defaults_v12_phase2"
 GOOGLE_SHEETS_CACHE_TTL = 300
@@ -1138,6 +1138,110 @@ def adjust_cash_balance(currency: str, delta: float):
         )
 
     save_cash_balances_to_sheets(cash_df)
+
+
+# =========================
+# PAPER TRADING
+# =========================
+
+PAPER_TRADES_HEADERS = [
+    "id", "timestamp", "ticker", "action", "shares", "price", "fees", "notes", "source",
+]
+PAPER_CONFIG_HEADERS = ["key", "value"]
+
+
+def connect_paper_trades_worksheet():
+    return _connect_named_worksheet("paper_trades", PAPER_TRADES_HEADERS)
+
+
+def connect_paper_config_worksheet():
+    return _connect_named_worksheet(
+        "paper_config",
+        PAPER_CONFIG_HEADERS,
+        default_rows=[["starting_capital", 100000.0]],
+    )
+
+
+@st.cache_data(ttl=GOOGLE_SHEETS_CACHE_TTL, show_spinner=False)
+def load_paper_trades_from_sheets() -> pd.DataFrame:
+    sheet_id, sheet_url = _get_private_positions_sheet_locator()
+    try:
+        connect_paper_trades_worksheet()
+        records = _get_worksheet_records_cached(sheet_id, sheet_url, "paper_trades")
+    except Exception:
+        return pd.DataFrame(columns=PAPER_TRADES_HEADERS)
+
+    if not records:
+        return pd.DataFrame(columns=PAPER_TRADES_HEADERS)
+
+    df = pd.DataFrame(records)
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    for col in PAPER_TRADES_HEADERS:
+        if col not in df.columns:
+            df[col] = ""
+    df["shares"] = pd.to_numeric(df["shares"], errors="coerce").fillna(0.0)
+    df["price"] = pd.to_numeric(df["price"], errors="coerce").fillna(0.0)
+    df["fees"] = pd.to_numeric(df["fees"], errors="coerce").fillna(0.0)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    df["ticker"] = df["ticker"].astype(str).str.strip().str.upper()
+    df["action"] = df["action"].astype(str).str.strip().str.upper()
+    df = df.dropna(subset=["timestamp"])
+    return df[PAPER_TRADES_HEADERS].sort_values("timestamp").reset_index(drop=True)
+
+
+@st.cache_data(ttl=GOOGLE_SHEETS_CACHE_TTL, show_spinner=False)
+def load_paper_capital_from_sheets() -> float:
+    sheet_id, sheet_url = _get_private_positions_sheet_locator()
+    try:
+        connect_paper_config_worksheet()
+        records = _get_worksheet_records_cached(sheet_id, sheet_url, "paper_config")
+    except Exception:
+        return 100_000.0
+
+    for row in records:
+        if str(row.get("key", "")).strip().lower() == "starting_capital":
+            try:
+                return float(row.get("value", 100_000.0))
+            except Exception:
+                return 100_000.0
+    return 100_000.0
+
+
+def save_paper_capital_to_sheets(capital: float):
+    ws = connect_paper_config_worksheet()
+    records = ws.get_all_values()
+    for i, row in enumerate(records[1:], start=2):
+        if len(row) >= 1 and str(row[0]).strip().lower() == "starting_capital":
+            ws.update_cell(i, 2, float(capital))
+            _clear_google_sheets_cache()
+            return
+    ws.append_row(["starting_capital", float(capital)], value_input_option="RAW")
+    _clear_google_sheets_cache()
+
+
+def append_paper_trade_to_sheets(trade: dict):
+    ws = connect_paper_trades_worksheet()
+    row = [
+        str(trade.get("id", "")),
+        str(trade.get("timestamp", "")),
+        str(trade.get("ticker", "")).upper().strip(),
+        str(trade.get("action", "")).upper().strip(),
+        float(trade.get("shares", 0.0)),
+        float(trade.get("price", 0.0)),
+        float(trade.get("fees", 0.0)),
+        str(trade.get("notes", "")).strip(),
+        str(trade.get("source", "MANUAL")).strip(),
+    ]
+    ws.append_row(row, value_input_option="RAW")
+    _clear_google_sheets_cache()
+
+
+def reset_paper_trades_to_sheets():
+    """Clear all paper trades (requires management password check in UI)."""
+    ws = connect_paper_trades_worksheet()
+    ws.clear()
+    ws.update(range_name="A1", values=[PAPER_TRADES_HEADERS])
+    _clear_google_sheets_cache()
 
 
 def load_dividends_from_sheets():

@@ -12,7 +12,7 @@ def _run_monte_carlo(
     current_value: float,
     horizons_years: tuple = (1, 3, 5, 10),
     monthly_contribution: float = 0.0,
-    n_sims: int = 500,
+    n_sims: int = 1000,
     seed: int = 42,
 ) -> dict:
     result: dict = {}
@@ -141,7 +141,7 @@ def render_projections_page(ctx):
     # ── Monte Carlo ────────────────────────────────────────────────────────────
     info_section(
         "Monte Carlo Projection",
-        "Bootstrap simulation (500 paths) using your actual historical daily returns. "
+        "Bootstrap simulation (1,000 paths) using your actual historical daily returns. "
         "The fan shows P10/P90 (outer band) and P25/P75 (inner band) with the median line.",
     )
 

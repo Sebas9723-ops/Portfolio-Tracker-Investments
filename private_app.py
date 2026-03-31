@@ -19,6 +19,9 @@ from pages_app.order_blotter import render_order_blotter_page
 from pages_app.ticker_lookup import render_ticker_lookup_page
 from pages_app.watchlist import render_watchlist_page
 from pages_app.technicals import render_technicals_page
+from pages_app.backtesting import render_backtesting_page
+from pages_app.ml_signals import render_ml_signals_page
+from pages_app.paper_trading import render_paper_trading_page
 
 
 from PIL import Image as _Image
@@ -106,6 +109,9 @@ _NAV_PAGES = [
     "Trade Journal",
     "Order Blotter",
     "Private Manager",
+    "Backtesting",
+    "ML Signals",
+    "Paper Trading",
 ]
 
 if st.session_state.get("private_page_navigation") not in _NAV_PAGES:
@@ -161,3 +167,9 @@ elif page_name == "Watchlist":
     render_watchlist_page(ctx)
 elif page_name == "Private Manager":
     render_private_manager_page(ctx)
+elif page_name == "Backtesting":
+    render_backtesting_page(ctx)
+elif page_name == "ML Signals":
+    render_ml_signals_page(ctx)
+elif page_name == "Paper Trading":
+    render_paper_trading_page(ctx)
