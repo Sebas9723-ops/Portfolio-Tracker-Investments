@@ -882,6 +882,19 @@ def save_private_positions_to_sheets(positions: dict):
     _clear_google_sheets_cache()
 
 
+def _parse_gsheets_date(val):
+    """Convert a Google Sheets date serial number (days since Dec 30, 1899) to an ISO string.
+
+    Google Sheets stores date-formatted cells as integers when returned with
+    UNFORMATTED_VALUE. This avoids pd.to_datetime interpreting them as nanoseconds
+    (which produces 1970-01-01 dates).
+    """
+    if isinstance(val, (int, float)) and 1 < val < 200_000:
+        from datetime import datetime, timedelta
+        return (datetime(1899, 12, 30) + timedelta(days=int(val))).strftime("%Y-%m-%d")
+    return val
+
+
 def load_transactions_from_sheets():
     sheet_id, sheet_url = _get_private_positions_sheet_locator()
 
@@ -901,7 +914,7 @@ def load_transactions_from_sheets():
         if col not in df.columns:
             df[col] = np.nan
 
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["date"] = pd.to_datetime(df["date"].apply(_parse_gsheets_date), errors="coerce")
     df["ticker"] = df["ticker"].astype(str).str.strip().str.upper()
     df["type"] = df["type"].astype(str).str.strip().str.upper()
     df["shares"] = pd.to_numeric(df["shares"], errors="coerce").fillna(0.0)
@@ -928,7 +941,7 @@ def append_transaction_to_sheets(tx: dict):
         float(tx.get("fees", 0.0)),
         str(tx.get("notes", "")).strip(),
     ]
-    ws.append_row(row, value_input_option="USER_ENTERED")
+    ws.append_row(row, value_input_option="RAW")
     _clear_google_sheets_cache()
 
 
@@ -961,8 +974,8 @@ def load_trade_journal_from_sheets() -> pd.DataFrame:
             df[col] = ""
     for col in ["shares", "entry_price", "target_price", "stop_loss", "exit_price"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    df["exit_date"] = pd.to_datetime(df["exit_date"], errors="coerce")
+    df["date"] = pd.to_datetime(df["date"].apply(_parse_gsheets_date), errors="coerce")
+    df["exit_date"] = pd.to_datetime(df["exit_date"].apply(_parse_gsheets_date), errors="coerce")
     df = df.dropna(subset=["date"])
     df["ticker"] = df["ticker"].astype(str).str.strip().str.upper()
     return df[TRADE_JOURNAL_HEADERS].reset_index(drop=True)
@@ -985,7 +998,7 @@ def append_trade_journal_entry(entry: dict):
         float(entry.get("exit_price", 0.0)) if entry.get("exit_price") else "",
         str(entry.get("notes", "")).strip(),
     ]
-    ws.append_row(row, value_input_option="USER_ENTERED")
+    ws.append_row(row, value_input_option="RAW")
     _clear_google_sheets_cache()
 
 
@@ -1112,7 +1125,7 @@ def load_dividends_from_sheets():
         if col not in df.columns:
             df[col] = np.nan
 
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["date"] = pd.to_datetime(df["date"].apply(_parse_gsheets_date), errors="coerce")
     df["ticker"] = df["ticker"].astype(str).str.strip().str.upper()
     df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
     df["currency"] = df["currency"].astype(str).str.strip().str.upper()
@@ -1132,7 +1145,7 @@ def append_dividend_to_sheets(div_tx: dict):
         str(div_tx["currency"]).upper().strip(),
         str(div_tx.get("notes", "")).strip(),
     ]
-    ws.append_row(row, value_input_option="USER_ENTERED")
+    ws.append_row(row, value_input_option="RAW")
     _clear_google_sheets_cache()
 
 
@@ -3586,7 +3599,7 @@ def load_order_blotter_from_sheets() -> pd.DataFrame:
             df[col] = ""
     for col in ["quantity", "limit_price", "filled_price", "filled_qty"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["date"] = pd.to_datetime(df["date"].apply(_parse_gsheets_date), errors="coerce")
     df["ticker"] = df["ticker"].astype(str).str.strip().str.upper()
     df["direction"] = df["direction"].astype(str).str.strip().str.upper()
     df["status"] = df["status"].astype(str).str.strip()
@@ -3607,7 +3620,7 @@ def append_order_to_blotter(order: dict):
         float(order.get("filled_qty", 0.0)) if order.get("filled_qty") else "",
         str(order.get("notes", "")).strip(),
     ]
-    ws.append_row(row, value_input_option="USER_ENTERED")
+    ws.append_row(row, value_input_option="RAW")
     _clear_google_sheets_cache()
 
 
