@@ -22,6 +22,8 @@ from pages_app.technicals import render_technicals_page
 from pages_app.backtesting import render_backtesting_page
 from pages_app.ml_signals import render_ml_signals_page
 from pages_app.paper_trading import render_paper_trading_page
+from pages_app.whatif import render_whatif_page
+from pages_app.alerts import render_alerts_page
 
 
 from PIL import Image as _Image
@@ -112,6 +114,8 @@ _NAV_PAGES = [
     "Backtesting",
     "ML Signals",
     "Paper Trading",
+    "What-If Simulator",
+    "Custom Alerts",
 ]
 
 if st.session_state.get("private_page_navigation") not in _NAV_PAGES:
@@ -173,3 +177,7 @@ elif page_name == "ML Signals":
     render_ml_signals_page(ctx)
 elif page_name == "Paper Trading":
     render_paper_trading_page(ctx)
+elif page_name == "What-If Simulator":
+    render_whatif_page(ctx)
+elif page_name == "Custom Alerts":
+    render_alerts_page(ctx)

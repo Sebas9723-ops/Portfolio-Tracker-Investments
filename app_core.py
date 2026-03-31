@@ -4305,3 +4305,113 @@ def build_app_context():
         "fx_prices": fx_prices,
         "fx_hist": fx_hist,
     }
+
+
+# =========================
+# TELEGRAM + CUSTOM ALERTS
+# =========================
+
+ALERTS_HEADERS = [
+    "id", "ticker", "alert_type", "condition",
+    "threshold", "active", "created_at", "last_triggered", "notes",
+]
+
+
+def send_telegram_message(text: str) -> bool:
+    """Send a plain-text or HTML message via Telegram Bot API. Returns True on success."""
+    import json
+    import urllib.request
+    import urllib.error
+
+    tg = st.secrets.get("telegram", {})
+    bot_token = str(tg.get("bot_token", "")).strip()
+    chat_id = str(tg.get("chat_id", "")).strip()
+    if not bot_token or not chat_id:
+        return False
+
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    payload = json.dumps({
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+    }).encode("utf-8")
+    try:
+        req = urllib.request.Request(
+            url, data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=10)
+        return True
+    except Exception:
+        return False
+
+
+def connect_alerts_worksheet():
+    return _connect_named_worksheet("custom_alerts", ALERTS_HEADERS)
+
+
+@st.cache_data(ttl=GOOGLE_SHEETS_CACHE_TTL, show_spinner=False)
+def load_alerts_from_sheets() -> pd.DataFrame:
+    sheet_id, sheet_url = _get_private_positions_sheet_locator()
+    try:
+        connect_alerts_worksheet()
+        records = _get_worksheet_records_cached(sheet_id, sheet_url, "custom_alerts")
+    except Exception:
+        return pd.DataFrame(columns=ALERTS_HEADERS)
+
+    if not records:
+        return pd.DataFrame(columns=ALERTS_HEADERS)
+
+    df = pd.DataFrame(records)
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    for col in ALERTS_HEADERS:
+        if col not in df.columns:
+            df[col] = ""
+    df["threshold"] = pd.to_numeric(df["threshold"], errors="coerce").fillna(0.0)
+    df["active"] = df["active"].astype(str).str.upper().map(
+        lambda v: v == "TRUE"
+    )
+    df["ticker"] = df["ticker"].astype(str).str.strip().str.upper()
+    return df[ALERTS_HEADERS].reset_index(drop=True)
+
+
+def append_alert_to_sheets(alert: dict):
+    ws = connect_alerts_worksheet()
+    row = [str(alert.get(h, "")) for h in ALERTS_HEADERS]
+    ws.append_row(row, value_input_option="RAW")
+    _clear_google_sheets_cache()
+
+
+def update_alert_field(alert_id: str, field: str, value: str):
+    """Single-cell update — cheapest possible write."""
+    ws = connect_alerts_worksheet()
+    records = ws.get_all_values()
+    if len(records) < 2:
+        return
+    header = [str(h).strip().lower() for h in records[0]]
+    if "id" not in header or field not in header:
+        return
+    id_col = header.index("id")
+    field_col = header.index(field) + 1  # 1-based for gspread
+    for i, row in enumerate(records[1:], start=2):
+        if len(row) > id_col and str(row[id_col]).strip() == str(alert_id).strip():
+            ws.update_cell(i, field_col, str(value))
+            break
+    _clear_google_sheets_cache()
+
+
+def delete_alert(alert_id: str):
+    ws = connect_alerts_worksheet()
+    records = ws.get_all_values()
+    if len(records) < 2:
+        return
+    header = [str(h).strip().lower() for h in records[0]]
+    if "id" not in header:
+        return
+    id_col = header.index("id")
+    for i, row in enumerate(records[1:], start=2):
+        if len(row) > id_col and str(row[id_col]).strip() == str(alert_id).strip():
+            ws.delete_rows(i)
+            break
+    _clear_google_sheets_cache()
