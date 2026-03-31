@@ -53,7 +53,14 @@ def _render_login_page():
     st.markdown("<br><br>", unsafe_allow_html=True)
     _, col, _ = st.columns([1, 1.4, 1])
     with col:
-        st.image("static/logo_pm_sa.png", use_container_width=True)
+        try:
+            st.image(_Image.open("static/logo_pm_sa.png"), use_container_width=True)
+        except Exception:
+            st.markdown(
+                "<h2 style='color:#f3a712;font-family:monospace;text-align:center'>"
+                "PORTFOLIO MANAGEMENT SA</h2>",
+                unsafe_allow_html=True,
+            )
         st.markdown(
             "<p style='color:#888;font-family:monospace;text-align:center;margin-top:8px;margin-bottom:32px'>"
             "Private Access</p>",
