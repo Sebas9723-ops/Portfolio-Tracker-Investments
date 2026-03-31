@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -11,6 +12,103 @@ from app_core import (
     info_section,
     render_page_title,
 )
+
+
+_SECTOR_ETFS = {
+    "Technology": "XLK",
+    "Financials": "XLF",
+    "Healthcare": "XLV",
+    "Energy": "XLE",
+    "Consumer Disc.": "XLY",
+    "Consumer Staples": "XLP",
+    "Industrials": "XLI",
+    "Materials": "XLB",
+    "Utilities": "XLU",
+    "Real Estate": "XLRE",
+    "Communication": "XLC",
+}
+
+_ROTATION_PERIODS = {"1W": 5, "1M": 21, "3M": 63, "6M": 126, "1Y": 252}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _fetch_sector_rotation() -> pd.DataFrame:
+    import yfinance as yf
+    etfs = list(_SECTOR_ETFS.values())
+    try:
+        raw = yf.download(etfs, period="1y", auto_adjust=True, progress=False)
+        close = raw["Close"] if "Close" in raw.columns else raw
+    except Exception:
+        return pd.DataFrame()
+
+    rows = []
+    for sector, etf in _SECTOR_ETFS.items():
+        row = {"Sector": sector, "ETF": etf}
+        if etf not in close.columns:
+            for p in _ROTATION_PERIODS:
+                row[p] = None
+        else:
+            s = close[etf].dropna()
+            for period_label, n_days in _ROTATION_PERIODS.items():
+                if len(s) >= n_days + 1:
+                    row[period_label] = round(float(s.iloc[-1] / s.iloc[-n_days - 1] - 1), 4)
+                elif len(s) >= 2:
+                    row[period_label] = round(float(s.iloc[-1] / s.iloc[0] - 1), 4)
+                else:
+                    row[period_label] = None
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _render_sector_rotation():
+    info_section(
+        "Sector Rotation",
+        "Performance of S&P 500 sector ETFs across multiple time horizons. "
+        "Green = outperformance, Red = underperformance. Sorted by 1-month return.",
+    )
+    with st.spinner("Loading sector data..."):
+        df = _fetch_sector_rotation()
+
+    if df.empty:
+        st.info("Could not load sector rotation data.")
+        return
+
+    periods = list(_ROTATION_PERIODS.keys())
+    df_sorted = df.sort_values("1M", ascending=False).reset_index(drop=True)
+
+    # Plotly heatmap
+    z = df_sorted[periods].values.tolist()
+    y_labels = [f"{row['Sector']} ({row['ETF']})" for _, row in df_sorted.iterrows()]
+    text = [[f"{v:.2%}" if v is not None else "—" for v in row] for row in z]
+
+    fig = go.Figure(go.Heatmap(
+        z=z,
+        x=periods,
+        y=y_labels,
+        text=text,
+        texttemplate="%{text}",
+        colorscale=[[0.0, "#8b0000"], [0.5, "#1a1f2e"], [1.0, "#006400"]],
+        zmid=0,
+        showscale=True,
+        colorbar=dict(tickformat=".1%", title="Return"),
+        hoverongaps=False,
+        hovertemplate="%{y}<br>%{x}: %{text}<extra></extra>",
+    ))
+    fig.update_layout(
+        paper_bgcolor="#0b0f14", plot_bgcolor="#0b0f14",
+        font=dict(color="#e6e6e6", size=12),
+        height=440,
+        margin=dict(t=20, b=20, l=200, r=20),
+        xaxis=dict(side="top"),
+    )
+    st.plotly_chart(fig, use_container_width=True, key="sector_rotation_heatmap")
+
+    # Table with conditional formatting
+    st.markdown("##### Returns Table")
+    display = df_sorted.copy()
+    for p in periods:
+        display[p] = display[p].apply(lambda v: f"{v:.2%}" if v is not None else "—")
+    st.dataframe(display[["Sector", "ETF"] + periods], use_container_width=True, hide_index=True)
 
 
 _TYPE_COLORS = {
@@ -165,23 +263,16 @@ def _render_news_feed(ctx):
 
 def render_market_overview_page(ctx):
     render_page_title("Market Overview")
-
-    tab1, tab2, tab3 = st.tabs(["Economic Calendar", "Sector Heatmap", "News Feed"])
-
+    tab1, tab2, tab3, tab4 = st.tabs(["Economic Calendar", "Sector Heatmap", "Sector Rotation", "News Feed"])
     with tab1:
-        try:
-            _render_economic_calendar(ctx)
-        except Exception as e:
-            st.error(f"Economic calendar error: {e}")
-
+        try: _render_economic_calendar(ctx)
+        except Exception as e: st.error(f"Economic calendar error: {e}")
     with tab2:
-        try:
-            _render_sector_heatmap()
-        except Exception as e:
-            st.error(f"Sector heatmap error: {e}")
-
+        try: _render_sector_heatmap()
+        except Exception as e: st.error(f"Sector heatmap error: {e}")
     with tab3:
-        try:
-            _render_news_feed(ctx)
-        except Exception as e:
-            st.error(f"News feed error: {e}")
+        try: _render_sector_rotation()
+        except Exception as e: st.error(f"Sector rotation error: {e}")
+    with tab4:
+        try: _render_news_feed(ctx)
+        except Exception as e: st.error(f"News feed error: {e}")

@@ -1091,6 +1091,40 @@ def save_cash_balances_to_sheets(cash_df: pd.DataFrame):
     _clear_google_sheets_cache()
 
 
+WATCHLIST_HEADERS = ["ticker", "notes"]
+
+
+def connect_watchlist_worksheet():
+    return _connect_named_worksheet("watchlist", WATCHLIST_HEADERS)
+
+
+def load_watchlist_from_sheets() -> list:
+    sheet_id, sheet_url = _get_private_positions_sheet_locator()
+    try:
+        connect_watchlist_worksheet()
+        records = _get_worksheet_records_cached(sheet_id, sheet_url, "watchlist")
+    except Exception:
+        return []
+    tickers = []
+    for r in records:
+        t = str(r.get("ticker", "")).strip().upper()
+        if t:
+            tickers.append(t)
+    return tickers
+
+
+def save_watchlist_to_sheets(tickers: list):
+    ws = connect_watchlist_worksheet()
+    rows = [WATCHLIST_HEADERS]
+    for t in tickers:
+        t = str(t).upper().strip()
+        if t:
+            rows.append([t, ""])
+    ws.clear()
+    ws.update(range_name="A1", values=rows)
+    _clear_google_sheets_cache()
+
+
 def adjust_cash_balance(currency: str, delta: float):
     cash_df = load_cash_balances_from_sheets()
     currency = str(currency).upper().strip()

@@ -17,6 +17,8 @@ from pages_app.transactions import render_transactions_page
 from pages_app.market_overview import render_market_overview_page
 from pages_app.order_blotter import render_order_blotter_page
 from pages_app.ticker_lookup import render_ticker_lookup_page
+from pages_app.watchlist import render_watchlist_page
+from pages_app.technicals import render_technicals_page
 
 
 from PIL import Image as _Image
@@ -81,6 +83,7 @@ st.sidebar.caption("Private management version")
 
 _NAV_PAGES = [
     "Dashboard",
+    "Watchlist",
     "Portfolio",
     "Transactions",
     "Analytics",
@@ -92,6 +95,7 @@ _NAV_PAGES = [
     "Projections",
     "Market Overview",
     "Ticker Lookup",
+    "Technicals",
     "Trade Journal",
     "Order Blotter",
     "Private Manager",
@@ -144,5 +148,9 @@ elif page_name == "Order Blotter":
     render_order_blotter_page(ctx)
 elif page_name == "Ticker Lookup":
     render_ticker_lookup_page(ctx)
+elif page_name == "Technicals":
+    render_technicals_page(ctx)
+elif page_name == "Watchlist":
+    render_watchlist_page(ctx)
 elif page_name == "Private Manager":
     render_private_manager_page(ctx)
