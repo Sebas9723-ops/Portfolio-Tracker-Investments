@@ -144,6 +144,14 @@ def render_whatif_page(ctx: dict):
     if cw_total > 0:
         current_weights = {t: v / cw_total for t, v in current_weights.items()}
 
+    ticker_list = sorted(available)
+
+    # Handle reset BEFORE the form renders so session_state keys are set
+    # before the number_input widgets register them.
+    if st.session_state.pop("wi_reset_pending", False):
+        for ticker in ticker_list:
+            st.session_state[f"wi_{ticker}"] = round(current_weights.get(ticker, 0.0) * 100, 1)
+
     # ── Weight input form ──────────────────────────────────────────────────────
     st.markdown(
         "Adjust hypothetical weights below and press **Run Simulation** to see "
@@ -153,7 +161,6 @@ def render_whatif_page(ctx: dict):
     with st.form("whatif_form"):
         st.markdown("#### Hypothetical Weights (%)")
         cols_per_row = 4
-        ticker_list = sorted(available)
         rows = [ticker_list[i: i + cols_per_row] for i in range(0, len(ticker_list), cols_per_row)]
 
         for row_tickers in rows:
@@ -173,8 +180,9 @@ def render_whatif_page(ctx: dict):
         reset = c_reset.form_submit_button("Reset to Current", use_container_width=True)
 
     if reset:
-        for ticker in ticker_list:
-            st.session_state[f"wi_{ticker}"] = round(current_weights.get(ticker, 0.0) * 100, 1)
+        # Can't set widget keys after they've been rendered — use a pending flag
+        # that is consumed at the top of the next run, before the form renders.
+        st.session_state["wi_reset_pending"] = True
         st.rerun()
 
     # Live weight sum indicator (outside form — reads session state)
