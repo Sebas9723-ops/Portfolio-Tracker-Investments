@@ -6,15 +6,28 @@ import streamlit as st
 from app_core import (
     build_recommended_shares_table,
     compute_black_litterman,
+    compute_risk_parity_weights,
+    get_default_constraints,
     info_metric,
     info_section,
     render_page_title,
+    simulate_constrained_efficient_frontier,
     weights_table,
 )
 
 
-def _render_risk_parity(ctx):
-    rp = ctx.get("risk_parity_result")
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_frontier(asset_returns: pd.DataFrame, max_single: float, min_bonds: float, min_gold: float, rfr: float, n: int):
+    constraints = {"max_single_asset": max_single, "min_bonds": min_bonds, "min_gold": min_gold}
+    return simulate_constrained_efficient_frontier(asset_returns, asset_returns.columns.tolist(), constraints, rfr, n)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_risk_parity(asset_returns: pd.DataFrame):
+    return compute_risk_parity_weights(asset_returns)
+
+
+def _render_risk_parity(ctx, rp):
     if rp is None:
         return
 
@@ -82,9 +95,8 @@ def _render_risk_parity(ctx):
             st.dataframe(erc_rec, use_container_width=True, hide_index=True)
 
 
-def _render_black_litterman(ctx):
+def _render_black_litterman(ctx, usable):
     asset_returns = ctx.get("asset_returns")
-    usable = list(ctx.get("usable", []))
     df = ctx.get("df", pd.DataFrame())
 
     if asset_returns is None or asset_returns.empty or not usable or df.empty:
@@ -189,10 +201,10 @@ def _render_black_litterman(ctx):
     if st.session_state.get("bl_views"):
         st.caption(
             f"Posterior blends equilibrium with {len(st.session_state['bl_views'])} investor "
-            f"view(s). τ=0.05, λ=2.5."
+            f"view(s). tau=0.05, lambda=2.5."
         )
     else:
-        st.caption("No views added — posterior equals CAPM equilibrium. Add views above to see BL adjustment.")
+        st.caption("No views added -- posterior equals CAPM equilibrium. Add views above to see BL adjustment.")
 
 
 def _annualized_voo_return(ctx):
@@ -205,27 +217,123 @@ def _annualized_voo_return(ctx):
 def render_optimization_page(ctx):
     render_page_title("Optimization")
 
-    if ctx.get("fig_frontier") is None or ctx.get("max_sharpe_row") is None or ctx.get("min_vol_row") is None:
+    asset_returns = ctx.get("asset_returns")
+    df = ctx.get("df", pd.DataFrame())
+
+    if asset_returns is None or asset_returns.empty or df.empty:
         st.info("Not enough data to build the efficient frontier.")
         return
 
+    # ── Sidebar controls ──────────────────────────────────────────────────────
+    with st.sidebar.expander("Optimization Settings", expanded=False):
+        profile = ctx.get("profile", "Balanced")
+        defaults = get_default_constraints(profile)
+        max_single_asset = st.number_input("Max single-asset weight", 0.05, 1.00, float(defaults["max_single_asset"]), 0.01, format="%.2f")
+        min_bonds = st.number_input("Min bonds", 0.00, 1.00, float(defaults["min_bonds"]), 0.01, format="%.2f")
+        min_gold = st.number_input("Min gold", 0.00, 1.00, float(defaults["min_gold"]), 0.01, format="%.2f")
+        rfr = st.number_input("Risk-free rate", 0.00, 0.20, 0.02, 0.005, format="%.3f")
+
+    # ── Compute frontier (cached) ─────────────────────────────────────────────
+    frontier = _cached_frontier(asset_returns, max_single_asset, min_bonds, min_gold, rfr, 2000)
+
+    if frontier is None or frontier.empty:
+        st.info("Not enough data to build the efficient frontier.")
+        return
+
+    usable = asset_returns.columns.tolist()
+    mean_returns = asset_returns.mean() * 252
+    cov_matrix = asset_returns.cov() * 252
+
+    current_weights = (
+        df.set_index("Ticker").loc[usable, "Weight"]
+        / max(df.set_index("Ticker").loc[usable, "Weight"].sum(), 1e-12)
+    ).values
+
+    current_return = float(current_weights @ mean_returns.values)
+    current_vol = float(np.sqrt(current_weights @ cov_matrix.values @ current_weights.T))
+    current_sharpe = float((current_return - rfr) / current_vol) if current_vol > 0 else 0.0
+
+    max_sharpe_row = frontier.loc[frontier["Sharpe"].idxmax()]
+    min_vol_row = frontier.loc[frontier["Volatility"].idxmin()]
+
+    max_x = max(
+        frontier["Volatility"].max(),
+        current_vol,
+        float(max_sharpe_row["Volatility"]),
+        float(min_vol_row["Volatility"]),
+    ) * 1.1
+
+    cml_x = np.linspace(0, max_x, 100)
+    cml_y = rfr + float(max_sharpe_row["Sharpe"]) * cml_x
+
+    fig_frontier = go.Figure()
+    fig_frontier.add_trace(
+        go.Scatter(
+            x=frontier["Volatility"],
+            y=frontier["Return"],
+            mode="markers",
+            marker=dict(size=5, color=frontier["Sharpe"], colorscale="Viridis", showscale=True),
+            name="Simulated Portfolios",
+        )
+    )
+    fig_frontier.add_trace(go.Scatter(x=cml_x, y=cml_y, mode="lines", name="Capital Market Line"))
+    fig_frontier.add_trace(
+        go.Scatter(
+            x=[current_vol],
+            y=[current_return],
+            mode="markers+text",
+            text=["Current"],
+            textposition="top center",
+            name="Current Portfolio",
+        )
+    )
+    fig_frontier.add_trace(
+        go.Scatter(
+            x=[max_sharpe_row["Volatility"]],
+            y=[max_sharpe_row["Return"]],
+            mode="markers+text",
+            text=["Max Sharpe"],
+            textposition="top center",
+            name="Max Sharpe",
+        )
+    )
+    fig_frontier.add_trace(
+        go.Scatter(
+            x=[min_vol_row["Volatility"]],
+            y=[min_vol_row["Return"]],
+            mode="markers+text",
+            text=["Min Vol"],
+            textposition="bottom center",
+            name="Min Volatility",
+        )
+    )
+    fig_frontier.update_layout(
+        xaxis_title="Volatility",
+        yaxis_title="Expected Return",
+        paper_bgcolor="#0b0f14",
+        plot_bgcolor="#0b0f14",
+        font=dict(color="#e6e6e6"),
+        height=430,
+        margin=dict(t=20, b=20, l=20, r=20),
+    )
+
+    # ── Render ────────────────────────────────────────────────────────────────
     voo_return = _annualized_voo_return(ctx)
 
     c1, c2, c3, c4 = st.columns(4)
-    info_metric(c1, "Current Return", f"{ctx['current_return']:.2%}", "Expected annualized return of the current portfolio.")
+    info_metric(c1, "Current Return", f"{current_return:.2%}", "Expected annualized return of the current portfolio.")
     info_metric(c2, "VOO Return", "-" if voo_return is None else f"{voo_return:.2%}", "Annualized VOO return over the same historical window.")
-    info_metric(c3, "Current Volatility", f"{ctx['current_vol']:.2%}", "Expected annualized volatility of the current portfolio.")
-    info_metric(c4, "Current Sharpe", f"{ctx['current_sharpe']:.2f}", "Sharpe ratio of the current portfolio.")
+    info_metric(c3, "Current Volatility", f"{current_vol:.2%}", "Expected annualized volatility of the current portfolio.")
+    info_metric(c4, "Current Sharpe", f"{current_sharpe:.2f}", "Sharpe ratio of the current portfolio.")
 
     info_section(
         "Efficient Frontier",
         "Simulated efficient frontier, current portfolio, max Sharpe portfolio, and minimum volatility portfolio.",
     )
-    st.plotly_chart(ctx["fig_frontier"], use_container_width=True, key="optimization_frontier_chart_v2")
+    st.plotly_chart(fig_frontier, use_container_width=True, key="optimization_frontier_chart_v2")
 
-    usable = list(ctx["usable"])
-    ms_weights = ctx["max_sharpe_row"]["Weights"]
-    mv_weights = ctx["min_vol_row"]["Weights"]
+    ms_weights = max_sharpe_row["Weights"]
+    mv_weights = min_vol_row["Weights"]
 
     ms_table = weights_table(ms_weights, usable)
     mv_table = weights_table(mv_weights, usable)
@@ -249,5 +357,6 @@ def render_optimization_page(ctx):
         info_section("Min Volatility Shares", "Recommended shares to move the current portfolio toward the minimum volatility allocation.")
         st.dataframe(mv_rec, use_container_width=True, height=300)
 
-    _render_risk_parity(ctx)
-    _render_black_litterman(ctx)
+    rp = _cached_risk_parity(asset_returns)
+    _render_risk_parity(ctx, rp)
+    _render_black_litterman(ctx, usable)

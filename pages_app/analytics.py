@@ -1,8 +1,54 @@
+import json
+
 import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from app_core import info_metric, info_section, render_page_title, compute_twr
+from app_core import (
+    build_blended_benchmark_returns,
+    build_multi_benchmark_comparison,
+    compute_brinson_attribution,
+    compute_extended_ratios,
+    compute_ff3_exposure,
+    compute_rolling_metrics,
+    compute_twr,
+    compute_volatility_regime,
+    info_metric,
+    info_section,
+    render_page_title,
+)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_rolling(portfolio_returns: pd.Series, benchmark_returns: pd.Series, rfr: float, window: int):
+    return compute_rolling_metrics(portfolio_returns, benchmark_returns, rfr, window)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_extended(portfolio_returns: pd.Series, benchmark_returns: pd.Series, rfr: float, max_dd: float):
+    return compute_extended_ratios(portfolio_returns, benchmark_returns, rfr, max_dd)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_brinson(df: pd.DataFrame, asset_returns: pd.DataFrame, policy_json: str, benchmark_returns: pd.Series):
+    policy_map = json.loads(policy_json)
+    return compute_brinson_attribution(df, asset_returns, policy_map, benchmark_returns)
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _cached_ff3(portfolio_returns: pd.Series, rfr: float):
+    return compute_ff3_exposure(portfolio_returns, rfr)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_vol_regime(portfolio_returns: pd.Series):
+    return compute_volatility_regime(portfolio_returns)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_multi_benchmark(portfolio_returns: pd.Series, base_currency: str, _fx_hist: pd.DataFrame, rfr: float):
+    return build_multi_benchmark_comparison(portfolio_returns, base_currency, _fx_hist, rfr)
 
 
 def _compute_relative_metrics(ctx):
@@ -163,8 +209,7 @@ def _fmt(v, fmt=".2%", fallback="—") -> str:
         return fallback
 
 
-def _render_extended_ratios(ctx):
-    er = ctx.get("extended_ratios", {})
+def _render_extended_ratios(er):
     if not er:
         return
     info_section(
@@ -214,8 +259,7 @@ def _render_returns_comparison(ctx):
     info_metric(c4, "TWR − MWR", _fmt(excess) if excess is not None else "—", "Positive = timing helped; Negative = timing hurt.")
 
 
-def _render_brinson(ctx):
-    brinson_df = ctx.get("brinson_df")
+def _render_brinson(brinson_df):
     if brinson_df is None or brinson_df.empty:
         return
 
@@ -245,8 +289,7 @@ def _render_brinson(ctx):
     st.plotly_chart(fig, use_container_width=True, key="analytics_brinson_chart")
 
 
-def _render_ff3(ctx):
-    ff3 = ctx.get("ff3_result")
+def _render_ff3(ff3):
     if not ff3:
         return
 
@@ -265,8 +308,7 @@ def _render_ff3(ctx):
     st.caption(f"Factor proxy source: {ff3.get('source', 'ETF Proxy')}")
 
 
-def _render_volatility_regime(ctx):
-    vr = ctx.get("volatility_regime")
+def _render_volatility_regime(vr):
     if not vr or vr.get("ewma_vol_series") is None or vr["ewma_vol_series"].empty:
         return
 
@@ -337,8 +379,7 @@ def _render_volatility_regime(ctx):
     st.plotly_chart(fig, use_container_width=True, key="analytics_vol_regime_chart")
 
 
-def _render_multi_benchmark(ctx):
-    mb = ctx.get("multi_benchmark")
+def _render_multi_benchmark(mb):
     if not mb:
         return
     fig = mb.get("fig")
@@ -357,12 +398,51 @@ def _render_multi_benchmark(ctx):
 def render_analytics_page(ctx):
     render_page_title("Analytics")
 
-    rel = _compute_relative_metrics(ctx)
+    portfolio_returns = ctx.get("portfolio_returns", pd.Series(dtype=float))
+    benchmark_returns = ctx.get("resolved_benchmark_returns", pd.Series(dtype=float))
+    asset_returns = ctx.get("asset_returns")
+    df = ctx.get("df", pd.DataFrame())
+    base_currency = ctx.get("base_currency", "USD")
+    fx_hist = ctx.get("fx_hist")
+    max_dd = float(ctx.get("max_drawdown", 0.0))
+    policy_map = ctx.get("policy_target_map", {})
 
+    # ── Sidebar controls ──────────────────────────────────────────────────────
+    with st.sidebar.expander("Analytics Settings", expanded=False):
+        rolling_window = st.slider("Rolling Window (days)", 21, 252, 63, 21, key="ana_roll_win")
+        rfr = st.number_input("Risk-free rate", 0.00, 0.20, 0.02, 0.005, format="%.3f", key="ana_rfr")
+        voo_w = st.slider("Blended benchmark VOO %", 0, 100, 60, 5, key="ana_voo_w") / 100.0
+
+    # ── Compute (all cached) ──────────────────────────────────────────────────
+    rolling_df = pd.DataFrame()
+    extended = {}
+    brinson_df = None
+    ff3 = None
+    vr = None
+    mb = None
+
+    if not portfolio_returns.empty and not benchmark_returns.empty:
+        rolling_df = _cached_rolling(portfolio_returns, benchmark_returns, rfr, rolling_window)
+        extended = _cached_extended(portfolio_returns, benchmark_returns, rfr, max_dd) or {}
+
+    if not df.empty and asset_returns is not None and not asset_returns.empty and policy_map:
+        policy_json = json.dumps({k: float(v) for k, v in policy_map.items()})
+        brinson_df = _cached_brinson(df, asset_returns, policy_json, benchmark_returns)
+
+    if not portfolio_returns.empty and len(portfolio_returns) >= 60:
+        ff3 = _cached_ff3(portfolio_returns, rfr)
+
+    if not portfolio_returns.empty:
+        vr = _cached_vol_regime(portfolio_returns)
+        if fx_hist is not None:
+            mb = _cached_multi_benchmark(portfolio_returns, base_currency, fx_hist, rfr)
+
+    # ── Header metrics ────────────────────────────────────────────────────────
+    rel = _compute_relative_metrics(ctx)
     alpha_txt = "—" if rel is None or rel["alpha"] is None else f"{rel['alpha']:.2%}"
-    beta_txt = "—" if rel is None or rel["beta"] is None else f"{rel['beta']:.2f}"
-    te_txt = "—" if rel is None or rel["tracking_error"] is None else f"{rel['tracking_error']:.2%}"
-    ir_txt = "—" if rel is None or rel["information_ratio"] is None else f"{rel['information_ratio']:.2f}"
+    beta_txt  = "—" if rel is None or rel["beta"] is None else f"{rel['beta']:.2f}"
+    te_txt    = "—" if rel is None or rel["tracking_error"] is None else f"{rel['tracking_error']:.2%}"
+    ir_txt    = "—" if rel is None or rel["information_ratio"] is None else f"{rel['information_ratio']:.2f}"
 
     c1, c2, c3, c4 = st.columns(4)
     info_metric(c1, "Alpha", alpha_txt, "Annualized alpha versus VOO.")
@@ -372,32 +452,18 @@ def render_analytics_page(ctx):
 
     perf_fig = _build_performance_chart_pct(ctx)
     if perf_fig is not None:
-        info_section(
-            "Performance",
-            "Portfolio and VOO cumulative performance shown in percentage terms. Legend includes latest cumulative values.",
-        )
-        st.plotly_chart(
-            perf_fig,
-            use_container_width=True,
-            key="analytics_performance_pct_chart_fixed_v2",
-        )
+        info_section("Performance", "Portfolio and VOO cumulative performance in percentage terms.")
+        st.plotly_chart(perf_fig, use_container_width=True, key="analytics_performance_pct_chart_fixed_v2")
 
-    _render_extended_ratios(ctx)
+    _render_extended_ratios(extended)
     _render_returns_comparison(ctx)
-    _render_brinson(ctx)
-    _render_ff3(ctx)
+    _render_brinson(brinson_df)
+    _render_ff3(ff3)
 
-    rolling_fig = _build_rolling_metrics_chart(ctx.get("rolling_df"))
+    rolling_fig = _build_rolling_metrics_chart(rolling_df if not rolling_df.empty else None)
     if rolling_fig is not None:
-        info_section(
-            "Rolling Metrics",
-            "Rolling volatility, Sharpe, beta, and drawdown over time.",
-        )
-        st.plotly_chart(
-            rolling_fig,
-            use_container_width=True,
-            key="analytics_rolling_metrics_chart_fixed_v2",
-        )
+        info_section("Rolling Metrics", "Rolling volatility, Sharpe, beta, and drawdown over time.")
+        st.plotly_chart(rolling_fig, use_container_width=True, key="analytics_rolling_metrics_chart_fixed_v2")
 
-    _render_volatility_regime(ctx)
-    _render_multi_benchmark(ctx)
+    _render_volatility_regime(vr)
+    _render_multi_benchmark(mb)

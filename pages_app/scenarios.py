@@ -1,19 +1,27 @@
 import plotly.graph_objects as go
 import streamlit as st
 
-from app_core import info_metric, info_section, render_page_title
+from app_core import info_metric, info_section, render_page_title, run_historical_scenarios
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_scenarios(df, current_total_value: float):
+    return run_historical_scenarios(df, current_total_value)
 
 
 def render_scenarios_page(ctx):
     render_page_title("Scenarios")
 
-    scenarios_df = ctx.get("scenarios_df")
+    df = ctx.get("df")
+    total_value = float(ctx.get("total_portfolio_value", ctx.get("total_value", 0.0)))
+    scenarios_df = _cached_scenarios(df, total_value) if df is not None and not df.empty else None
+
     if scenarios_df is None or scenarios_df.empty:
         st.info("Scenarios unavailable — no portfolio data.")
         return
 
     ccy = ctx.get("base_currency", "USD")
-    current_total = float(ctx.get("current_total_value", 0.0))
+    current_total = total_value
 
     info_section(
         "Historical Crisis Scenarios",

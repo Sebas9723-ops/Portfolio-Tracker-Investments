@@ -12,39 +12,22 @@ from app_core import (
     CASH_BALANCES_HEADERS,
     DEFAULT_RISK_FREE_RATE,
     DIVIDENDS_HEADERS,
-    N_SIMULATIONS,
     PUBLIC_DEFAULTS_VERSION,
     SUPPORTED_BASE_CCY,
     TRANSACTIONS_HEADERS,
     backfill_missing_proxy_history,
     build_benchmark_returns,
-    build_blended_benchmark_returns,
     build_cash_display_df,
-    build_correlation_heatmap,
     build_current_portfolio,
     build_dividend_insights,
     build_fx_data,
-    build_fx_exposure_summary,
-    build_multi_benchmark_comparison,
     build_portfolio_df,
     build_portfolio_returns,
     build_stress_test_table,
     build_transaction_positions,
-    compute_brinson_attribution,
-    compute_drawdown_episodes,
-    compute_extended_ratios,
-    compute_ff3_exposure,
-    compute_fixed_income_analytics,
-    compute_volatility_regime,
-    check_mandate_compliance,
-    compute_monthly_returns_calendar,
     compute_mwr,
-    compute_risk_budget,
-    compute_risk_parity_weights,
-    compute_rolling_metrics,
     compute_var_cvar,
     convert_historical_to_base,
-    get_default_constraints,
     get_mode_prefix,
     init_mode_state,
     load_cash_balances_from_sheets,
@@ -55,8 +38,6 @@ from app_core import (
     load_transactions_from_sheets,
     merge_private_portfolios,
     reset_mode_state,
-    run_historical_scenarios,
-    simulate_constrained_efficient_frontier,
 )
 
 
@@ -316,112 +297,8 @@ def build_app_context_runtime(app_scope: str):
             disable_inputs=False,
         )
 
-    st.sidebar.header("Optimization Settings")
     profile = st.sidebar.selectbox("Investor Profile", ["Aggressive", "Balanced", "Conservative"])
-    defaults = get_default_constraints(profile)
-
-    with st.sidebar.expander("Custom Constraints", expanded=False):
-        max_single_asset = st.number_input(
-            "Max single-asset weight",
-            0.05,
-            1.00,
-            float(defaults["max_single_asset"]),
-            0.01,
-            format="%.2f",
-        )
-        min_bonds = st.number_input(
-            "Minimum bonds allocation",
-            0.00,
-            1.00,
-            float(defaults["min_bonds"]),
-            0.01,
-            format="%.2f",
-        )
-        min_gold = st.number_input(
-            "Minimum gold allocation",
-            0.00,
-            1.00,
-            float(defaults["min_gold"]),
-            0.01,
-            format="%.2f",
-        )
-        risk_free_rate = st.number_input(
-            "Risk-free rate",
-            0.00,
-            0.20,
-            float(DEFAULT_RISK_FREE_RATE),
-            0.005,
-            format="%.3f",
-        )
-
-    constraints = {
-        "max_single_asset": max_single_asset,
-        "min_bonds": min_bonds,
-        "min_gold": min_gold,
-    }
-
-    st.sidebar.header("Transaction Cost Model")
-    tc_model = st.sidebar.selectbox("Model", ["Broker Profile", "Simple Bps", "Manual Override"])
-
-    with st.sidebar.expander("Transaction Cost Parameters", expanded=False):
-        if tc_model == "Broker Profile":
-            us_commission_bps = st.number_input("US commission (bps)", 0.0, 100.0, 3.0, 0.5)
-            us_min_fee = st.number_input(f"US minimum fee ({base_currency})", 0.0, 50.0, 1.0, 0.5)
-            eu_commission_bps = st.number_input("Europe commission (bps)", 0.0, 100.0, 5.0, 0.5)
-            eu_min_fee = st.number_input(f"Europe minimum fee ({base_currency})", 0.0, 50.0, 1.5, 0.5)
-            uk_commission_bps = st.number_input("UK commission (bps)", 0.0, 100.0, 5.0, 0.5)
-            uk_min_fee = st.number_input(f"UK minimum fee ({base_currency})", 0.0, 50.0, 1.5, 0.5)
-            slippage_bps = st.number_input("Slippage (bps)", 0.0, 100.0, 5.0, 0.5)
-            fx_bps = st.number_input("FX conversion cost (bps)", 0.0, 100.0, 10.0, 0.5)
-
-            tc_params = {
-                "us_commission_bps": us_commission_bps,
-                "us_min_fee": us_min_fee,
-                "eu_commission_bps": eu_commission_bps,
-                "eu_min_fee": eu_min_fee,
-                "uk_commission_bps": uk_commission_bps,
-                "uk_min_fee": uk_min_fee,
-                "slippage_bps": slippage_bps,
-                "fx_bps": fx_bps,
-            }
-
-        elif tc_model == "Simple Bps":
-            simple_bps = st.number_input("All-in trading cost (bps)", 0.0, 100.0, 10.0, 0.5)
-            fx_bps = st.number_input("FX conversion cost (bps)", 0.0, 100.0, 10.0, 0.5)
-
-            tc_params = {
-                "simple_bps": simple_bps,
-                "fx_bps": fx_bps,
-            }
-
-        else:
-            manual_bps = st.number_input("Variable cost (bps)", 0.0, 100.0, 8.0, 0.5)
-            manual_fixed_fee = st.number_input(
-                f"Fixed fee per trade ({base_currency})",
-                0.0,
-                100.0,
-                1.0,
-                0.5,
-            )
-            fx_bps = st.number_input("FX conversion cost (bps)", 0.0, 100.0, 10.0, 0.5)
-
-            tc_params = {
-                "manual_bps": manual_bps,
-                "manual_fixed_fee": manual_fixed_fee,
-                "fx_bps": fx_bps,
-            }
-
-    st.sidebar.header("Stress Testing")
-    equity_shock = st.sidebar.number_input("Equities Shock", -1.00, 1.00, -0.10, 0.01, format="%.2f")
-    bonds_shock = st.sidebar.number_input("Bonds Shock", -1.00, 1.00, -0.03, 0.01, format="%.2f")
-    gold_shock = st.sidebar.number_input("Gold Shock", -1.00, 1.00, 0.05, 0.01, format="%.2f")
-    rolling_window = st.sidebar.slider("Rolling Window (days)", 21, 252, 63, 21)
-
-    st.sidebar.header("Blended Benchmark")
-    blended_voo_weight = st.sidebar.slider("VOO weight (%)", 0, 100, 60, 5) / 100.0
-    blended_bnd_weight = round(1.0 - blended_voo_weight, 2)
-
-    stress_shocks = {"Equities": equity_shock, "Bonds": bonds_shock, "Gold": gold_shock}
+    risk_free_rate = DEFAULT_RISK_FREE_RATE
 
     tickers = list(updated_portfolio.keys())
 
@@ -614,146 +491,14 @@ def build_app_context_runtime(app_scope: str):
             margin=dict(t=20, b=20, l=20, r=20),
         )
 
-    frontier = simulate_constrained_efficient_frontier(
-        asset_returns=asset_returns,
-        asset_names=asset_returns.columns.tolist() if not asset_returns.empty else [],
-        constraints=constraints,
-        risk_free_rate=risk_free_rate,
-        n_portfolios=N_SIMULATIONS,
-    )
-
-    max_sharpe_row = None
-    min_vol_row = None
-    usable = []
-    fig_frontier = None
-    current_return = 0.0
-    current_vol = 0.0
-    current_sharpe = 0.0
-
-    if not frontier.empty:
-        mean_returns = asset_returns.mean() * 252
-        cov_matrix = asset_returns.cov() * 252
-        usable = asset_returns.columns.tolist()
-
-        current_weights = (
-            df.set_index("Ticker").loc[usable, "Weight"]
-            / max(df.set_index("Ticker").loc[usable, "Weight"].sum(), 1e-12)
-        ).values
-
-        current_return = float(current_weights @ mean_returns.values)
-        current_vol = float(np.sqrt(current_weights @ cov_matrix.values @ current_weights.T))
-        current_sharpe = float((current_return - risk_free_rate) / current_vol) if current_vol > 0 else 0.0
-
-        max_sharpe_row = frontier.loc[frontier["Sharpe"].idxmax()]
-        min_vol_row = frontier.loc[frontier["Volatility"].idxmin()]
-
-        max_x = max(
-            frontier["Volatility"].max(),
-            current_vol,
-            float(max_sharpe_row["Volatility"]),
-            float(min_vol_row["Volatility"]),
-        ) * 1.1
-
-        cml_x = np.linspace(0, max_x, 100)
-        cml_y = risk_free_rate + float(max_sharpe_row["Sharpe"]) * cml_x
-
-        fig_frontier = go.Figure()
-        fig_frontier.add_trace(
-            go.Scatter(
-                x=frontier["Volatility"],
-                y=frontier["Return"],
-                mode="markers",
-                marker=dict(size=5, color=frontier["Sharpe"], colorscale="Viridis", showscale=True),
-                name="Simulated Portfolios",
-            )
-        )
-        fig_frontier.add_trace(go.Scatter(x=cml_x, y=cml_y, mode="lines", name="Capital Market Line"))
-        fig_frontier.add_trace(
-            go.Scatter(
-                x=[current_vol],
-                y=[current_return],
-                mode="markers+text",
-                text=["Current"],
-                textposition="top center",
-                name="Current Portfolio",
-            )
-        )
-        fig_frontier.add_trace(
-            go.Scatter(
-                x=[max_sharpe_row["Volatility"]],
-                y=[max_sharpe_row["Return"]],
-                mode="markers+text",
-                text=["Max Sharpe"],
-                textposition="top center",
-                name="Max Sharpe",
-            )
-        )
-        fig_frontier.add_trace(
-            go.Scatter(
-                x=[min_vol_row["Volatility"]],
-                y=[min_vol_row["Return"]],
-                mode="markers+text",
-                text=["Min Vol"],
-                textposition="bottom center",
-                name="Min Volatility",
-            )
-        )
-        fig_frontier.update_layout(
-            xaxis_title="Volatility",
-            yaxis_title="Expected Return",
-            paper_bgcolor="#0b0f14",
-            plot_bgcolor="#0b0f14",
-            font=dict(color="#e6e6e6"),
-            height=430,
-            margin=dict(t=20, b=20, l=20, r=20),
-        )
-
-    stress_df, current_total_value, stressed_total_value = build_stress_test_table(df, stress_shocks)
+    # ── Stress PnL with default shocks ────────────────────────────────────────
+    default_shocks = {"Equities": -0.10, "Bonds": -0.03, "Gold": 0.05}
+    _stress_df, current_total_value, stressed_total_value = build_stress_test_table(df, default_shocks)
     stress_pnl = stressed_total_value - current_total_value
     stress_return = (stressed_total_value / current_total_value - 1) if current_total_value > 0 else 0.0
 
-    fig_stress = go.Figure()
-    fig_stress.add_bar(x=stress_df["Ticker"], y=stress_df["Current Value"], name="Current Value")
-    fig_stress.add_bar(x=stress_df["Ticker"], y=stress_df["Stressed Value"], name="Stressed Value")
-    fig_stress.update_layout(
-        barmode="group",
-        paper_bgcolor="#0b0f14",
-        plot_bgcolor="#0b0f14",
-        font=dict(color="#e6e6e6"),
-        height=380,
-        margin=dict(t=20, b=20, l=20, r=20),
-    )
-
-    rolling_df = compute_rolling_metrics(portfolio_returns, resolved_benchmark_returns, risk_free_rate, rolling_window)
-
-    # ── Institutional metrics ──────────────────────────────────────────────────
-    weights_series = df.set_index("Ticker")["Weight"] if not df.empty else pd.Series(dtype=float)
-    risk_budget_df = compute_risk_budget(asset_returns, weights_series)
-    scenarios_df = run_historical_scenarios(df, current_total_value)
-    fixed_income_df = compute_fixed_income_analytics(df, base_currency)
-    blended_benchmark_returns = build_blended_benchmark_returns(base_currency, fx_hist, blended_voo_weight, blended_bnd_weight)
-    ff3_result = None
-    try:
-        ff3_result = compute_ff3_exposure(portfolio_returns, risk_free_rate)
-    except Exception:
-        pass
-
-    monthly_calendar_df = compute_monthly_returns_calendar(portfolio_returns)
-    drawdown_episodes_df = compute_drawdown_episodes(portfolio_returns)
-    risk_parity_result = compute_risk_parity_weights(asset_returns)
-
     var_cvar = compute_var_cvar(portfolio_returns)
-    compliance_results = check_mandate_compliance(
-        df=df,
-        max_drawdown=max_drawdown,
-        tracking_error=tracking_error,
-        var_cvar=var_cvar,
-        constraints=constraints,
-    )
-    fig_correlation = build_correlation_heatmap(asset_returns)
-    extended_ratios = compute_extended_ratios(portfolio_returns, resolved_benchmark_returns, risk_free_rate, max_drawdown)
     mwr_result = compute_mwr(transactions_df, total_portfolio_value)
-    brinson_df = compute_brinson_attribution(df, asset_returns, policy_target_map, resolved_benchmark_returns)
 
     annual_dividend_df, dividend_calendar_df, collected_dividends_df, estimated_annual_dividends, dividends_ytd, dividends_total = build_dividend_insights(
         df=df,
@@ -763,16 +508,6 @@ def build_app_context_runtime(app_scope: str):
         fx_hist=fx_hist,
     )
 
-    # ── New Bloomberg features ─────────────────────────────────────────────────
-    volatility_regime = compute_volatility_regime(portfolio_returns)
-    fx_exposure_df = build_fx_exposure_summary(df, base_currency)
-    try:
-        multi_benchmark = build_multi_benchmark_comparison(
-            portfolio_returns, base_currency, fx_hist, risk_free_rate
-        )
-    except Exception:
-        multi_benchmark = {"fig": None, "summary_df": pd.DataFrame()}
-
     ctx = {
         "app_scope": app_scope,
         "mode": mode,
@@ -781,7 +516,7 @@ def build_app_context_runtime(app_scope: str):
         "authenticated": authenticated,
         "base_currency": base_currency,
         "profile": profile,
-        "tc_model": tc_model,
+        "risk_free_rate": risk_free_rate,
         "positions_sheet_available": positions_sheet_available,
         "positions_sheet_error": positions_sheet_error,
         "portfolio_data": portfolio_data,
@@ -790,6 +525,7 @@ def build_app_context_runtime(app_scope: str):
         "prefix": prefix,
         "df": df,
         "asset_hist_native": asset_hist_native,
+        "historical_base": historical_base,
         "display_df": display_df,
         "transactions_df": transactions_df,
         "cash_balances_df": cash_balances_df,
@@ -827,45 +563,12 @@ def build_app_context_runtime(app_scope: str):
         "portfolio_cum_return": portfolio_cum_return,
         "benchmark_cum_return": benchmark_cum_return,
         "excess_vs_benchmark": excess_vs_benchmark,
-        "constraints": constraints,
-        "risk_free_rate": risk_free_rate,
-        "fig_frontier": fig_frontier,
-        "frontier": frontier,
-        "max_sharpe_row": max_sharpe_row,
-        "min_vol_row": min_vol_row,
-        "usable": usable,
-        "current_return": current_return,
-        "current_vol": current_vol,
-        "current_sharpe": current_sharpe,
-        "tc_params": tc_params,
-        "stress_df": stress_df,
-        "current_total_value": current_total_value,
-        "stressed_total_value": stressed_total_value,
         "stress_pnl": stress_pnl,
         "stress_return": stress_return,
-        "fig_stress": fig_stress,
-        "rolling_df": rolling_df,
         "fx_prices": fx_prices,
         "fx_hist": fx_hist,
         "var_cvar": var_cvar,
-        "fig_correlation": fig_correlation,
-        "extended_ratios": extended_ratios,
         "mwr_result": mwr_result,
-        "brinson_df": brinson_df,
-        "risk_budget_df": risk_budget_df,
-        "scenarios_df": scenarios_df,
-        "fixed_income_df": fixed_income_df,
-        "blended_benchmark_returns": blended_benchmark_returns,
-        "blended_voo_weight": blended_voo_weight,
-        "blended_bnd_weight": blended_bnd_weight,
-        "ff3_result": ff3_result,
-        "monthly_calendar_df": monthly_calendar_df,
-        "drawdown_episodes_df": drawdown_episodes_df,
-        "risk_parity_result": risk_parity_result,
-        "compliance_results": compliance_results,
-        "volatility_regime": volatility_regime,
-        "fx_exposure_df": fx_exposure_df,
-        "multi_benchmark": multi_benchmark,
     }
 
     if _should_auto_snapshot(ctx):

@@ -3,7 +3,22 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from app_core import info_section, render_page_title
+from app_core import (
+    compute_drawdown_episodes,
+    compute_monthly_returns_calendar,
+    info_section,
+    render_page_title,
+)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_calendar(portfolio_returns: pd.Series):
+    return compute_monthly_returns_calendar(portfolio_returns)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_episodes(portfolio_returns: pd.Series):
+    return compute_drawdown_episodes(portfolio_returns)
 
 
 def _fmt_pct(v, decimals=1) -> str:
@@ -14,7 +29,8 @@ def _fmt_pct(v, decimals=1) -> str:
 
 
 def _render_monthly_calendar(ctx):
-    cal = ctx.get("monthly_calendar_df")
+    pr = ctx.get("portfolio_returns")
+    cal = _cached_calendar(pr) if pr is not None and not pr.empty else None
     if cal is None or cal.empty:
         st.info("Not enough return history to build the performance calendar (minimum ~20 trading days required).")
         return
@@ -99,7 +115,7 @@ def _render_monthly_calendar(ctx):
 
 def _render_drawdown_analysis(ctx):
     portfolio_returns = ctx.get("portfolio_returns", pd.Series(dtype=float))
-    episodes = ctx.get("drawdown_episodes_df")
+    episodes = _cached_episodes(portfolio_returns) if not portfolio_returns.empty else None
 
     info_section(
         "Drawdown Analysis",

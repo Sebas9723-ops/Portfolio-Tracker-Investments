@@ -253,8 +253,7 @@ def _build_data_quality_table(ctx):
             ccy = negative_cash["Currency"].astype(str).tolist() if "Currency" in negative_cash.columns else ["Unknown"]
             rows.append({"Level": "Warning", "Check": "Cash", "Message": f"Negative cash balance detected in: {', '.join(ccy)}."})
 
-    if ctx.get("fig_frontier") is None or ctx.get("max_sharpe_row") is None:
-        rows.append({"Level": "Info", "Check": "Optimization", "Message": "Efficient frontier recommendation is not available."})
+    # Frontier is computed on-demand on the Optimization page
 
     bench = ctx.get("benchmark_returns")
     if bench is None or bench.empty:
@@ -480,7 +479,7 @@ def render_dashboard(ctx):
         mode=ctx["mode"],
         base_currency=ctx["base_currency"],
         profile=ctx["profile"],
-        tc_model=ctx["tc_model"],
+        tc_model="—",
         sheets_ok=ctx["positions_sheet_available"],
     )
 

@@ -82,18 +82,18 @@ st.sidebar.caption("Private management version")
 _NAV_PAGES = [
     "Dashboard",
     "Portfolio",
+    "Transactions",
     "Analytics",
+    "Performance Calendar",
     "Risk",
     "Scenarios",
-    "Projections",
     "Optimization",
     "Rebalance Center",
-    "Transactions",
-    "Performance Calendar",
-    "Trade Journal",
+    "Projections",
     "Market Overview",
-    "Order Blotter",
     "Ticker Lookup",
+    "Trade Journal",
+    "Order Blotter",
     "Private Manager",
 ]
 
