@@ -302,8 +302,9 @@ def render_private_manager_page(ctx):
     if not cash_display_df.empty:
         st.dataframe(cash_display_df, use_container_width=True, height=220)
     elif not cash_df.empty:
-        display_cash = cash_df.copy()
-        display_cash.columns = ["Currency", "Amount"]
+        display_cash = cash_df[["currency", "amount"]].rename(
+            columns={"currency": "Currency", "amount": "Amount"}
+        )
         st.dataframe(display_cash, use_container_width=True, height=220)
     else:
         st.info("No cash balances on record.")

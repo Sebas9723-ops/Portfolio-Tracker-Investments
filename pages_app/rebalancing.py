@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from app_core import info_metric, info_section, render_page_title
+from app_core import DEFAULT_RISK_FREE_RATE, info_metric, info_section, render_page_title
 
 
 def _annualized_voo_return(ctx):
@@ -315,15 +315,27 @@ def render_rebalancing_page(ctx):
     max_sharpe_map, source_label = _get_max_sharpe_target_map(ctx, ctx["df"])
     voo_return = _annualized_voo_return(ctx)
 
+    # Compute portfolio stats from returns (not from ctx keys removed during refactor)
+    portfolio_returns = ctx.get("portfolio_returns", pd.Series(dtype=float))
+    if not portfolio_returns.empty:
+        current_return = float(portfolio_returns.mean() * 252)
+        current_vol = float(portfolio_returns.std() * np.sqrt(252))
+        rfr = ctx.get("risk_free_rate", DEFAULT_RISK_FREE_RATE)
+        current_sharpe = (current_return - rfr) / current_vol if current_vol > 0 else 0.0
+    else:
+        current_return = ctx.get("total_return", 0.0)
+        current_vol = ctx.get("volatility", 0.0)
+        current_sharpe = ctx.get("sharpe", 0.0)
+
     c1, c2, c3, c4 = st.columns(4)
-    info_metric(c1, "Current Return", f"{ctx['current_return']:.2%}", "Expected annualized return of the current portfolio.")
+    info_metric(c1, "Current Return", f"{current_return:.2%}", "Annualized portfolio return based on historical daily returns.")
     info_metric(c2, "VOO Return", "—" if voo_return is None else f"{voo_return:.2%}", "Annualized VOO return over the same historical window.")
-    info_metric(c3, "Current Volatility", f"{ctx['current_vol']:.2%}", "Expected annualized volatility of the current portfolio.")
-    info_metric(c4, "Current Sharpe", f"{ctx['current_sharpe']:.2f}", "Current Sharpe ratio.")
+    info_metric(c3, "Current Volatility", f"{current_vol:.2%}", "Annualized portfolio volatility.")
+    info_metric(c4, "Current Sharpe", f"{current_sharpe:.2f}", "Current Sharpe ratio.")
 
     info_section(
-        "Current vs Policy vs Max Sharpe",
-        f"Current allocation compared against policy targets and recommendation source: {source_label}.",
+        "Current vs Max Sharpe",
+        f"Current allocation compared against recommendation source: {source_label}.",
     )
     st.plotly_chart(
         _build_compare_chart(ctx["df"], policy_map, max_sharpe_map),

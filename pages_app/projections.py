@@ -48,8 +48,11 @@ def _goal_contribution(current_value: float, target_value: float, years: int, ex
         return (target_value - fv_pv) / n
     return float((target_value - fv_pv) * r / ((1 + r) ** n - 1))
 
-_HORIZONS = (1, 3, 5, 10)
-_HORIZON_LABELS = {1: "1 Year", 3: "3 Years", 5: "5 Years", 10: "10 Years"}
+_HORIZONS = (1, 3, 5, 10, 15, 20, 25, 30)
+_HORIZON_LABELS = {
+    1: "1 Year", 3: "3 Years", 5: "5 Years", 10: "10 Years",
+    15: "15 Years", 20: "20 Years", 25: "25 Years", 30: "30 Years",
+}
 
 
 def _build_fan_chart(mc_data: dict, horizon: int, current_value: float, base_currency: str, monthly_contribution: float) -> go.Figure | None:

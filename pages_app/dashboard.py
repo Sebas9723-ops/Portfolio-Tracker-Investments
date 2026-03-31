@@ -501,9 +501,11 @@ def render_dashboard(ctx):
     info_metric(c5, "Return", f"{ctx['total_return']:.2%}", "Cumulative return over the available history.")
     info_metric(c6, "Volatility", f"{ctx['volatility']:.2%}", "Annualized portfolio volatility.")
     info_metric(c7, "Sharpe Ratio", f"{ctx['sharpe']:.2f}", "Portfolio Sharpe ratio.")
-    portfolio_cum_return = ctx.get("portfolio_cum_return")
-    cr_str = f"{portfolio_cum_return:.2%}" if portfolio_cum_return is not None else "—"
-    info_metric(c8, "Current Return", cr_str, "Cumulative portfolio return since inception of the historical window.")
+    invested_cap = float(ctx.get("invested_capital", 0.0))
+    unrealized = float(ctx.get("unrealized_pnl", 0.0))
+    real_return = unrealized / invested_cap if invested_cap > 0 else None
+    cr_str = f"{real_return:.2%}" if real_return is not None else "—"
+    info_metric(c8, "Current Return", cr_str, "Real return since inception: unrealized PnL ÷ invested capital.")
 
     summary_df = _build_decision_summary(ctx)
     actions_df, source_label = _build_top_actions_table(ctx)

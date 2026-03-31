@@ -248,7 +248,7 @@ def render_portfolio_page(ctx):
 
         info_section("Portfolio Snapshot", "Current holdings, values, and performance metrics.")
         _render_data_source_badges(ctx)
-        st.dataframe(df_fresh[display_cols], use_container_width=True, height=360)
+        st.dataframe(df_fresh[display_cols], use_container_width=True, height=360, freeze_columns=1)
         st.caption(f"Prices as of {datetime.now().strftime('%H:%M:%S')}")
 
     _live_prices_section()

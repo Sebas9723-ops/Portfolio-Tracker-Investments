@@ -1,7 +1,7 @@
 """
 Monthly portfolio email report.
 
-Sends an HTML email on the 27th of each month (or first app load after).
+Sends an HTML email on the 1st of each month (or first app load after).
 Tracks sent reports in Google Sheets tab 'reports_log' to avoid duplicates.
 
 Requires in .streamlit/secrets.toml:
@@ -27,7 +27,7 @@ import pytz
 import streamlit as st
 
 _COLOMBIA_TZ = pytz.timezone("America/Bogota")
-_REPORT_DAY = 27
+_REPORT_DAY = 1
 _REPORTS_HEADERS = ["month", "sent_at", "status"]
 
 

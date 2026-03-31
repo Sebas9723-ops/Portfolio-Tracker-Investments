@@ -1656,7 +1656,9 @@ def build_portfolio_df(
         manual_avg_cost = meta.get("avg_cost")
         if tx_stat and tx_stat.get("tracked", False):
             avg_cost_native = float(tx_stat["avg_cost_native"])
-            invested_native = float(tx_stat["invested_capital_native"])
+            # Use total current shares × avg cost so that pre-existing shares
+            # not recorded as transactions don't create phantom unrealized PnL.
+            invested_native = shares * avg_cost_native
             realized_native = float(tx_stat["realized_pnl_native"])
             source = "Transactions"
         elif manual_avg_cost and float(manual_avg_cost) > 0:
