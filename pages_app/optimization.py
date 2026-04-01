@@ -10,6 +10,8 @@ from app_core import (
     get_default_constraints,
     info_metric,
     info_section,
+    optimize_max_sharpe,
+    optimize_min_vol,
     render_page_title,
     simulate_constrained_efficient_frontier,
     weights_table,
@@ -253,8 +255,14 @@ def render_optimization_page(ctx):
     current_vol = float(np.sqrt(current_weights @ cov_matrix.values @ current_weights.T))
     current_sharpe = float((current_return - rfr) / current_vol) if current_vol > 0 else 0.0
 
-    max_sharpe_row = frontier.loc[frontier["Sharpe"].idxmax()]
-    min_vol_row = frontier.loc[frontier["Volatility"].idxmin()]
+    # Exact optimization (primary) — falls back to Monte Carlo best if scipy fails
+    _opt_constraints = {"max_single_asset": max_single_asset, "min_bonds": min_bonds, "min_gold": min_gold}
+    max_sharpe_row = optimize_max_sharpe(asset_returns, usable, _opt_constraints, rfr)
+    min_vol_row    = optimize_min_vol(asset_returns, usable, _opt_constraints, rfr)
+    if max_sharpe_row is None:
+        max_sharpe_row = frontier.loc[frontier["Sharpe"].idxmax()]
+    if min_vol_row is None:
+        min_vol_row = frontier.loc[frontier["Volatility"].idxmin()]
 
     max_x = max(
         frontier["Volatility"].max(),

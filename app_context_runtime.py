@@ -39,6 +39,8 @@ from app_core import (
     load_private_positions_from_sheets,
     load_transactions_from_sheets,
     merge_private_portfolios,
+    optimize_max_sharpe,
+    optimize_min_vol,
     reset_mode_state,
     simulate_constrained_efficient_frontier,
 )
@@ -515,18 +517,30 @@ def build_app_context_runtime(app_scope: str):
     min_vol_row = None
     usable = []
     if asset_returns is not None and not asset_returns.empty and asset_returns.shape[1] >= 2:
-        _constraints = get_default_constraints(profile)
-        _frontier = simulate_constrained_efficient_frontier(
-            asset_returns=asset_returns,
-            asset_names=asset_returns.columns.tolist(),
-            constraints=_constraints,
-            risk_free_rate=risk_free_rate,
-            n_portfolios=N_SIMULATIONS,
-        )
-        if not _frontier.empty:
-            usable = asset_returns.columns.tolist()
-            max_sharpe_row = _frontier.loc[_frontier["Sharpe"].idxmax()]
-            min_vol_row = _frontier.loc[_frontier["Volatility"].idxmin()]
+        _constraints  = get_default_constraints(profile)
+        _asset_names  = asset_returns.columns.tolist()
+
+        # Exact optima via scipy SLSQP (primary)
+        max_sharpe_row = optimize_max_sharpe(asset_returns, _asset_names, _constraints, risk_free_rate)
+        min_vol_row    = optimize_min_vol(asset_returns, _asset_names, _constraints, risk_free_rate)
+
+        # Monte Carlo frontier as fallback if scipy fails
+        if max_sharpe_row is None or min_vol_row is None:
+            _frontier = simulate_constrained_efficient_frontier(
+                asset_returns=asset_returns,
+                asset_names=_asset_names,
+                constraints=_constraints,
+                risk_free_rate=risk_free_rate,
+                n_portfolios=N_SIMULATIONS,
+            )
+            if not _frontier.empty:
+                if max_sharpe_row is None:
+                    max_sharpe_row = _frontier.loc[_frontier["Sharpe"].idxmax()]
+                if min_vol_row is None:
+                    min_vol_row = _frontier.loc[_frontier["Volatility"].idxmin()]
+
+        if max_sharpe_row is not None or min_vol_row is not None:
+            usable = _asset_names
 
     annual_dividend_df, dividend_calendar_df, collected_dividends_df, estimated_annual_dividends, dividends_ytd, dividends_total = build_dividend_insights(
         df=df,

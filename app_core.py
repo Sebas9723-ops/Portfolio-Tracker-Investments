@@ -2198,6 +2198,150 @@ def simulate_constrained_efficient_frontier(
     return frontier
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def optimize_max_sharpe(
+    asset_returns: pd.DataFrame,
+    asset_names: list[str],
+    constraints: dict,
+    risk_free_rate: float = 0.02,
+) -> "pd.Series | None":
+    """Exact maximum-Sharpe portfolio via SLSQP (scipy).
+
+    Uses 32 starting points (equal weight + random Dirichlet) for robustness
+    against local optima.  Returns a Series with keys Weights, Return,
+    Volatility, Sharpe — same interface as a frontier row.
+    """
+    from scipy.optimize import minimize
+
+    n = asset_returns.shape[1]
+    mean_ret = asset_returns.mean().values * 252
+    cov = asset_returns.cov().values * 252
+
+    bond_idx, gold_idx = classify_assets(asset_names)
+    max_single = float(constraints["max_single_asset"])
+    min_bonds  = float(constraints["min_bonds"])
+    min_gold   = float(constraints["min_gold"])
+
+    # Infeasible when the required asset class is absent
+    if min_bonds > 0 and not bond_idx:
+        return None
+    if min_gold > 0 and not gold_idx:
+        return None
+
+    def neg_sharpe(w):
+        ret = float(w @ mean_ret)
+        var = float(w @ cov @ w)
+        vol = np.sqrt(max(var, 1e-20))
+        return -(ret - risk_free_rate) / vol
+
+    cons = [{"type": "eq", "fun": lambda w: float(np.sum(w)) - 1.0}]
+    if bond_idx and min_bonds > 0:
+        _bi = bond_idx
+        cons.append({"type": "ineq", "fun": lambda w, i=_bi: float(np.sum(w[i])) - min_bonds})
+    if gold_idx and min_gold > 0:
+        _gi = gold_idx
+        cons.append({"type": "ineq", "fun": lambda w, i=_gi: float(np.sum(w[i])) - min_gold})
+
+    bounds = [(0.0, max_single)] * n
+    rng = np.random.default_rng(7)
+
+    starts = [np.full(n, 1.0 / n)]
+    for _ in range(31):
+        raw = rng.dirichlet(np.ones(n))
+        raw = np.clip(raw, 0.0, max_single)
+        raw /= raw.sum()
+        starts.append(raw)
+
+    best_w, best_val = None, np.inf
+    for w0 in starts:
+        try:
+            res = minimize(
+                neg_sharpe, w0, method="SLSQP",
+                bounds=bounds, constraints=cons,
+                options={"maxiter": 2000, "ftol": 1e-14},
+            )
+            if res.success and res.fun < best_val:
+                best_val = res.fun
+                best_w   = res.x.copy()
+        except Exception:
+            continue
+
+    if best_w is None:
+        return None
+
+    best_w = np.clip(best_w, 0.0, None)
+    best_w /= best_w.sum()
+    ret  = float(best_w @ mean_ret)
+    vol  = float(np.sqrt(best_w @ cov @ best_w))
+    shrp = (ret - risk_free_rate) / vol if vol > 0 else 0.0
+
+    return pd.Series({"Weights": best_w, "Return": ret, "Volatility": vol, "Sharpe": shrp})
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def optimize_min_vol(
+    asset_returns: pd.DataFrame,
+    asset_names: list[str],
+    constraints: dict,
+    risk_free_rate: float = 0.02,
+) -> "pd.Series | None":
+    """Exact minimum-volatility portfolio via SLSQP (scipy).
+
+    The objective (portfolio variance) is quadratic-convex so a single
+    equal-weight starting point is sufficient.  Returns a Series with
+    keys Weights, Return, Volatility, Sharpe.
+    """
+    from scipy.optimize import minimize
+
+    n = asset_returns.shape[1]
+    mean_ret = asset_returns.mean().values * 252
+    cov = asset_returns.cov().values * 252
+
+    bond_idx, gold_idx = classify_assets(asset_names)
+    max_single = float(constraints["max_single_asset"])
+    min_bonds  = float(constraints["min_bonds"])
+    min_gold   = float(constraints["min_gold"])
+
+    if min_bonds > 0 and not bond_idx:
+        return None
+    if min_gold > 0 and not gold_idx:
+        return None
+
+    def port_vol(w):
+        return float(np.sqrt(np.maximum(w @ cov @ w, 0.0)))
+
+    cons = [{"type": "eq", "fun": lambda w: float(np.sum(w)) - 1.0}]
+    if bond_idx and min_bonds > 0:
+        _bi = bond_idx
+        cons.append({"type": "ineq", "fun": lambda w, i=_bi: float(np.sum(w[i])) - min_bonds})
+    if gold_idx and min_gold > 0:
+        _gi = gold_idx
+        cons.append({"type": "ineq", "fun": lambda w, i=_gi: float(np.sum(w[i])) - min_gold})
+
+    bounds = [(0.0, max_single)] * n
+    w0 = np.full(n, 1.0 / n)
+
+    try:
+        res = minimize(
+            port_vol, w0, method="SLSQP",
+            bounds=bounds, constraints=cons,
+            options={"maxiter": 2000, "ftol": 1e-14},
+        )
+    except Exception:
+        return None
+
+    if not res.success:
+        return None
+
+    best_w = np.clip(res.x, 0.0, None)
+    best_w /= best_w.sum()
+    ret  = float(best_w @ mean_ret)
+    vol  = float(np.sqrt(best_w @ cov @ best_w))
+    shrp = (ret - risk_free_rate) / vol if vol > 0 else 0.0
+
+    return pd.Series({"Weights": best_w, "Return": ret, "Volatility": vol, "Sharpe": shrp})
+
+
 def weights_table(weight_array, asset_names):
     out = pd.DataFrame(
         {
