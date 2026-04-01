@@ -1535,10 +1535,11 @@ def asset_market_group(ticker: str) -> str:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def build_fx_data(tickers: list[str], base_currency: str, period: str = "2y"):
+def build_fx_data(tickers: list[str], base_currency: str, period: str = "2y", extra_currencies: tuple[str, ...] = ()):
     needed_ccy = set(asset_currency(t) for t in tickers)
     needed_ccy.add(base_currency)
     needed_ccy.add("USD")
+    needed_ccy.update(extra_currencies)
 
     fx_tickers = set()
     for a in needed_ccy:

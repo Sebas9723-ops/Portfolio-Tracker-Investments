@@ -327,7 +327,7 @@ def build_app_context_runtime(app_scope: str):
         st.error("Could not load historical data.")
         st.stop()
 
-    fx_prices, fx_hist, _ = build_fx_data(tickers, base_currency, period="2y")
+    fx_prices, fx_hist, _ = build_fx_data(tickers, base_currency, period="2y", extra_currencies=tuple(SUPPORTED_BASE_CCY))
     historical_base, missing_fx = convert_historical_to_base(asset_hist_native, tickers, base_currency, fx_hist)
     historical_base = backfill_missing_proxy_history(
         historical_base,
