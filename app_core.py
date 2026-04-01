@@ -50,7 +50,6 @@ DIVIDEND_META = {
     "IWDA.AS": {"yield": 0.0, "months": [], "frequency": "Accumulating"},
     "VWCE.DE": {"yield": 0.0, "months": [], "frequency": "Accumulating"},
     "EUNL.DE": {"yield": 0.0, "months": [], "frequency": "Accumulating"},
-    "EXUS.DE": {"yield": 0.0, "months": [], "frequency": "Accumulating"},
 }
 
 
@@ -1301,7 +1300,6 @@ def load_private_portfolio():
         "BND": {"name": "Bonds", "shares": float(p["BND"]), "base_shares": float(p["BND"])},
         "QQQM": {"name": "Nasdaq-100 Growth ETF", "shares": float(p.get("QQQM", 0.0)), "base_shares": float(p.get("QQQM", 0.0))},
         "VDE": {"name": "Vanguard Energy ETF", "shares": float(p.get("VDE", 0.0)), "base_shares": float(p.get("VDE", 0.0))},
-        "EXUS.DE": {"name": "iShares MSCI World ex USA", "shares": float(p.get("EXUS_DE", 0.0)), "base_shares": float(p.get("EXUS_DE", 0.0))},
     }
 
 
