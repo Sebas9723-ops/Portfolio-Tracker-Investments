@@ -652,6 +652,7 @@ def render_financial_independence_section(
     base_currency: str,
     portfolio_returns: pd.Series,
     non_portfolio_cash_value: float = 0.0,
+    default_settings: dict | None = None,
 ):
     info_section(
         "Financial Independence Simulator",
@@ -662,6 +663,19 @@ def render_financial_independence_section(
 
     net_worth = total_value + non_portfolio_cash_value
 
+    # Pre-fill session state from saved defaults (only on first load of a session)
+    _s = default_settings or {}
+    _defaults = {
+        "fi_monthly_contribution": float(_s.get("monthly_contribution", 500.0)),
+        "fi_target_withdrawal":    float(_s.get("fi_target_withdrawal", 3000.0)),
+        "fi_inflation_pct":        float(_s.get("fi_inflation_pct", 3.0)),
+        "fi_swr_pct":              float(_s.get("fi_swr_pct", 4.0)),
+        "fi_horizon_years":        int(float(_s.get("fi_horizon_years", 30))),
+    }
+    for _k, _v in _defaults.items():
+        if _k not in st.session_state:
+            st.session_state[_k] = _v
+
     # ── Inputs ────────────────────────────────────────────────────────────────
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -669,52 +683,55 @@ def render_financial_independence_section(
             f"Target Monthly Withdrawal ({base_currency})",
             min_value=100.0,
             max_value=1_000_000.0,
-            value=3000.0,
             step=100.0,
             help="How much you want to withdraw per month in retirement (in today's money).",
+            key="fi_target_withdrawal",
         )
         monthly_contribution = st.number_input(
             f"Monthly Contribution ({base_currency})",
             min_value=0.0,
-            value=500.0,
             step=50.0,
             help="How much you add to the portfolio each month.",
+            key="fi_monthly_contribution",
         )
     with c2:
         inflation_pct = st.number_input(
             "Annual Inflation (%)",
             min_value=0.0,
             max_value=20.0,
-            value=3.0,
             step=0.5,
             format="%.1f",
             help="Used to inflate the withdrawal target over time and deflate real returns.",
+            key="fi_inflation_pct",
         )
         swr_pct = st.number_input(
             "Safe Withdrawal Rate (%)",
             min_value=1.0,
             max_value=10.0,
-            value=4.0,
             step=0.1,
             format="%.1f",
             help="The annual withdrawal rate you consider sustainable (classic: 4%).",
+            key="fi_swr_pct",
         )
     with c3:
         horizon_years = st.slider(
             "Simulation Horizon (Years)",
-            min_value=5, max_value=50, value=30, step=5,
+            min_value=5, max_value=50, step=5,
+            key="fi_horizon_years",
         )
         default_vol = 0.15
         if portfolio_returns is not None and not portfolio_returns.empty and len(portfolio_returns) > 20:
             default_vol = float(min(portfolio_returns.std() * np.sqrt(252), 0.40))
+        if "fi_annual_vol" not in st.session_state:
+            st.session_state["fi_annual_vol"] = float(round(default_vol * 100, 1))
         annual_vol_pct = st.number_input(
             "Annual Volatility (%)",
             min_value=1.0,
             max_value=50.0,
-            value=float(round(default_vol * 100, 1)),
             step=0.5,
             format="%.1f",
             help="Portfolio annual volatility. Pre-filled from your historical returns.",
+            key="fi_annual_vol",
         )
 
     # Expected return: pre-fill from history
@@ -723,11 +740,13 @@ def render_financial_independence_section(
         hr = float(portfolio_returns.mean() * 252)
         if np.isfinite(hr):
             default_return = min(max(hr, 0.02), 0.18)
+    if "fi_annual_return" not in st.session_state:
+        st.session_state["fi_annual_return"] = float(round(default_return * 100, 1))
     annual_return_pct = st.slider(
         "Expected Annual Return (%)",
         min_value=0.0, max_value=20.0,
-        value=float(round(default_return * 100, 1)),
         step=0.1, format="%.1f",
+        key="fi_annual_return",
     )
 
     annual_return = annual_return_pct / 100.0
@@ -861,6 +880,7 @@ def render_investment_horizon_section(
     total_value: float,
     base_currency: str,
     portfolio_returns: pd.Series,
+    default_settings: dict | None = None,
 ):
     info_section(
         "Investment Horizon",
@@ -891,11 +911,14 @@ def render_investment_horizon_section(
     expected_return = expected_return_pct / 100.0
     st.caption(f"Selected expected annual return: {expected_return_pct:.1f}%")
 
+    _s = default_settings or {}
+    if "ih_monthly_contribution" not in st.session_state:
+        st.session_state["ih_monthly_contribution"] = float(_s.get("monthly_contribution", 0.0))
     monthly_contribution = st.number_input(
         f"Monthly Contribution ({base_currency})",
         min_value=0.0,
-        value=0.0,
         step=100.0,
+        key="ih_monthly_contribution",
     )
 
     scenario_spread_pct = st.slider(
@@ -1401,6 +1424,41 @@ def save_non_portfolio_cash_to_sheets(df: pd.DataFrame):
             str(row["label"]), str(row["currency"]), float(row["amount"]),
             str(row.get("institution", "")), str(row.get("notes", "")),
         ])
+    ws.clear()
+    ws.update(range_name="A1", values=rows)
+    _clear_google_sheets_cache()
+
+
+USER_SETTINGS_HEADERS = ["key", "value"]
+
+
+def connect_user_settings_worksheet():
+    return _connect_named_worksheet("user_settings", USER_SETTINGS_HEADERS)
+
+
+def load_user_settings_from_sheets() -> dict:
+    sheet_id, sheet_url = _get_private_positions_sheet_locator()
+    try:
+        connect_user_settings_worksheet()
+        records = _get_worksheet_records_cached(sheet_id, sheet_url, "user_settings")
+    except Exception:
+        return {}
+    if not records:
+        return {}
+    result = {}
+    for r in records:
+        key = str(r.get("key", "")).strip()
+        val = str(r.get("value", "")).strip()
+        if key:
+            result[key] = val
+    return result
+
+
+def save_user_settings_to_sheets(settings: dict):
+    ws = connect_user_settings_worksheet()
+    rows = [USER_SETTINGS_HEADERS]
+    for key, value in settings.items():
+        rows.append([str(key), str(value)])
     ws.clear()
     ws.update(range_name="A1", values=rows)
     _clear_google_sheets_cache()

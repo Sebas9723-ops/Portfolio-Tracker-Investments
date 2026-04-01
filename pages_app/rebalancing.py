@@ -366,7 +366,7 @@ def render_rebalancing_page(ctx):
         contribution_amount = st.number_input(
             "Contribution Amount",
             min_value=0.0,
-            value=1000.0,
+            value=float(ctx.get("monthly_contribution", 1000.0)) or 1000.0,
             step=100.0,
             format="%.2f",
             label_visibility="collapsed",
@@ -485,6 +485,25 @@ def render_rebalancing_page(ctx):
             "Buy Only",
             "This estimate assumes no current position is sold.",
         )
+
+        monthly_contrib = float(ctx.get("monthly_contribution", 0.0))
+        if monthly_contrib > 0:
+            months_needed = required_contribution / monthly_contrib
+            k3, k4 = st.columns(2)
+            info_metric(
+                k3,
+                "Months at Your Contribution",
+                f"{months_needed:.1f} months",
+                f"At {ctx['base_currency']} {monthly_contrib:,.0f}/month (your saved monthly contribution).",
+            )
+            info_metric(
+                k4,
+                "Your Monthly Contribution",
+                f"{ctx['base_currency']} {monthly_contrib:,.0f}",
+                "Set in Investment Horizon → Save as Defaults.",
+            )
+        elif required_contribution > 0:
+            st.caption("💡 Set a monthly contribution in **Investment Horizon → Financial Independence** and save as defaults to see how many months until you reach Max Sharpe.")
 
         st.dataframe(required_df, use_container_width=True, height=300)
 

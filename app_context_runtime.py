@@ -13,6 +13,7 @@ from app_core import (
     DEFAULT_RISK_FREE_RATE,
     DIVIDENDS_HEADERS,
     NON_PORTFOLIO_CASH_HEADERS,
+    USER_SETTINGS_HEADERS,
     N_SIMULATIONS,
     PUBLIC_DEFAULTS_VERSION,
     SUPPORTED_BASE_CCY,
@@ -39,6 +40,7 @@ from app_core import (
     load_cash_balances_from_sheets,
     load_dividends_from_sheets,
     load_non_portfolio_cash_from_sheets,
+    load_user_settings_from_sheets,
     load_market_data_with_proxies,
     load_private_portfolio,
     load_private_positions_from_sheets,
@@ -239,6 +241,11 @@ def _load_private_runtime_state():
         non_portfolio_cash_loaded = False
         non_portfolio_cash_df = pd.DataFrame(columns=NON_PORTFOLIO_CASH_HEADERS)
 
+    try:
+        user_settings = load_user_settings_from_sheets()
+    except Exception:
+        user_settings = {}
+
     snapshot_private = merge_private_portfolios(base_private_portfolio, private_sheet_positions)
     name_map = {t: meta["name"] for t, meta in snapshot_private.items()}
     base_shares_map = {t: meta.get("base_shares", meta["shares"]) for t, meta in snapshot_private.items()}
@@ -257,6 +264,7 @@ def _load_private_runtime_state():
         "cash_balances_df": cash_balances_df,
         "dividends_df": dividends_df,
         "non_portfolio_cash_df": non_portfolio_cash_df,
+        "user_settings": user_settings,
         "tx_stats_map": tx_stats_map,
     }
 
@@ -275,6 +283,7 @@ def build_app_context_runtime(app_scope: str):
         cash_balances_df = pd.DataFrame(columns=CASH_BALANCES_HEADERS)
         dividends_df = pd.DataFrame(columns=DIVIDENDS_HEADERS)
         non_portfolio_cash_df = pd.DataFrame(columns=NON_PORTFOLIO_CASH_HEADERS)
+        user_settings = {}
         tx_stats_map = {}
     else:
         mode = "Private"
@@ -291,6 +300,7 @@ def build_app_context_runtime(app_scope: str):
         cash_balances_df = private_state["cash_balances_df"]
         dividends_df = private_state["dividends_df"]
         non_portfolio_cash_df = private_state["non_portfolio_cash_df"]
+        user_settings = private_state.get("user_settings", {})
         tx_stats_map = private_state["tx_stats_map"]
 
         # ── Sheets availability banner ────────────────────────────────────────
@@ -441,6 +451,7 @@ def build_app_context_runtime(app_scope: str):
             non_portfolio_cash_value += amt * (rate or 0.0)
 
     investments_net_worth = total_portfolio_value + non_portfolio_cash_value
+    monthly_contribution = float(user_settings.get("monthly_contribution", 0.0))
 
     display_df = df[
         [
@@ -643,6 +654,8 @@ def build_app_context_runtime(app_scope: str):
         "non_portfolio_cash_df": non_portfolio_cash_df,
         "non_portfolio_cash_value": non_portfolio_cash_value,
         "investments_net_worth": investments_net_worth,
+        "user_settings": user_settings,
+        "monthly_contribution": monthly_contribution,
         "collected_dividends_df": collected_dividends_df,
         "annual_dividend_df": annual_dividend_df,
         "dividend_calendar_df": dividend_calendar_df,
