@@ -50,6 +50,7 @@ DIVIDEND_META = {
     "IWDA.AS": {"yield": 0.0, "months": [], "frequency": "Accumulating"},
     "VWCE.DE": {"yield": 0.0, "months": [], "frequency": "Accumulating"},
     "EUNL.DE": {"yield": 0.0, "months": [], "frequency": "Accumulating"},
+    "ICHN.NL": {"yield": 0.0, "months": [], "frequency": "Accumulating"},
 }
 
 
@@ -1300,6 +1301,7 @@ def load_private_portfolio():
         "BND": {"name": "Bonds", "shares": float(p["BND"]), "base_shares": float(p["BND"])},
         "QQQM": {"name": "Nasdaq-100 Growth ETF", "shares": float(p.get("QQQM", 0.0)), "base_shares": float(p.get("QQQM", 0.0))},
         "VDE": {"name": "Vanguard Energy ETF", "shares": float(p.get("VDE", 0.0)), "base_shares": float(p.get("VDE", 0.0))},
+        "ICHN.NL": {"name": "iShares China Large Cap UCITS ETF", "shares": float(p.get("ICHN_NL", 0.0)), "base_shares": float(p.get("ICHN_NL", 0.0))},
     }
 
 

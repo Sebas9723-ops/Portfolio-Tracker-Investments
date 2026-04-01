@@ -17,6 +17,7 @@ ESTIMATED_YIELD_MAP = {
     "IGLN.L": 0.0000,
     "GLD": 0.0000,
     "IAU": 0.0000,
+    "ICHN.NL": 0.0000,
 }
 
 
