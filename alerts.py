@@ -209,3 +209,126 @@ def send_alert_telegram(alerts: list[dict], ctx: dict):
         st.session_state["alerts_sent_session"] = sent_session | {a["type"] for a in alerts}
     except Exception:
         pass
+
+
+# ── Portfolio snapshot sender ──────────────────────────────────────────────────
+
+def _build_portfolio_snapshot_messages(ctx: dict) -> list[str]:
+    """Build Telegram messages for a full portfolio snapshot (split to respect 4096-char limit)."""
+    now_col = datetime.now(_COLOMBIA_TZ)
+    ccy = ctx.get("base_currency", "USD")
+    df = ctx.get("df", pd.DataFrame()).copy()
+
+    total_portfolio = float(ctx.get("total_portfolio_value", 0.0))
+    holdings_value = float(ctx.get("holdings_value", 0.0))
+    cash_total = float(ctx.get("cash_total_value", 0.0))
+    invested_capital = float(ctx.get("invested_capital", 0.0))
+    unrealized_pnl = float(ctx.get("unrealized_pnl", 0.0))
+    total_return = float(ctx.get("total_return", 0.0))
+    volatility = float(ctx.get("volatility", 0.0))
+    sharpe = float(ctx.get("sharpe", 0.0))
+    max_drawdown = float(ctx.get("max_drawdown", 0.0))
+    alpha = float(ctx.get("alpha", 0.0))
+    beta = float(ctx.get("beta", 0.0))
+    tracking_error = float(ctx.get("tracking_error", 0.0))
+    information_ratio = float(ctx.get("information_ratio", 0.0))
+    benchmark_cum = ctx.get("benchmark_cum_return")
+    excess = ctx.get("excess_vs_benchmark")
+
+    pnl_sign = "+" if unrealized_pnl >= 0 else ""
+
+    summary_lines = [
+        "<b>PORTAFOLIO MANAGEMENT SA</b>",
+        f"📅 {now_col.strftime('%Y-%m-%d %H:%M')} Colombia",
+        "",
+        "<b>📊 PORTFOLIO SUMMARY</b>",
+        f"💼 Total:             <code>{ccy} {total_portfolio:>14,.2f}</code>",
+        f"   Holdings:          <code>{ccy} {holdings_value:>14,.2f}</code>",
+        f"   Cash:              <code>{ccy} {cash_total:>14,.2f}</code>",
+        f"   Invested Capital:  <code>{ccy} {invested_capital:>14,.2f}</code>",
+        f"   Unrealized PnL:    <code>{pnl_sign}{unrealized_pnl:>14,.2f}</code>",
+        "",
+        "<b>📈 PERFORMANCE METRICS</b>",
+        f"   Total Return:      <code>{total_return * 100:>+.2f}%</code>",
+        f"   Ann. Volatility:   <code>{volatility * 100:.2f}%</code>",
+        f"   Sharpe Ratio:      <code>{sharpe:.4f}</code>",
+        f"   Max Drawdown:      <code>{max_drawdown * 100:.2f}%</code>",
+        f"   Alpha:             <code>{alpha * 100:>+.2f}%</code>",
+        f"   Beta:              <code>{beta:.4f}</code>",
+        f"   Tracking Error:    <code>{tracking_error * 100:.2f}%</code>",
+        f"   Info Ratio:        <code>{information_ratio:.4f}</code>",
+    ]
+    if benchmark_cum is not None:
+        summary_lines.append(f"   VOO Benchmark:     <code>{float(benchmark_cum) * 100:>+.2f}%</code>")
+    if excess is not None:
+        summary_lines.append(f"   Excess vs VOO:     <code>{float(excess) * 100:>+.2f}%</code>")
+
+    messages = ["\n".join(summary_lines)]
+
+    # Holdings table (uses <pre> for monospace alignment)
+    if not df.empty:
+        header = f"{'Ticker':<8} {'Shares':>8} {'Price':>10} {'Value':>12} {'Wt%':>6} {'PnL%':>7}"
+        separator = "─" * len(header)
+        rows = [header, separator]
+        for _, row in df.iterrows():
+            ticker = str(row.get("Ticker", ""))[:8]
+            shares = float(row.get("Shares", 0))
+            price = float(row.get("Price", 0))
+            value = float(row.get("Value", 0))
+            weight = float(row.get("Weight %", 0))
+            unreal_pct = float(row.get("Unrealized PnL %", 0))
+            rows.append(
+                f"{ticker:<8} {shares:>8.2f} {price:>10,.2f} {value:>12,.0f} {weight:>5.1f}% {unreal_pct:>+6.1f}%"
+            )
+        hold_msg = "<b>📋 HOLDINGS</b>\n<pre>" + "\n".join(rows) + "</pre>"
+        messages.append(hold_msg)
+
+    # Dividends (appended to last message if short enough, else separate)
+    estimated_annual = ctx.get("estimated_annual_dividends", 0.0)
+    dividends_ytd = ctx.get("dividends_ytd", 0.0)
+    if estimated_annual and float(estimated_annual) > 0:
+        div_lines = [
+            "",
+            "<b>💰 DIVIDENDS</b>",
+            f"   Est. Annual:    <code>{ccy} {float(estimated_annual):>12,.2f}</code>",
+            f"   YTD Collected:  <code>{ccy} {float(dividends_ytd):>12,.2f}</code>",
+        ]
+        div_text = "\n".join(div_lines)
+        if len(messages[-1]) + len(div_text) < 4000:
+            messages[-1] += div_text
+        else:
+            messages.append(div_text.strip())
+
+    return messages
+
+
+def send_portfolio_snapshot_telegram(ctx: dict) -> bool:
+    """Send current portfolio snapshot via Telegram. Returns True on success."""
+    tg = st.secrets.get("telegram", {})
+    bot_token = str(tg.get("bot_token", "")).strip()
+    chat_id = str(tg.get("chat_id", "")).strip()
+
+    if not bot_token or not chat_id:
+        return False
+
+    messages = _build_portfolio_snapshot_messages(ctx)
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+
+    for text in messages:
+        payload = json.dumps({
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+        }).encode("utf-8")
+        try:
+            req = urllib.request.Request(
+                url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=10)
+        except Exception:
+            return False
+
+    return True

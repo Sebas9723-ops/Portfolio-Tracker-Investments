@@ -206,6 +206,16 @@ def _render_data_source_badges(ctx):
 def render_portfolio_page(ctx):
     render_page_title("Portfolio")
 
+    if ctx.get("app_scope") == "private" and ctx.get("authenticated"):
+        if st.button("📤 Send Current Portfolio", key="send_portfolio_snapshot_btn"):
+            from alerts import send_portfolio_snapshot_telegram
+            with st.spinner("Sending to Telegram..."):
+                ok = send_portfolio_snapshot_telegram(ctx)
+            if ok:
+                st.success("Portfolio snapshot sent to Telegram!")
+            else:
+                st.error("Failed to send — check Telegram credentials in secrets.toml")
+
     @st.fragment(run_every=60)
     def _live_prices_section():
         tickers = list(ctx["updated_portfolio"].keys())
