@@ -12,6 +12,7 @@ from app_core import (
     CASH_BALANCES_HEADERS,
     DEFAULT_RISK_FREE_RATE,
     DIVIDENDS_HEADERS,
+    NON_PORTFOLIO_CASH_HEADERS,
     N_SIMULATIONS,
     PUBLIC_DEFAULTS_VERSION,
     SUPPORTED_BASE_CCY,
@@ -37,6 +38,7 @@ from app_core import (
     init_mode_state,
     load_cash_balances_from_sheets,
     load_dividends_from_sheets,
+    load_non_portfolio_cash_from_sheets,
     load_market_data_with_proxies,
     load_private_portfolio,
     load_private_positions_from_sheets,
@@ -230,6 +232,13 @@ def _load_private_runtime_state():
     except Exception:
         dividends_df = pd.DataFrame(columns=DIVIDENDS_HEADERS)
 
+    non_portfolio_cash_loaded = True
+    try:
+        non_portfolio_cash_df = load_non_portfolio_cash_from_sheets()
+    except Exception:
+        non_portfolio_cash_loaded = False
+        non_portfolio_cash_df = pd.DataFrame(columns=NON_PORTFOLIO_CASH_HEADERS)
+
     snapshot_private = merge_private_portfolios(base_private_portfolio, private_sheet_positions)
     name_map = {t: meta["name"] for t, meta in snapshot_private.items()}
     base_shares_map = {t: meta.get("base_shares", meta["shares"]) for t, meta in snapshot_private.items()}
@@ -242,10 +251,12 @@ def _load_private_runtime_state():
         "positions_sheet_error": positions_sheet_error,
         "transactions_loaded": transactions_loaded,
         "cash_loaded": cash_loaded,
+        "non_portfolio_cash_loaded": non_portfolio_cash_loaded,
         "private_portfolio": private_portfolio,
         "transactions_df": transactions_df,
         "cash_balances_df": cash_balances_df,
         "dividends_df": dividends_df,
+        "non_portfolio_cash_df": non_portfolio_cash_df,
         "tx_stats_map": tx_stats_map,
     }
 
@@ -263,6 +274,7 @@ def build_app_context_runtime(app_scope: str):
         transactions_df = pd.DataFrame(columns=TRANSACTIONS_HEADERS)
         cash_balances_df = pd.DataFrame(columns=CASH_BALANCES_HEADERS)
         dividends_df = pd.DataFrame(columns=DIVIDENDS_HEADERS)
+        non_portfolio_cash_df = pd.DataFrame(columns=NON_PORTFOLIO_CASH_HEADERS)
         tx_stats_map = {}
     else:
         mode = "Private"
@@ -278,6 +290,7 @@ def build_app_context_runtime(app_scope: str):
         transactions_df = private_state["transactions_df"]
         cash_balances_df = private_state["cash_balances_df"]
         dividends_df = private_state["dividends_df"]
+        non_portfolio_cash_df = private_state["non_portfolio_cash_df"]
         tx_stats_map = private_state["tx_stats_map"]
 
         # ── Sheets availability banner ────────────────────────────────────────
@@ -414,6 +427,20 @@ def build_app_context_runtime(app_scope: str):
         fx_hist,
     )
     total_portfolio_value = pnl_totals["holdings_value"] + cash_total_value
+
+    non_portfolio_cash_value = 0.0
+    if not non_portfolio_cash_df.empty:
+        for _, row in non_portfolio_cash_df.iterrows():
+            ccy = str(row.get("currency", "USD")).upper().strip()
+            amt = float(row.get("amount", 0.0))
+            if amt <= 0:
+                continue
+            rate = get_fx_rate_current(ccy, base_currency, fx_prices, fx_hist)
+            if rate is None or pd.isna(rate):
+                rate = _fx_cache.get(f"{ccy}_{base_currency}", 0.0)
+            non_portfolio_cash_value += amt * (rate or 0.0)
+
+    investments_net_worth = total_portfolio_value + non_portfolio_cash_value
 
     display_df = df[
         [
@@ -613,6 +640,9 @@ def build_app_context_runtime(app_scope: str):
         "cash_balances_df": cash_balances_df,
         "cash_display_df": cash_display_df,
         "dividends_df": dividends_df,
+        "non_portfolio_cash_df": non_portfolio_cash_df,
+        "non_portfolio_cash_value": non_portfolio_cash_value,
+        "investments_net_worth": investments_net_worth,
         "collected_dividends_df": collected_dividends_df,
         "annual_dividend_df": annual_dividend_df,
         "dividend_calendar_df": dividend_calendar_df,

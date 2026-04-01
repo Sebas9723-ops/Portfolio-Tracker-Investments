@@ -245,10 +245,12 @@ def render_portfolio_page(ctx):
 
         total_portfolio = pnl["holdings_value"] + ctx["cash_total_value"]
 
-        c1, c2, c3 = st.columns(3)
-        info_metric(c1, "Total Portfolio", f"{ctx['base_currency']} {total_portfolio:,.2f}", "Holdings plus cash.")
-        info_metric(c2, "Invested Capital", f"{ctx['base_currency']} {pnl['invested_capital']:,.2f}", "Estimated invested capital.")
-        info_metric(c3, "Unrealized PnL", f"{ctx['base_currency']} {pnl['unrealized_pnl']:,.2f}", "Open profit and loss.")
+        investments_net_worth = total_portfolio + float(ctx.get("non_portfolio_cash_value", 0.0))
+        c1, c2, c3, c4 = st.columns(4)
+        info_metric(c1, "Investments Net Worth", f"{ctx['base_currency']} {investments_net_worth:,.2f}", "Portfolio value plus all external cash accounts.")
+        info_metric(c2, "Total Portfolio", f"{ctx['base_currency']} {total_portfolio:,.2f}", "Holdings plus in-portfolio cash.")
+        info_metric(c3, "Invested Capital", f"{ctx['base_currency']} {pnl['invested_capital']:,.2f}", "Estimated invested capital.")
+        info_metric(c4, "Unrealized PnL", f"{ctx['base_currency']} {pnl['unrealized_pnl']:,.2f}", "Open profit and loss.")
 
         display_cols = [c for c in [
             "Ticker", "Name", "Market Status", "Price Source", "Source", "Market", "Native Currency",

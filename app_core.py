@@ -91,6 +91,7 @@ TICKER_CURRENCY_OVERRIDE = {
 PRIVATE_POSITIONS_HEADERS = ["Ticker", "Name", "Shares", "AvgCost"]
 TRANSACTIONS_HEADERS = ["date", "ticker", "type", "shares", "price", "fees", "notes"]
 CASH_BALANCES_HEADERS = ["currency", "amount"]
+NON_PORTFOLIO_CASH_HEADERS = ["label", "currency", "amount", "institution", "notes"]
 DIVIDENDS_HEADERS = ["date", "ticker", "amount", "currency", "notes"]
 
 DIVIDEND_META = {
@@ -646,6 +647,216 @@ def build_projection_series(
     )
 
 
+def render_financial_independence_section(
+    total_value: float,
+    base_currency: str,
+    portfolio_returns: pd.Series,
+    non_portfolio_cash_value: float = 0.0,
+):
+    info_section(
+        "Financial Independence Simulator",
+        "Monte Carlo simulation (1 000 paths · GBM) showing the probability of reaching "
+        "financial independence — the point where your portfolio can sustain your target "
+        "monthly withdrawal indefinitely."
+    )
+
+    net_worth = total_value + non_portfolio_cash_value
+
+    # ── Inputs ────────────────────────────────────────────────────────────────
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        target_withdrawal = st.number_input(
+            f"Target Monthly Withdrawal ({base_currency})",
+            min_value=100.0,
+            max_value=1_000_000.0,
+            value=3000.0,
+            step=100.0,
+            help="How much you want to withdraw per month in retirement (in today's money).",
+        )
+        monthly_contribution = st.number_input(
+            f"Monthly Contribution ({base_currency})",
+            min_value=0.0,
+            value=500.0,
+            step=50.0,
+            help="How much you add to the portfolio each month.",
+        )
+    with c2:
+        inflation_pct = st.number_input(
+            "Annual Inflation (%)",
+            min_value=0.0,
+            max_value=20.0,
+            value=3.0,
+            step=0.5,
+            format="%.1f",
+            help="Used to inflate the withdrawal target over time and deflate real returns.",
+        )
+        swr_pct = st.number_input(
+            "Safe Withdrawal Rate (%)",
+            min_value=1.0,
+            max_value=10.0,
+            value=4.0,
+            step=0.1,
+            format="%.1f",
+            help="The annual withdrawal rate you consider sustainable (classic: 4%).",
+        )
+    with c3:
+        horizon_years = st.slider(
+            "Simulation Horizon (Years)",
+            min_value=5, max_value=50, value=30, step=5,
+        )
+        default_vol = 0.15
+        if portfolio_returns is not None and not portfolio_returns.empty and len(portfolio_returns) > 20:
+            default_vol = float(min(portfolio_returns.std() * np.sqrt(252), 0.40))
+        annual_vol_pct = st.number_input(
+            "Annual Volatility (%)",
+            min_value=1.0,
+            max_value=50.0,
+            value=float(round(default_vol * 100, 1)),
+            step=0.5,
+            format="%.1f",
+            help="Portfolio annual volatility. Pre-filled from your historical returns.",
+        )
+
+    # Expected return: pre-fill from history
+    default_return = 0.08
+    if portfolio_returns is not None and not portfolio_returns.empty and len(portfolio_returns) > 20:
+        hr = float(portfolio_returns.mean() * 252)
+        if np.isfinite(hr):
+            default_return = min(max(hr, 0.02), 0.18)
+    annual_return_pct = st.slider(
+        "Expected Annual Return (%)",
+        min_value=0.0, max_value=20.0,
+        value=float(round(default_return * 100, 1)),
+        step=0.1, format="%.1f",
+    )
+
+    annual_return = annual_return_pct / 100.0
+    annual_vol = annual_vol_pct / 100.0
+    inflation = inflation_pct / 100.0
+    swr = swr_pct / 100.0
+    n_paths = 1000
+    n_months = horizon_years * 12
+
+    # Real (inflation-adjusted) return
+    real_return = (1 + annual_return) / (1 + inflation) - 1
+    monthly_real_return = (1 + real_return) ** (1 / 12) - 1
+    monthly_vol = annual_vol / np.sqrt(12)
+
+    # FI target: portfolio size needed to sustain target_withdrawal/month in REAL terms
+    fi_target = (target_withdrawal * 12) / swr
+
+    # ── Monte Carlo ───────────────────────────────────────────────────────────
+    rng = np.random.default_rng(seed=42)
+    shocks = rng.normal(
+        loc=(monthly_real_return - 0.5 * monthly_vol ** 2),
+        scale=monthly_vol,
+        size=(n_months, n_paths),
+    )
+    monthly_growth = np.exp(shocks)  # GBM multiplicative factor
+
+    # Simulate paths
+    paths = np.empty((n_months + 1, n_paths))
+    paths[0] = net_worth
+    for m in range(n_months):
+        paths[m + 1] = np.maximum(paths[m] * monthly_growth[m] + monthly_contribution, 0.0)
+
+    # ── FI detection ─────────────────────────────────────────────────────────
+    fi_months = np.full(n_paths, np.nan)
+    for p in range(n_paths):
+        hits = np.where(paths[:, p] >= fi_target)[0]
+        if len(hits) > 0:
+            fi_months[p] = hits[0]
+
+    fi_years = fi_months / 12.0
+    prob_fi_by_year = []
+    year_range = list(range(1, horizon_years + 1))
+    for yr in year_range:
+        prob = float(np.mean(fi_months <= yr * 12))
+        prob_fi_by_year.append(prob)
+
+    median_fi_years = float(np.nanmedian(fi_years)) if not np.all(np.isnan(fi_years)) else None
+    prob_fi_total = float(np.mean(~np.isnan(fi_months)))
+
+    # ── Fan chart ─────────────────────────────────────────────────────────────
+    year_axis = np.arange(n_months + 1) / 12.0
+    p10 = np.percentile(paths, 10, axis=1)
+    p25 = np.percentile(paths, 25, axis=1)
+    p50 = np.percentile(paths, 50, axis=1)
+    p75 = np.percentile(paths, 75, axis=1)
+    p90 = np.percentile(paths, 90, axis=1)
+
+    fig_fan = go.Figure()
+    fig_fan.add_scatter(x=year_axis, y=p90, mode="lines", line=dict(color="rgba(243,167,18,0.15)", width=0), name="P90", showlegend=False)
+    fig_fan.add_scatter(x=year_axis, y=p10, mode="lines", fill="tonexty", fillcolor="rgba(243,167,18,0.10)", line=dict(color="rgba(243,167,18,0.15)", width=0), name="P10–P90 band", showlegend=True)
+    fig_fan.add_scatter(x=year_axis, y=p75, mode="lines", line=dict(color="rgba(243,167,18,0.25)", width=0), name="P75", showlegend=False)
+    fig_fan.add_scatter(x=year_axis, y=p25, mode="lines", fill="tonexty", fillcolor="rgba(243,167,18,0.20)", line=dict(color="rgba(243,167,18,0.25)", width=0), name="P25–P75 band", showlegend=True)
+    fig_fan.add_scatter(x=year_axis, y=p50, mode="lines", line=dict(color="#f3a712", width=2.5), name="Median path")
+    fig_fan.add_hline(y=fi_target, line_dash="dash", line_color="#4dff4d", annotation_text=f"FI target ({base_currency} {fi_target:,.0f})", annotation_position="top right")
+    fig_fan.update_layout(
+        xaxis_title="Years from now",
+        yaxis_title=f"Portfolio value ({base_currency})",
+        paper_bgcolor="#0b0f14",
+        plot_bgcolor="#0b0f14",
+        font=dict(color="#e6e6e6"),
+        height=420,
+        margin=dict(t=20, b=20, l=20, r=20),
+        legend=dict(orientation="h", y=1.08, x=0.0),
+    )
+    st.plotly_chart(fig_fan, use_container_width=True)
+
+    # ── Probability curve ─────────────────────────────────────────────────────
+    fig_prob = go.Figure()
+    fig_prob.add_scatter(
+        x=year_range, y=[p * 100 for p in prob_fi_by_year],
+        mode="lines+markers", line=dict(color="#f3a712", width=2),
+        hovertemplate="Year %{x}: %{y:.1f}% probability<extra></extra>",
+    )
+    fig_prob.add_hline(y=50, line_dash="dot", line_color="#888", annotation_text="50% probability")
+    fig_prob.add_hline(y=90, line_dash="dot", line_color="#4dff4d", annotation_text="90% probability")
+    fig_prob.update_layout(
+        xaxis_title="Years from now",
+        yaxis_title="Probability of reaching FI (%)",
+        yaxis=dict(range=[0, 101]),
+        paper_bgcolor="#0b0f14",
+        plot_bgcolor="#0b0f14",
+        font=dict(color="#e6e6e6"),
+        height=320,
+        margin=dict(t=20, b=20, l=20, r=20),
+    )
+
+    info_section("Probability of Financial Independence by Year", "Likelihood of sustaining your target monthly withdrawal.")
+    st.plotly_chart(fig_prob, use_container_width=True)
+
+    # ── Key metrics ───────────────────────────────────────────────────────────
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric(
+        "FI Target",
+        f"{base_currency} {fi_target:,.0f}",
+        help=f"Portfolio size needed at {swr_pct:.1f}% SWR to sustain {base_currency} {target_withdrawal:,.0f}/month",
+    )
+    c2.metric(
+        "Median FI Year",
+        f"Year {median_fi_years:.1f}" if median_fi_years is not None else "Not within horizon",
+        help="Half of simulated paths reach FI before this year.",
+    )
+    c3.metric(
+        f"P(FI in {horizon_years}y)",
+        f"{prob_fi_total:.0%}",
+        help=f"Probability of achieving financial independence within {horizon_years} years.",
+    )
+    c4.metric(
+        "Current Coverage",
+        f"{(net_worth * swr / 12) / target_withdrawal:.0%}",
+        help="How much of your target monthly withdrawal can the current portfolio already sustain.",
+    )
+
+    st.caption(
+        f"Monte Carlo: {n_paths:,} paths · GBM · Real return (inflation-adjusted): {real_return:.2%}/yr · "
+        f"Starting net worth: {base_currency} {net_worth:,.0f} · "
+        f"FI = portfolio ≥ {base_currency} {fi_target:,.0f} (target withdrawal × 12 ÷ SWR)."
+    )
+
+
 def render_investment_horizon_section(
     total_value: float,
     base_currency: str,
@@ -877,6 +1088,10 @@ def connect_transactions_worksheet():
 def connect_cash_balances_worksheet():
     default_rows = [[ccy, 0.0] for ccy in SUPPORTED_BASE_CCY]
     return _connect_named_worksheet("cash_balances", CASH_BALANCES_HEADERS, default_rows=default_rows)
+
+
+def connect_non_portfolio_cash_worksheet():
+    return _connect_named_worksheet("non_portfolio_cash", NON_PORTFOLIO_CASH_HEADERS)
 
 
 def connect_dividends_worksheet():
@@ -1139,6 +1354,53 @@ def save_cash_balances_to_sheets(cash_df: pd.DataFrame):
     for _, row in df.iterrows():
         rows.append([row["currency"], float(row["amount"])])
 
+    ws.clear()
+    ws.update(range_name="A1", values=rows)
+    _clear_google_sheets_cache()
+
+
+def load_non_portfolio_cash_from_sheets() -> pd.DataFrame:
+    sheet_id, sheet_url = _get_private_positions_sheet_locator()
+    try:
+        connect_non_portfolio_cash_worksheet()
+        records = _get_worksheet_records_cached(sheet_id, sheet_url, "non_portfolio_cash")
+    except Exception:
+        return pd.DataFrame(columns=NON_PORTFOLIO_CASH_HEADERS)
+
+    if not records:
+        return pd.DataFrame(columns=NON_PORTFOLIO_CASH_HEADERS)
+
+    df = pd.DataFrame(records)
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    for col in NON_PORTFOLIO_CASH_HEADERS:
+        if col not in df.columns:
+            df[col] = ""
+    df["amount"] = pd.to_numeric(
+        df["amount"].astype(str).str.replace(",", ".", regex=False),
+        errors="coerce",
+    ).fillna(0.0)
+    df["currency"] = df["currency"].astype(str).str.strip().str.upper()
+    df["label"] = df["label"].astype(str).str.strip()
+    return df[df["label"] != ""].reset_index(drop=True)
+
+
+def save_non_portfolio_cash_to_sheets(df: pd.DataFrame):
+    ws = connect_non_portfolio_cash_worksheet()
+    clean = df.copy()
+    for col in NON_PORTFOLIO_CASH_HEADERS:
+        if col not in clean.columns:
+            clean[col] = ""
+    clean["amount"] = pd.to_numeric(clean["amount"], errors="coerce").fillna(0.0)
+    clean["currency"] = clean["currency"].astype(str).str.strip().str.upper()
+    clean["label"] = clean["label"].astype(str).str.strip()
+    clean = clean[clean["label"] != ""].reset_index(drop=True)
+
+    rows = [NON_PORTFOLIO_CASH_HEADERS]
+    for _, row in clean.iterrows():
+        rows.append([
+            str(row["label"]), str(row["currency"]), float(row["amount"]),
+            str(row.get("institution", "")), str(row.get("notes", "")),
+        ])
     ws.clear()
     ws.update(range_name="A1", values=rows)
     _clear_google_sheets_cache()

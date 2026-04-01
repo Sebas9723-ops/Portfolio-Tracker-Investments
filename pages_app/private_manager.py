@@ -4,13 +4,16 @@ import pandas as pd
 import streamlit as st
 
 from app_core import (
+    NON_PORTFOLIO_CASH_HEADERS,
     SUPPORTED_BASE_CCY,
     append_transaction_to_sheets,
     get_manage_password,
     info_metric,
     info_section,
+    load_non_portfolio_cash_from_sheets,
     render_page_title,
     save_cash_balances_to_sheets,
+    save_non_portfolio_cash_to_sheets,
     save_private_positions_to_sheets,
 )
 from pages_app.portfolio_history import save_portfolio_snapshot
@@ -355,3 +358,98 @@ def render_private_manager_page(ctx):
                 st.rerun()
             except Exception as e:
                 st.error(f"Could not save cash balance: {e}")
+
+    # ── Non-Portfolio Cash ────────────────────────────────────────────────────
+    info_section(
+        "Cash Non Portfolio",
+        "External cash accounts (savings, checking, crypto wallets) not held within your "
+        "investment portfolio. Included in Investments Net Worth on the Portfolio page.",
+    )
+
+    npc_df = ctx.get("non_portfolio_cash_df", pd.DataFrame(columns=NON_PORTFOLIO_CASH_HEADERS)).copy()
+    investments_net_worth = float(ctx.get("investments_net_worth", float(ctx.get("total_portfolio_value", 0.0))))
+
+    if not npc_df.empty:
+        display_npc = npc_df[["label", "currency", "amount", "institution", "notes"]].rename(
+            columns={"label": "Label", "currency": "Currency", "amount": "Amount",
+                     "institution": "Institution", "notes": "Notes"}
+        )
+        st.dataframe(display_npc, use_container_width=True, height=200)
+    else:
+        st.info("No non-portfolio cash entries recorded yet.")
+
+    c_nw1, c_nw2, c_nw3 = st.columns(3)
+    info_metric(c_nw1, "Portfolio Value", f"{ctx['base_currency']} {float(ctx['total_portfolio_value']):,.2f}", "Invested assets plus in-portfolio cash.")
+    info_metric(c_nw2, "Non-Portfolio Cash", f"{ctx['base_currency']} {float(ctx.get('non_portfolio_cash_value', 0.0)):,.2f}", "External savings and cash accounts converted to base currency.")
+    info_metric(c_nw3, "Investments Net Worth", f"{ctx['base_currency']} {investments_net_worth:,.2f}", "Total wealth: portfolio + external cash.")
+
+    with st.form("non_portfolio_cash_form"):
+        st.markdown("**Add / Update Entry**")
+        fc1, fc2, fc3 = st.columns(3)
+        with fc1:
+            npc_label = st.text_input("Label (e.g. Bancolombia Savings)", key="npc_label", placeholder="Bancolombia Savings")
+            npc_institution = st.text_input("Institution (optional)", key="npc_institution", placeholder="Bancolombia")
+        with fc2:
+            npc_currency = st.selectbox("Currency", SUPPORTED_BASE_CCY, key="npc_currency")
+            npc_amount_raw = st.text_input("Amount", value="0.00", key="npc_amount")
+        with fc3:
+            npc_notes = st.text_input("Notes (optional)", key="npc_notes", placeholder="4% APY savings account")
+
+        npc_auth = st.text_input("Authorization Password", type="password", key="npc_auth")
+        npc_submitted = st.form_submit_button("Save Entry", use_container_width=True)
+
+    if npc_submitted:
+        if not npc_label.strip():
+            st.error("Label is required.")
+        else:
+            try:
+                npc_amount = float(str(npc_amount_raw).strip().replace(",", "."))
+            except ValueError:
+                st.error(f"Invalid amount: '{npc_amount_raw}'.")
+                npc_amount = None
+
+            if npc_amount is not None and npc_auth != get_manage_password():
+                st.error("Incorrect authorization password.")
+            elif npc_amount is not None:
+                try:
+                    updated_npc = npc_df.copy()
+                    label_up = npc_label.strip()
+                    ccy_up = str(npc_currency).upper().strip()
+                    mask = updated_npc["label"] == label_up
+                    new_row = {
+                        "label": label_up, "currency": ccy_up,
+                        "amount": npc_amount, "institution": npc_institution.strip(),
+                        "notes": npc_notes.strip(),
+                    }
+                    if mask.any():
+                        for col, val in new_row.items():
+                            updated_npc.loc[mask, col] = val
+                    else:
+                        updated_npc = pd.concat(
+                            [updated_npc, pd.DataFrame([new_row])], ignore_index=True
+                        )
+                    save_non_portfolio_cash_to_sheets(updated_npc)
+                    st.session_state["pm_save_banner"] = f"Non-portfolio cash entry saved: {label_up} {ccy_up} {npc_amount:,.2f}"
+                    st.cache_data.clear()
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Could not save entry: {e}")
+
+    # Delete entry
+    if not npc_df.empty:
+        with st.expander("Delete Entry", expanded=False):
+            del_labels = npc_df["label"].tolist()
+            del_label = st.selectbox("Select entry to delete", del_labels, key="npc_del_label")
+            del_auth = st.text_input("Authorization Password", type="password", key="npc_del_auth")
+            if st.button("Delete Entry", key="npc_del_btn", type="primary"):
+                if del_auth != get_manage_password():
+                    st.error("Incorrect authorization password.")
+                else:
+                    try:
+                        remaining = npc_df[npc_df["label"] != del_label].reset_index(drop=True)
+                        save_non_portfolio_cash_to_sheets(remaining)
+                        st.session_state["pm_save_banner"] = f"Deleted entry: {del_label}"
+                        st.cache_data.clear()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Could not delete entry: {e}")
