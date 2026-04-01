@@ -235,6 +235,7 @@ def render_portfolio_page(ctx):
             fx_hist=ctx["fx_hist"],
             base_currency=ctx["base_currency"],
             tx_stats_map=ctx.get("tx_stats_map", {}),
+            fx_fallback=ctx.get("fx_rate_cache"),
         )
 
         df_fresh["Price Source"] = df_fresh["Ticker"].map(
@@ -258,8 +259,26 @@ def render_portfolio_page(ctx):
 
         info_section("Portfolio Snapshot", "Current holdings, values, and performance metrics.")
         _render_data_source_badges(ctx)
+
+        # Fix 5 — warn if Alpaca unavailable (US tickers are 15-min delayed)
+        if ctx.get("app_scope") == "private":
+            from data_providers import check_alpaca_status
+            if not check_alpaca_status():
+                st.warning("⚠️ Alpaca feed unavailable — US equity prices are ~15 min delayed (yfinance fallback).")
+
         st.dataframe(df_fresh[display_cols], use_container_width=True, height=360)
-        st.caption(f"Prices as of {datetime.now().strftime('%H:%M:%S')}")
+        st.caption(f"Prices refreshed at {datetime.now().strftime('%H:%M:%S')} · Market prices may be delayed")
+
+        # Fix 4 — warn when positions have no cost basis (PnL shown as $0)
+        if "Source" in df_fresh.columns:
+            no_basis = df_fresh[
+                (df_fresh["Source"] == "Snapshot") & (df_fresh["Shares"] > 0)
+            ]["Ticker"].tolist()
+            if no_basis:
+                st.warning(
+                    f"⚠️ No cost basis for: **{', '.join(no_basis)}** — Unrealized PnL is shown as $0. "
+                    "Add transactions or set a manual avg cost to track performance accurately."
+                )
 
     _live_prices_section()
 

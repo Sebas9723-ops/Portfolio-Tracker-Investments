@@ -1832,6 +1832,7 @@ def build_portfolio_df(
     fx_hist: pd.DataFrame,
     base_currency: str,
     tx_stats_map=None,
+    fx_fallback: dict | None = None,
 ):
     rows = []
     total_value = 0.0
@@ -1849,11 +1850,19 @@ def build_portfolio_df(
         fx_rate = get_fx_rate_current(native_currency, base_currency, fx_prices, fx_hist)
 
         if pd.isna(fx_rate):
-            st.warning(
-                f"⚠️ FX rate unavailable for {ticker} ({native_currency} → {base_currency}). "
-                "Position excluded from portfolio totals."
-            )
-            continue
+            cached = (fx_fallback or {}).get(f"{native_currency}_{base_currency}")
+            if cached is not None:
+                st.warning(
+                    f"⚠️ Live FX rate unavailable for {ticker} ({native_currency} → {base_currency}). "
+                    f"Using last known rate {cached:.4f}."
+                )
+                fx_rate = cached
+            else:
+                st.warning(
+                    f"⚠️ FX rate unavailable for {ticker} ({native_currency} → {base_currency}). "
+                    "Position excluded from portfolio totals."
+                )
+                continue
 
         price = native_price * fx_rate
 

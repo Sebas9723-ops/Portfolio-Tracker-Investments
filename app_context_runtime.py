@@ -29,7 +29,9 @@ from app_core import (
     compute_mwr,
     compute_var_cvar,
     convert_historical_to_base,
+    asset_currency,
     get_default_constraints,
+    get_fx_rate_current,
     get_mode_prefix,
     get_risk_free_rate,
     init_mode_state,
@@ -187,19 +189,25 @@ def _load_private_runtime_state():
 
     try:
         private_sheet_positions = load_private_positions_from_sheets()
+        # Record successful Sheets connection timestamp
+        st.session_state["_sheets_last_ok"] = datetime.now(_COLOMBIA_TZ).strftime("%Y-%m-%d %H:%M:%S %Z")
     except Exception as e:
         positions_sheet_available = False
         positions_sheet_error = str(e)
         private_sheet_positions = {}
 
+    transactions_loaded = True
     try:
         transactions_df = load_transactions_from_sheets()
     except Exception:
+        transactions_loaded = False
         transactions_df = pd.DataFrame(columns=TRANSACTIONS_HEADERS)
 
+    cash_loaded = True
     try:
         cash_balances_df = load_cash_balances_from_sheets()
     except Exception:
+        cash_loaded = False
         cash_balances_df = pd.DataFrame(
             {"currency": SUPPORTED_BASE_CCY, "amount": [0.0] * len(SUPPORTED_BASE_CCY)}
         )
@@ -232,6 +240,8 @@ def _load_private_runtime_state():
     return {
         "positions_sheet_available": positions_sheet_available,
         "positions_sheet_error": positions_sheet_error,
+        "transactions_loaded": transactions_loaded,
+        "cash_loaded": cash_loaded,
         "private_portfolio": private_portfolio,
         "transactions_df": transactions_df,
         "cash_balances_df": cash_balances_df,
@@ -269,6 +279,19 @@ def build_app_context_runtime(app_scope: str):
         cash_balances_df = private_state["cash_balances_df"]
         dividends_df = private_state["dividends_df"]
         tx_stats_map = private_state["tx_stats_map"]
+
+        # ── Sheets availability banner ────────────────────────────────────────
+        if not positions_sheet_available:
+            last_ok = st.session_state.get("_sheets_last_ok", "unknown")
+            st.error(
+                f"🔴 **Google Sheets unavailable** — showing last known portfolio data "
+                f"(synced: {last_ok}). Live changes are NOT being saved. "
+                f"Error: {positions_sheet_error}"
+            )
+        elif not private_state.get("transactions_loaded", True):
+            st.warning("⚠️ Transaction history unavailable. Cost basis and PnL may be inaccurate.")
+        elif not private_state.get("cash_loaded", True):
+            st.warning("⚠️ Cash balances unavailable from Sheets. Showing zeros.")
 
     base_currency = st.sidebar.selectbox("Base Currency", SUPPORTED_BASE_CCY, index=0)
 
@@ -315,10 +338,12 @@ def build_app_context_runtime(app_scope: str):
 
     tickers = list(updated_portfolio.keys())
 
+    alpaca_available = False
     if app_scope == "private":
-        from data_providers import load_market_data_private, data_source_labels
+        from data_providers import load_market_data_private, data_source_labels, check_alpaca_status
         live_prices_native, asset_hist_native = load_market_data_private(tickers=tickers, period="2y")
         data_source_info = data_source_labels(tickers)
+        alpaca_available = check_alpaca_status()
     else:
         live_prices_native, asset_hist_native = load_market_data_with_proxies(tickers=tickers, period="2y")
         data_source_info = {}
@@ -356,6 +381,19 @@ def build_app_context_runtime(app_scope: str):
     if missing_fx and app_scope == "private":
         st.warning(f"Missing FX history for: {', '.join(missing_fx)}")
 
+    # ── FX rate last-known cache (Fix 1) ──────────────────────────────────────
+    # Persist fresh FX rates to session state so they can serve as fallback
+    # if the live feed is temporarily unavailable on a subsequent load.
+    _fx_cache: dict = st.session_state.get("_fx_rate_cache", {})
+    all_ccy = set(asset_currency(t) for t in tickers) | set(SUPPORTED_BASE_CCY)
+    for ccy in all_ccy:
+        if ccy == base_currency:
+            continue
+        rate = get_fx_rate_current(ccy, base_currency, fx_prices, fx_hist)
+        if rate is not None and not pd.isna(rate) and rate > 0:
+            _fx_cache[f"{ccy}_{base_currency}"] = float(rate)
+    st.session_state["_fx_rate_cache"] = _fx_cache
+
     df, total_value, pnl_totals = build_portfolio_df(
         updated_portfolio=updated_portfolio,
         live_prices_native=live_prices_native,
@@ -364,6 +402,7 @@ def build_app_context_runtime(app_scope: str):
         fx_hist=fx_hist,
         base_currency=base_currency,
         tx_stats_map=tx_stats_map,
+        fx_fallback=_fx_cache,
     )
 
     df["Price Source"] = df["Ticker"].map(lambda t: data_source_info.get(t, ""))
@@ -615,6 +654,8 @@ def build_app_context_runtime(app_scope: str):
         "max_sharpe_row": max_sharpe_row,
         "min_vol_row": min_vol_row,
         "usable": usable,
+        "fx_rate_cache": _fx_cache,
+        "alpaca_available": alpaca_available,
     }
 
     if _should_auto_snapshot(ctx):
@@ -622,16 +663,16 @@ def build_app_context_runtime(app_scope: str):
             from pages_app.portfolio_history import save_portfolio_snapshot
             save_portfolio_snapshot(ctx, notes="Auto snapshot — market close 6pm Colombia")
             st.session_state["last_auto_snapshot_date"] = str(datetime.now(_COLOMBIA_TZ).date())
-        except Exception:
-            pass
+        except Exception as e:
+            st.warning(f"⚠️ Auto snapshot failed: {e}")
 
     try:
         from email_report import should_send_monthly_report, send_monthly_report
         ok, month_str = should_send_monthly_report(ctx)
         if ok:
             send_monthly_report(ctx, month_str)
-    except Exception:
-        pass
+    except Exception as e:
+        st.warning(f"⚠️ Monthly report failed: {e}")
 
     try:
         from alerts import check_alert_conditions, should_send_alerts, send_alert_telegram

@@ -40,12 +40,27 @@ _SOURCE_META: dict[str, tuple[str, int]] = {
 }
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def check_alpaca_status() -> bool:
+    """Returns True if Alpaca IEX credentials are valid and feed is reachable."""
+    try:
+        result = _alpaca_latest_prices(["SPY"])
+        return bool(result)
+    except Exception:
+        return False
+
+
 def data_source_labels(tickers: list[str]) -> dict[str, str]:
-    """Return a badge label for each ticker, e.g. {"VOO": "Live · Alpaca"}."""
-    return {
-        t: _SOURCE_META.get(_exchange(t), ("~15 min · Yahoo", 15))[0]
-        for t in tickers
+    """Return a badge label for each ticker reflecting actual data source."""
+    alpaca_ok = check_alpaca_status()
+    us_label = "Live · Alpaca" if alpaca_ok else "~15 min · Yahoo"
+    labels = {
+        "US":       us_label,
+        "XETRA":    "~15 min · XETRA",
+        "LSE":      "~15 min · LSE",
+        "OTHER_EU": "~15 min · Yahoo",
     }
+    return {t: labels.get(_exchange(t), "~15 min · Yahoo") for t in tickers}
 
 
 # ── Alpaca client (cached per session) ────────────────────────────────────────
