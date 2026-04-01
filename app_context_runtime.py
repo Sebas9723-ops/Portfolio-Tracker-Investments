@@ -12,6 +12,7 @@ from app_core import (
     CASH_BALANCES_HEADERS,
     DEFAULT_RISK_FREE_RATE,
     DIVIDENDS_HEADERS,
+    N_SIMULATIONS,
     PUBLIC_DEFAULTS_VERSION,
     SUPPORTED_BASE_CCY,
     TRANSACTIONS_HEADERS,
@@ -28,6 +29,7 @@ from app_core import (
     compute_mwr,
     compute_var_cvar,
     convert_historical_to_base,
+    get_default_constraints,
     get_mode_prefix,
     init_mode_state,
     load_cash_balances_from_sheets,
@@ -38,6 +40,7 @@ from app_core import (
     load_transactions_from_sheets,
     merge_private_portfolios,
     reset_mode_state,
+    simulate_constrained_efficient_frontier,
 )
 
 
@@ -136,6 +139,13 @@ def _build_policy_target_map(portfolio_data: dict, df: pd.DataFrame) -> dict[str
     if "Target Weight" in df.columns:
         raw_df = df.set_index("Ticker")["Target Weight"].to_dict()
         return _normalize_weight_map(raw_df, tickers)
+
+    # Last resort: use current portfolio value weights (tickers with 0 value get 0 target).
+    # This is more meaningful than equal-weighting tickers that have no position.
+    if "Value" in df.columns:
+        raw_val = df.set_index("Ticker")["Value"].to_dict()
+        if sum(v for v in raw_val.values() if v > 0) > 0:
+            return _normalize_weight_map(raw_val, tickers)
 
     return _normalize_weight_map({t: 1.0 for t in tickers}, tickers)
 
@@ -500,6 +510,24 @@ def build_app_context_runtime(app_scope: str):
     var_cvar = compute_var_cvar(portfolio_returns)
     mwr_result = compute_mwr(transactions_df, total_portfolio_value)
 
+    # ── Efficient frontier (Max Sharpe / Min Vol) ─────────────────────────────
+    max_sharpe_row = None
+    min_vol_row = None
+    usable = []
+    if asset_returns is not None and not asset_returns.empty and asset_returns.shape[1] >= 2:
+        _constraints = get_default_constraints(profile)
+        _frontier = simulate_constrained_efficient_frontier(
+            asset_returns=asset_returns,
+            asset_names=asset_returns.columns.tolist(),
+            constraints=_constraints,
+            risk_free_rate=risk_free_rate,
+            n_portfolios=N_SIMULATIONS,
+        )
+        if not _frontier.empty:
+            usable = asset_returns.columns.tolist()
+            max_sharpe_row = _frontier.loc[_frontier["Sharpe"].idxmax()]
+            min_vol_row = _frontier.loc[_frontier["Volatility"].idxmin()]
+
     annual_dividend_df, dividend_calendar_df, collected_dividends_df, estimated_annual_dividends, dividends_ytd, dividends_total = build_dividend_insights(
         df=df,
         dividends_df=dividends_df,
@@ -569,6 +597,9 @@ def build_app_context_runtime(app_scope: str):
         "fx_hist": fx_hist,
         "var_cvar": var_cvar,
         "mwr_result": mwr_result,
+        "max_sharpe_row": max_sharpe_row,
+        "min_vol_row": min_vol_row,
+        "usable": usable,
     }
 
     if _should_auto_snapshot(ctx):
