@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from app_core import DEFAULT_RISK_FREE_RATE, info_metric, info_section, render_page_title
+from app_core import get_risk_free_rate, info_metric, info_section, render_page_title
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -121,7 +121,7 @@ def _run_simulation(
     active_ret = strat_ret[strat_ret != 0]
     sharpe = 0.0
     if len(active_ret) > 1 and active_ret.std() > 0:
-        sharpe = (active_ret.mean() * 252 - DEFAULT_RISK_FREE_RATE) / (active_ret.std() * np.sqrt(252))
+        sharpe = (active_ret.mean() * 252 - get_risk_free_rate()) / (active_ret.std() * np.sqrt(252))
 
     rolling_max = equity.cummax()
     max_dd = float(((equity - rolling_max) / rolling_max).min()) * 100

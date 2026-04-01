@@ -2,23 +2,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from app_core import render_page_title, info_section, info_metric
-
-
-ESTIMATED_YIELD_MAP = {
-    "SCHD": 0.0360,
-    "VOO": 0.0130,
-    "VWCE.DE": 0.0150,
-    "IWDA.AS": 0.0150,
-    "BND": 0.0320,
-    "AGG": 0.0310,
-    "IEF": 0.0280,
-    "TLT": 0.0360,
-    "IGLN.L": 0.0000,
-    "GLD": 0.0000,
-    "IAU": 0.0000,
-    "ICHN.AS": 0.0000,
-}
+from app_core import render_page_title, info_section, info_metric, get_live_dividend_yield
 
 
 def render_income_page(ctx):
@@ -33,7 +17,7 @@ def render_income_page(ctx):
     income_df = df[["Ticker", "Name", "Value"]].copy()
 
     income_df["Estimated Yield"] = income_df["Ticker"].map(
-        lambda x: ESTIMATED_YIELD_MAP.get(str(x).upper(), 0.0)
+        lambda x: get_live_dividend_yield(str(x))
     )
     income_df["Estimated Annual Income"] = income_df["Value"] * income_df["Estimated Yield"]
     income_df["Estimated Monthly Income"] = income_df["Estimated Annual Income"] / 12

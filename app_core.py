@@ -19,8 +19,60 @@ from portfolio import public_portfolio
 from utils import get_prices, get_historical_data, get_market_times
 
 
-DEFAULT_RISK_FREE_RATE = 0.02
+DEFAULT_RISK_FREE_RATE = 0.045  # fallback — overridden at runtime by get_risk_free_rate()
 N_SIMULATIONS = 8000
+
+
+# =========================
+# LIVE MARKET CONSTANTS
+# =========================
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_risk_free_rate() -> float:
+    """Fetch the current 3-month US T-Bill rate (^IRX) from yfinance.
+
+    Returns annualized rate as a decimal (e.g. 0.045 for 4.5%).
+    Falls back to DEFAULT_RISK_FREE_RATE if the feed is unavailable.
+    """
+    import yfinance as yf
+    try:
+        hist = yf.Ticker("^IRX").history(period="5d")
+        if not hist.empty:
+            rate = float(hist["Close"].dropna().iloc[-1]) / 100.0
+            if 0.0 < rate < 0.20:
+                return round(rate, 4)
+    except Exception:
+        pass
+    return DEFAULT_RISK_FREE_RATE
+
+
+_YIELD_FALLBACK_MAP: dict[str, float] = {
+    "SCHD": 0.0360, "VOO": 0.0130, "VWCE.DE": 0.0150,
+    "IWDA.AS": 0.0150, "BND": 0.0320, "AGG": 0.0310,
+    "IEF": 0.0280, "TLT": 0.0360, "IGLN.L": 0.0,
+    "GLD": 0.0, "IAU": 0.0, "ICHN.AS": 0.0,
+}
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_live_dividend_yield(ticker: str) -> float:
+    """Fetch trailing annual dividend yield for a ticker from yfinance.
+
+    Returns yield as a decimal (e.g. 0.036 for 3.6%).
+    Falls back to _YIELD_FALLBACK_MAP, then 0.0 if unavailable.
+    """
+    import yfinance as yf
+    try:
+        info = yf.Ticker(ticker).info
+        for key in ("trailingAnnualDividendYield", "dividendYield"):
+            val = info.get(key)
+            if val is not None:
+                val = float(val)
+                if 0.0 <= val <= 0.30:
+                    return round(val, 6)
+    except Exception:
+        pass
+    return _YIELD_FALLBACK_MAP.get(ticker.upper(), 0.0)
 SUPPORTED_BASE_CCY = ["USD", "EUR", "GBP", "COP", "CHF", "AUD"]
 PUBLIC_DEFAULTS_VERSION = "public_defaults_v12_phase2"
 GOOGLE_SHEETS_CACHE_TTL = 300
@@ -1755,6 +1807,7 @@ def build_cash_display_df(cash_balances_df: pd.DataFrame, base_currency: str, fx
         amount = float(row["amount"])
         fx_rate = get_fx_rate_current(ccy, base_currency, fx_prices, fx_hist)
         if pd.isna(fx_rate):
+            st.warning(f"⚠️ FX rate unavailable for {ccy} → {base_currency}. Cash balance shown as 0.")
             fx_rate = 0.0
         rows.append(
             {
@@ -1795,7 +1848,11 @@ def build_portfolio_df(
         fx_rate = get_fx_rate_current(native_currency, base_currency, fx_prices, fx_hist)
 
         if pd.isna(fx_rate):
-            fx_rate = 0.0
+            st.warning(
+                f"⚠️ FX rate unavailable for {ticker} ({native_currency} → {base_currency}). "
+                "Position excluded from portfolio totals."
+            )
+            continue
 
         price = native_price * fx_rate
 
@@ -2029,6 +2086,7 @@ def build_dividend_insights(
         ccy = str(row["currency"]).upper().strip()
         fx_rate = get_fx_rate_current(ccy, base_currency, fx_prices, fx_hist)
         if pd.isna(fx_rate):
+            st.warning(f"⚠️ FX rate unavailable for dividend currency {ccy} → {base_currency}. Dividend excluded from totals.")
             fx_rate = 0.0
         amounts_base.append(float(row["amount"]) * fx_rate)
 

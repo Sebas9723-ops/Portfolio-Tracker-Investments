@@ -11,7 +11,7 @@ from app_core import (
     compute_fixed_income_analytics,
     compute_risk_budget,
     compute_rolling_metrics,
-    DEFAULT_RISK_FREE_RATE,
+    get_risk_free_rate,
     info_metric,
     info_section,
     render_page_title,
@@ -33,8 +33,8 @@ def _cached_stress(df: pd.DataFrame, equity_shock: float, bonds_shock: float, go
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def _cached_rolling(portfolio_returns: pd.Series, benchmark_returns: pd.Series, window: int):
-    return compute_rolling_metrics(portfolio_returns, benchmark_returns, DEFAULT_RISK_FREE_RATE, window)
+def _cached_rolling(portfolio_returns: pd.Series, benchmark_returns: pd.Series, window: int, rfr: float):
+    return compute_rolling_metrics(portfolio_returns, benchmark_returns, rfr, window)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -257,7 +257,8 @@ def render_risk_page(ctx):
 
     rolling_df = pd.DataFrame()
     if not portfolio_returns.empty and not resolved_benchmark.empty:
-        rolling_df = _cached_rolling(portfolio_returns, resolved_benchmark, rolling_window)
+        rfr = float(ctx.get("risk_free_rate", get_risk_free_rate()))
+        rolling_df = _cached_rolling(portfolio_returns, resolved_benchmark, rolling_window, rfr)
 
     risk_budget_df, fixed_income_df, fig_corr, fx_df = (None, None, None, None)
     if not df.empty and asset_returns is not None and not asset_returns.empty:

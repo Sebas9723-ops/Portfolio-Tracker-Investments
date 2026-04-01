@@ -57,8 +57,8 @@ def _mark_report_sent(month_str: str):
         )
         from app_core import _clear_google_sheets_cache
         _clear_google_sheets_cache()
-    except Exception:
-        pass
+    except Exception as e:
+        st.warning(f"⚠️ Failed to log report to Sheets: {e}")
 
 
 # ── Trigger logic ──────────────────────────────────────────────────────────────

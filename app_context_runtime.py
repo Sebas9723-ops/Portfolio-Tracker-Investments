@@ -31,6 +31,7 @@ from app_core import (
     convert_historical_to_base,
     get_default_constraints,
     get_mode_prefix,
+    get_risk_free_rate,
     init_mode_state,
     load_cash_balances_from_sheets,
     load_dividends_from_sheets,
@@ -310,7 +311,7 @@ def build_app_context_runtime(app_scope: str):
         )
 
     profile = st.sidebar.selectbox("Investor Profile", ["Aggressive", "Balanced", "Conservative"])
-    risk_free_rate = DEFAULT_RISK_FREE_RATE
+    risk_free_rate = get_risk_free_rate()
 
     tickers = list(updated_portfolio.keys())
 

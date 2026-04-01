@@ -62,8 +62,8 @@ def _mark_alerts_sent(alerts: list[dict]):
             )
         from app_core import _clear_google_sheets_cache
         _clear_google_sheets_cache()
-    except Exception:
-        pass
+    except Exception as e:
+        st.warning(f"⚠️ Failed to log alert to Sheets: {e}")
 
 
 # ── Condition checks ───────────────────────────────────────────────────────────
@@ -207,8 +207,8 @@ def send_alert_telegram(alerts: list[dict], ctx: dict):
         _mark_alerts_sent(alerts)
         sent_session = st.session_state.get("alerts_sent_session", set())
         st.session_state["alerts_sent_session"] = sent_session | {a["type"] for a in alerts}
-    except Exception:
-        pass
+    except Exception as e:
+        st.warning(f"⚠️ Failed to send alert via Telegram: {e}")
 
 
 # ── Portfolio snapshot sender ──────────────────────────────────────────────────
