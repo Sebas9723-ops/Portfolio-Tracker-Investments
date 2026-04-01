@@ -24,6 +24,8 @@ from pages_app.ml_signals import render_ml_signals_page
 from pages_app.paper_trading import render_paper_trading_page
 from pages_app.whatif import render_whatif_page
 from pages_app.alerts import render_alerts_page
+from pages_app.income import render_income_page
+from pages_app.investment_horizon import render_investment_horizon_page
 
 
 from PIL import Image as _Image
@@ -116,6 +118,8 @@ _NAV_PAGES = [
     "Paper Trading",
     "What-If Simulator",
     "Custom Alerts",
+    "Income",
+    "Investment Horizon",
 ]
 
 if st.session_state.get("private_page_navigation") not in _NAV_PAGES:
@@ -181,3 +185,7 @@ elif page_name == "What-If Simulator":
     render_whatif_page(ctx)
 elif page_name == "Custom Alerts":
     render_alerts_page(ctx)
+elif page_name == "Income":
+    render_income_page(ctx)
+elif page_name == "Investment Horizon":
+    render_investment_horizon_page(ctx)
