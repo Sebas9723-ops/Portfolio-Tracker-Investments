@@ -50,7 +50,7 @@ DIVIDEND_META = {
     "IWDA.AS": {"yield": 0.0, "months": [], "frequency": "Accumulating"},
     "VWCE.DE": {"yield": 0.0, "months": [], "frequency": "Accumulating"},
     "EUNL.DE": {"yield": 0.0, "months": [], "frequency": "Accumulating"},
-    "ICHN.NL": {"yield": 0.0, "months": [], "frequency": "Accumulating"},
+    "ICHN.AS": {"yield": 0.0, "months": [], "frequency": "Accumulating"},
 }
 
 
@@ -1301,7 +1301,7 @@ def load_private_portfolio():
         "BND": {"name": "Bonds", "shares": float(p["BND"]), "base_shares": float(p["BND"])},
         "QQQM": {"name": "Nasdaq-100 Growth ETF", "shares": float(p.get("QQQM", 0.0)), "base_shares": float(p.get("QQQM", 0.0))},
         "VDE": {"name": "Vanguard Energy ETF", "shares": float(p.get("VDE", 0.0)), "base_shares": float(p.get("VDE", 0.0))},
-        "ICHN.NL": {"name": "iShares China Large Cap UCITS ETF", "shares": float(p.get("ICHN_NL", 0.0)), "base_shares": float(p.get("ICHN_NL", 0.0))},
+        "ICHN.AS": {"name": "iShares China Large Cap UCITS ETF", "shares": float(p.get("ICHN_AS", 0.0)), "base_shares": float(p.get("ICHN_AS", 0.0))},
     }
 
 
@@ -1885,7 +1885,13 @@ def build_portfolio_df(
         if any_base_shares_differ and base_total_value > 0:
             df["Target Weight"] = df["Base Value"] / base_total_value
         elif len(df) > 0:
-            df["Target Weight"] = 1.0 / len(df)
+            # Use current value weights so tickers with 0 shares get 0 target
+            # instead of misleading equal-weight across all registered tickers.
+            total_val = df["Value"].sum() if "Value" in df.columns else 0.0
+            if total_val > 0:
+                df["Target Weight"] = df["Value"] / total_val
+            else:
+                df["Target Weight"] = 0.0
         else:
             df["Target Weight"] = 0.0
 
