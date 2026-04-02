@@ -681,7 +681,7 @@ def render_financial_independence_section(
     with c1:
         target_withdrawal = st.number_input(
             f"Target Monthly Withdrawal ({base_currency})",
-            min_value=100.0,
+            min_value=0.0,
             max_value=1_000_000.0,
             step=100.0,
             help="How much you want to withdraw per month in retirement (in today's money).",
@@ -706,7 +706,7 @@ def render_financial_independence_section(
         )
         swr_pct = st.number_input(
             "Safe Withdrawal Rate (%)",
-            min_value=1.0,
+            min_value=0.1,
             max_value=10.0,
             step=0.1,
             format="%.1f",
@@ -762,7 +762,39 @@ def render_financial_independence_section(
     monthly_vol = annual_vol / np.sqrt(12)
 
     # FI target: portfolio size needed to sustain target_withdrawal/month in REAL terms
-    fi_target = (target_withdrawal * 12) / swr
+    fi_target = (target_withdrawal * 12) / swr if swr > 0 else 0.0
+
+    # ── Required contribution recommendation ─────────────────────────────────
+    if fi_target > 0 and monthly_real_return > 0 and n_months > 0:
+        growth_factor = (1 + monthly_real_return) ** n_months
+        portfolio_fv = net_worth * growth_factor
+        if fi_target > portfolio_fv:
+            required_pmt = (fi_target - portfolio_fv) * monthly_real_return / (growth_factor - 1)
+        else:
+            required_pmt = 0.0
+    else:
+        required_pmt = None
+
+    # ── Recommended contribution box ─────────────────────────────────────────
+    st.divider()
+    if required_pmt is None:
+        st.info("Recommended contribution: cannot compute — adjust return or horizon.")
+    elif required_pmt <= 0:
+        st.success("Already on track — no additional contribution needed to reach FI.")
+    else:
+        st.metric(
+            label="Recommended Monthly Contribution",
+            value=base_currency + " " + "{:,.0f}".format(required_pmt),
+            help="Monthly contribution needed to reach your FI target within the horizon, at the expected return and inflation.",
+        )
+        st.caption(
+            "Target " + base_currency + " " + "{:,.0f}".format(fi_target)
+            + " in " + str(horizon_years) + " yrs"
+            + " | Return " + "{:.1f}".format(annual_return_pct) + "%"
+            + " | Inflation " + "{:.1f}".format(inflation_pct) + "%"
+            + " | SWR " + "{:.1f}".format(swr_pct) + "%"
+        )
+    st.divider()
 
     # ── Monte Carlo ───────────────────────────────────────────────────────────
     rng = np.random.default_rng(seed=42)
@@ -887,10 +919,16 @@ def render_investment_horizon_section(
         "Projected portfolio value over a selected investment horizon using monthly compounding and optional monthly contributions."
     )
 
+    _s = default_settings or {}
+
+    _horizon_options = [5, 10, 15, 20, 25, 30]
+    if "ih_horizon_years" not in st.session_state:
+        _saved_horizon = int(_s.get("ih_horizon_years", 10))
+        st.session_state["ih_horizon_years"] = _saved_horizon if _saved_horizon in _horizon_options else 10
     horizon_years = st.selectbox(
         "Investment Horizon (Years)",
-        [5, 10, 15, 20, 25, 30],
-        index=1,
+        _horizon_options,
+        key="ih_horizon_years",
         help="Select the projection horizon.",
     )
 
@@ -899,19 +937,21 @@ def render_investment_horizon_section(
         hist_return = float(portfolio_returns.mean() * 252)
         if np.isfinite(hist_return):
             default_return = min(max(hist_return, 0.00), 0.15)
+    if "ih_annual_return" not in st.session_state:
+        _saved_return = float(_s.get("ih_annual_return", round(default_return * 100, 1)))
+        st.session_state["ih_annual_return"] = min(max(_saved_return, 0.0), 20.0)
 
     expected_return_pct = st.slider(
         "Expected Annual Return (%)",
         min_value=0.0,
         max_value=20.0,
-        value=float(round(default_return * 100, 1)),
         step=0.1,
         format="%.1f",
+        key="ih_annual_return",
     )
     expected_return = expected_return_pct / 100.0
     st.caption(f"Selected expected annual return: {expected_return_pct:.1f}%")
 
-    _s = default_settings or {}
     if "ih_monthly_contribution" not in st.session_state:
         st.session_state["ih_monthly_contribution"] = float(_s.get("monthly_contribution", 0.0))
     monthly_contribution = st.number_input(
@@ -921,13 +961,16 @@ def render_investment_horizon_section(
         key="ih_monthly_contribution",
     )
 
+    if "ih_scenario_spread" not in st.session_state:
+        _saved_spread = float(_s.get("ih_scenario_spread", 3.0))
+        st.session_state["ih_scenario_spread"] = min(max(_saved_spread, 0.0), 10.0)
     scenario_spread_pct = st.slider(
         "Scenario Spread (%)",
         min_value=0.0,
         max_value=10.0,
-        value=3.0,
         step=0.1,
         format="%.1f",
+        key="ih_scenario_spread",
     )
     scenario_spread = scenario_spread_pct / 100.0
 
