@@ -923,7 +923,7 @@ def render_investment_horizon_section(
 
     _horizon_options = [5, 10, 15, 20, 25, 30]
     if "ih_horizon_years" not in st.session_state:
-        _saved_horizon = int(_s.get("ih_horizon_years", 10))
+        _saved_horizon = int(float(_s.get("ih_horizon_years", 10)))
         st.session_state["ih_horizon_years"] = _saved_horizon if _saved_horizon in _horizon_options else 10
     horizon_years = st.selectbox(
         "Investment Horizon (Years)",
