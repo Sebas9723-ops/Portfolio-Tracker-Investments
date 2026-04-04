@@ -16,8 +16,8 @@ def get_prices(tickers: list[str]) -> dict[str, float]:
 
     close_df = _download_close_frame(
         tickers=tickers,
-        period="10d",
-        interval="1d",
+        period="5d",
+        interval="1h",
     )
 
     prices: dict[str, float] = {}
