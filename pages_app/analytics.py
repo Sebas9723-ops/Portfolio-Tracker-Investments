@@ -429,12 +429,24 @@ def _render_contribution_growth(ctx):
     if contributions.empty:
         return
 
+    # Any capital deployed before the first recorded transaction (e.g. positions
+    # set up in the base portfolio file without a matching transaction) shows up as
+    # a gap between invested_capital and the transaction sum.  Treat that gap as an
+    # initial seed injected at the very start of the price-history window.
+    invested_capital = float(ctx.get("invested_capital", 0.0))
+    tx_total = float(contributions.iloc[-1])
+    initial_seed = max(0.0, invested_capital - tx_total)
+
     # Align contributions to the price history index, forward-filling gaps
     full_idx = portfolio_value_series.index
     contributions_aligned = contributions.reindex(full_idx).ffill()
     first_tx = contributions.index[0]
     contributions_aligned.loc[contributions_aligned.index < first_tx] = 0.0
     contributions_aligned = contributions_aligned.fillna(0.0)
+
+    # Add the seed uniformly to the entire series so the line starts at seed and
+    # ends at seed + recorded transactions
+    contributions_aligned = contributions_aligned + initial_seed
 
     info_section(
         "Contribution vs Growth",
