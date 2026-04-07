@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import pytz
 import streamlit as st
 
-from app_core import build_portfolio_df, info_metric, info_section, render_page_title
+from app_core import build_portfolio_df, get_fx_rate_current, info_metric, info_section, render_page_title
 
 
 def _market_status(ticker: str) -> str:
@@ -353,3 +353,64 @@ def render_portfolio_page(ctx):
 
     info_section("Cash Balances", "Cash balances by currency converted to the base currency.")
     st.dataframe(ctx["cash_display_df"], use_container_width=True, height=240)
+
+    # ── Currency Exposure ─────────────────────────────────────────────────────
+    info_section(
+        "Currency Exposure",
+        "Net market value exposure by currency across holdings, in-portfolio cash, and external cash accounts.",
+    )
+
+    base_currency = ctx["base_currency"]
+    fx_prices = ctx.get("fx_prices", {})
+    fx_hist = ctx.get("fx_hist", pd.DataFrame())
+    exposure: dict[str, float] = {}
+
+    for _, row in ctx["df"].iterrows():
+        ccy = str(row.get("Native Currency", "USD")).upper()
+        exposure[ccy] = exposure.get(ccy, 0.0) + float(row.get("Value", 0.0))
+
+    for _, row in ctx.get("cash_balances_df", pd.DataFrame()).iterrows():
+        ccy = str(row["currency"]).upper()
+        amt = float(row.get("amount", 0.0))
+        if amt <= 0:
+            continue
+        fx = 1.0 if ccy == base_currency else (get_fx_rate_current(ccy, base_currency, fx_prices, fx_hist) or 1.0)
+        exposure[ccy] = exposure.get(ccy, 0.0) + amt * fx
+
+    npc_df = ctx.get("non_portfolio_cash_df", pd.DataFrame())
+    if not npc_df.empty and "currency" in npc_df.columns:
+        for _, row in npc_df.iterrows():
+            ccy = str(row["currency"]).upper()
+            amt = float(row.get("amount", 0.0))
+            if amt <= 0:
+                continue
+            fx = 1.0 if ccy == base_currency else (get_fx_rate_current(ccy, base_currency, fx_prices, fx_hist) or 1.0)
+            exposure[ccy] = exposure.get(ccy, 0.0) + amt * fx
+
+    total_exp = sum(v for v in exposure.values() if v > 0)
+    if total_exp > 0:
+        exp_rows = sorted(
+            [{"Currency": k, f"Value ({base_currency})": round(v, 2), "Allocation %": round(v / total_exp * 100, 2)}
+             for k, v in exposure.items() if v > 0],
+            key=lambda r: -r[f"Value ({base_currency})"],
+        )
+        exp_df = pd.DataFrame(exp_rows)
+
+        left, right = st.columns([1, 2])
+        with left:
+            pie = go.Figure(go.Pie(
+                labels=exp_df["Currency"],
+                values=exp_df[f"Value ({base_currency})"],
+                hole=0.45,
+                textinfo="label+percent",
+            ))
+            pie.update_layout(
+                paper_bgcolor="#0b0f14",
+                font=dict(color="#e6e6e6"),
+                height=300,
+                margin=dict(t=20, b=20, l=20, r=20),
+                showlegend=False,
+            )
+            st.plotly_chart(pie, use_container_width=True, key="currency_exposure_pie")
+        with right:
+            st.dataframe(exp_df, use_container_width=True, height=260)

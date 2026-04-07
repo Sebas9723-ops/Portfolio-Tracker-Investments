@@ -396,6 +396,85 @@ def _render_volatility_regime(vr):
     st.plotly_chart(fig, use_container_width=True, key="analytics_vol_regime_chart")
 
 
+def _render_contribution_growth(ctx):
+    transactions_df = ctx.get("transactions_df")
+    portfolio_returns = ctx.get("portfolio_returns", pd.Series(dtype=float))
+    holdings_value = float(ctx.get("holdings_value", 0.0))
+    ccy = ctx.get("base_currency", "USD")
+
+    if transactions_df is None or transactions_df.empty:
+        return
+    if portfolio_returns.empty or holdings_value <= 0:
+        return
+
+    # Reconstruct portfolio value from price history scaled to today's holdings value
+    cum = (1 + portfolio_returns).cumprod()
+    portfolio_value_series = (cum / float(cum.iloc[-1])) * holdings_value
+
+    # Cumulative net contributions from transaction log (prices in native currency, approximate)
+    tx = transactions_df.copy()
+    tx["date"] = pd.to_datetime(tx["date"], errors="coerce")
+    tx["shares"] = pd.to_numeric(tx["shares"], errors="coerce").fillna(0.0)
+    tx["price"] = pd.to_numeric(tx["price"], errors="coerce").fillna(0.0)
+    tx["fees"] = pd.to_numeric(tx["fees"], errors="coerce").fillna(0.0)
+    tx = tx.dropna(subset=["date"])
+
+    tx["gross"] = tx["shares"] * tx["price"] + tx["fees"]
+    tx["net"] = tx.apply(
+        lambda r: r["gross"] if str(r.get("type", "")).upper() == "BUY" else -r["gross"],
+        axis=1,
+    )
+
+    contributions = tx.groupby("date")["net"].sum().sort_index().cumsum()
+    if contributions.empty:
+        return
+
+    # Align contributions to the price history index, forward-filling gaps
+    full_idx = portfolio_value_series.index
+    contributions_aligned = contributions.reindex(full_idx).ffill()
+    first_tx = contributions.index[0]
+    contributions_aligned.loc[contributions_aligned.index < first_tx] = 0.0
+    contributions_aligned = contributions_aligned.fillna(0.0)
+
+    info_section(
+        "Contribution vs Growth",
+        "Capital invested over time versus estimated portfolio market value. "
+        "The gap above the blue line represents cumulative market gains. "
+        "Contributions shown in transaction prices (approximate for multi-currency portfolios).",
+    )
+
+    fig = go.Figure()
+    fig.add_scatter(
+        x=contributions_aligned.index,
+        y=contributions_aligned.values,
+        name="Invested Capital",
+        fill="tozeroy",
+        fillcolor="rgba(77, 184, 255, 0.15)",
+        line=dict(color="#4db8ff", width=2),
+        hovertemplate="%{x|%Y-%m-%d}<br>Invested: " + ccy + " %{y:,.0f}<extra></extra>",
+    )
+    fig.add_scatter(
+        x=portfolio_value_series.index,
+        y=portfolio_value_series.values,
+        name="Portfolio Value",
+        fill="tonexty",
+        fillcolor="rgba(243, 167, 18, 0.12)",
+        line=dict(color="#f3a712", width=2),
+        hovertemplate="%{x|%Y-%m-%d}<br>Value: " + ccy + " %{y:,.0f}<extra></extra>",
+    )
+    fig.update_layout(
+        paper_bgcolor="#0b0f14",
+        plot_bgcolor="#0b0f14",
+        font=dict(color="#e6e6e6"),
+        height=400,
+        margin=dict(t=20, b=20, l=20, r=20),
+        xaxis_title="Date",
+        yaxis_title=f"Value ({ccy})",
+        legend=dict(orientation="h", y=1.08, x=0.0),
+    )
+    st.plotly_chart(fig, use_container_width=True, key="analytics_contribution_growth_chart")
+
+
 def _render_multi_benchmark(mb):
     if not mb:
         return
@@ -484,3 +563,4 @@ def render_analytics_page(ctx):
 
     _render_volatility_regime(vr)
     _render_multi_benchmark(mb)
+    _render_contribution_growth(ctx)
