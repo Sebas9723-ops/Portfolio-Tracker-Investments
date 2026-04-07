@@ -246,11 +246,28 @@ def _render_returns_comparison(ctx):
     start = twr_result.get("start_date", "—")
     end = twr_result.get("end_date", "—")
 
+    invested = float(ctx.get("invested_capital", 0.0))
+    unrealized = float(ctx.get("unrealized_pnl", 0.0))
+    realized = float(ctx.get("realized_pnl", 0.0))
+    total_pnl = unrealized + realized
+    simple_return = total_pnl / invested if invested > 0 else None
+    ccy = ctx.get("base_currency", "")
+
     info_section(
         "Return Measures",
         "TWR (Time-Weighted) is the institutional standard — eliminates the effect of cash flow timing. "
-        "MWR (Money-Weighted / IRR) reflects your actual investor experience including when you deployed capital.",
+        "MWR (Money-Weighted / IRR) reflects your actual investor experience including when you deployed capital. "
+        "Simple Return is the direct total gain vs your cost basis, not annualized.",
     )
+
+    r1c1, r1c2, r1c3 = st.columns(3)
+    simple_str = _fmt(simple_return) if simple_return is not None else "—"
+    pnl_str = f"{ccy} {total_pnl:+,.2f}" if invested > 0 else "—"
+    invested_str = f"{ccy} {invested:,.2f}" if invested > 0 else "—"
+    info_metric(r1c1, "Simple Return", simple_str, "Total gain vs cost basis (unrealized + realized). Not annualized.")
+    info_metric(r1c2, "Total P&L", pnl_str, "Unrealized + realized gain/loss in base currency.")
+    info_metric(r1c3, "Invested Capital", invested_str, "Sum of cost basis across all open positions.")
+
     c1, c2, c3, c4 = st.columns(4)
     info_metric(c1, "TWR", _fmt(twr_val) if twr_val is not None else "—", f"Chain-linked over {n_periods} snapshots ({start} → {end}).")
     info_metric(c2, "MWR (IRR)", _fmt(mwr_val) if mwr_val is not None else "—", f"Annualized IRR from {n_tx} transactions.")
