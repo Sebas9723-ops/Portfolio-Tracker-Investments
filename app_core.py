@@ -3208,7 +3208,7 @@ def compute_mwr(transactions_df: pd.DataFrame, current_value: float) -> dict:
     max_days = max(offsets) if offsets else 1
 
     # Require at least 30 days of history — annualizing a daily rate over a
-    # shorter period produces misleading (often astronomical) numbers.
+    # shorter period produces misleading numbers.
     if max_days < 30:
         return result
 
@@ -3216,8 +3216,10 @@ def compute_mwr(transactions_df: pd.DataFrame, current_value: float) -> dict:
         return sum(a / (1 + daily_rate) ** t for a, t in zip(amounts, offsets))
 
     try:
-        lo = -0.9999 / max(max_days, 1)
-        hi = 5.0 / max(max_days, 1)
+        # Bounds derived from annual rate limits so annualization can never overflow.
+        # lo ≈ daily rate for -99.99% annual  |  hi ≈ daily rate for +500% annual
+        lo = (1.0 - 0.9999) ** (1.0 / 252.0) - 1.0   # ≈ -0.0346 / day
+        hi = (1.0 + 5.0)    ** (1.0 / 252.0) - 1.0   # ≈  0.0071 / day
         npv_lo, npv_hi = npv(lo), npv(hi)
         if npv_lo * npv_hi > 0:
             return result
@@ -3230,8 +3232,7 @@ def compute_mwr(transactions_df: pd.DataFrame, current_value: float) -> dict:
                 npv_lo = npv(lo)
         daily_irr = (lo + hi) / 2.0
         annualized = float((1 + daily_irr) ** 252 - 1)
-        # Sanity check: values outside [-100%, 5000%] are numerical artifacts
-        if np.isfinite(annualized) and -1.0 <= annualized <= 50.0:
+        if np.isfinite(annualized) and -1.0 < annualized <= 5.0:
             result["mwr"] = annualized
     except Exception:
         pass
