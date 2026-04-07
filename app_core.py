@@ -3207,6 +3207,11 @@ def compute_mwr(transactions_df: pd.DataFrame, current_value: float) -> dict:
     amounts = [a for _, a in cash_flows]
     max_days = max(offsets) if offsets else 1
 
+    # Require at least 30 days of history — annualizing a daily rate over a
+    # shorter period produces misleading (often astronomical) numbers.
+    if max_days < 30:
+        return result
+
     def npv(daily_rate: float) -> float:
         return sum(a / (1 + daily_rate) ** t for a, t in zip(amounts, offsets))
 
@@ -3224,7 +3229,10 @@ def compute_mwr(transactions_df: pd.DataFrame, current_value: float) -> dict:
                 lo = mid
                 npv_lo = npv(lo)
         daily_irr = (lo + hi) / 2.0
-        result["mwr"] = float((1 + daily_irr) ** 252 - 1)
+        annualized = float((1 + daily_irr) ** 252 - 1)
+        # Sanity check: values outside [-100%, 5000%] are numerical artifacts
+        if np.isfinite(annualized) and -1.0 <= annualized <= 50.0:
+            result["mwr"] = annualized
     except Exception:
         pass
 
