@@ -497,15 +497,18 @@ def render_dashboard(ctx):
     info_metric(c3, "Cash", f"{ctx['base_currency']} {ctx['cash_total_value']:,.2f}", "Cash balances converted to base currency.")
     info_metric(c4, "Unrealized PnL", f"{ctx['base_currency']} {ctx['unrealized_pnl']:,.2f}", "Open profit and loss.")
 
-    c5, c6, c7, c8 = st.columns(4)
+    c5, c6, c7, c8, c9 = st.columns(5)
     info_metric(c5, "Return", f"{ctx['total_return']:.2%}", "Cumulative return over the available history.")
     info_metric(c6, "Volatility", f"{ctx['volatility']:.2%}", "Annualized portfolio volatility.")
     info_metric(c7, "Sharpe Ratio", f"{ctx['sharpe']:.2f}", "Portfolio Sharpe ratio.")
     invested_cap = float(ctx.get("invested_capital", 0.0))
-    unrealized = float(ctx.get("unrealized_pnl", 0.0))
-    real_return = unrealized / invested_cap if invested_cap > 0 else None
-    cr_str = f"{real_return:.2%}" if real_return is not None else "—"
-    info_metric(c8, "Current Return", cr_str, "Real return since inception: unrealized PnL ÷ invested capital.")
+    total_pnl = float(ctx.get("unrealized_pnl", 0.0)) + float(ctx.get("realized_pnl", 0.0))
+    simple_return = total_pnl / invested_cap if invested_cap > 0 else None
+    sr_str = f"{simple_return:.2%}" if simple_return is not None else "—"
+    info_metric(c8, "Simple Return", sr_str, "Total gain vs cost basis (unrealized + realized). Not annualized.")
+    ccy = ctx.get("base_currency", "")
+    pnl_str = f"{ccy} {total_pnl:+,.2f}" if invested_cap > 0 else "—"
+    info_metric(c9, "Total P&L", pnl_str, "Unrealized + realized gain/loss in base currency.")
 
     summary_df = _build_decision_summary(ctx)
     actions_df, source_label = _build_top_actions_table(ctx)

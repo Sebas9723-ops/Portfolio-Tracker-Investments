@@ -246,11 +246,15 @@ def render_portfolio_page(ctx):
         total_portfolio = pnl["holdings_value"] + ctx["cash_total_value"]
 
         investments_net_worth = total_portfolio + float(ctx.get("non_portfolio_cash_value", 0.0))
-        c1, c2, c3, c4 = st.columns(4)
+        _invested = pnl["invested_capital"]
+        _total_pnl = pnl["unrealized_pnl"] + pnl.get("realized_pnl", 0.0)
+        _simple_return = _total_pnl / _invested if _invested > 0 else None
+        c1, c2, c3, c4, c5 = st.columns(5)
         info_metric(c1, "Investments Net Worth", f"{ctx['base_currency']} {investments_net_worth:,.2f}", "Portfolio value plus all external cash accounts.")
         info_metric(c2, "Total Portfolio", f"{ctx['base_currency']} {total_portfolio:,.2f}", "Holdings plus in-portfolio cash.")
-        info_metric(c3, "Invested Capital", f"{ctx['base_currency']} {pnl['invested_capital']:,.2f}", "Estimated invested capital.")
-        info_metric(c4, "Unrealized PnL", f"{ctx['base_currency']} {pnl['unrealized_pnl']:,.2f}", "Open profit and loss.")
+        info_metric(c3, "Invested Capital", f"{ctx['base_currency']} {_invested:,.2f}", "Estimated invested capital.")
+        info_metric(c4, "Total P&L", f"{ctx['base_currency']} {_total_pnl:+,.2f}", "Unrealized + realized gain/loss.")
+        info_metric(c5, "Simple Return", f"{_simple_return:.2%}" if _simple_return is not None else "—", "Total gain vs cost basis. Not annualized.")
 
         display_cols = [c for c in [
             "Ticker", "Name", "Market Status", "Price Source", "Source", "Market", "Native Currency",
