@@ -29,6 +29,11 @@ import pandas as pd
 import requests
 import yfinance as yf
 
+try:
+    from groq import Groq as _Groq
+except ImportError:
+    _Groq = None
+
 # ── Globals ────────────────────────────────────────────────────────────────────
 
 TODAY = datetime.date.today()
@@ -532,9 +537,10 @@ def run_ai_analysis(prompt: str) -> str:
     api_key = os.environ.get("GROQ_API_KEY", "")
     if not api_key:
         return "⚠️ GROQ_API_KEY no configurada — análisis no disponible."
+    if _Groq is None:
+        return "⚠️ groq SDK no instalado. Instala con: pip install groq"
     try:
-        from groq import Groq
-        client = Groq(api_key=api_key)
+        client = _Groq(api_key=api_key)
 
         last_err = ""
         for model_name in (
@@ -558,7 +564,7 @@ def run_ai_analysis(prompt: str) -> str:
             f"Último error: {last_err[:300]}"
         )
     except Exception as exc:
-        return f"⚠️ Error al importar groq SDK: {exc}\nInstala con: pip install groq"
+        return f"⚠️ Error llamando a Groq: {exc}"
 
 
 def analyze_news_with_groq(news: dict) -> dict:
@@ -596,9 +602,10 @@ Responde ÚNICAMENTE con líneas en este formato exacto, una por noticia, sin te
 NOTICIAS:
 {numbered}"""
 
+    if _Groq is None:
+        return news
     try:
-        from groq import Groq
-        client = Groq(api_key=api_key)
+        client = _Groq(api_key=api_key)
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}],

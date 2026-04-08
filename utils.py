@@ -31,7 +31,7 @@ def get_prices(tickers: list[str]) -> dict[str, float]:
     return prices
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=7200, show_spinner=False)
 def get_historical_data(tickers: list[str], period: str = "2y") -> pd.DataFrame:
     if not tickers:
         return pd.DataFrame()

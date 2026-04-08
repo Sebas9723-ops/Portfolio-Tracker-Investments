@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import html
 from pathlib import Path
 from datetime import date, datetime, timedelta
 
@@ -13,14 +12,12 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from google.oauth2.service_account import Credentials
-from streamlit.components.v1 import html as components_html
-
 from portfolio import public_portfolio
 from utils import get_prices, get_historical_data, get_market_times
 
 
 DEFAULT_RISK_FREE_RATE = 0.045  # fallback — overridden at runtime by get_risk_free_rate()
-N_SIMULATIONS = 8000
+N_SIMULATIONS = 3000
 
 
 # =========================
@@ -2552,22 +2549,20 @@ def get_default_constraints(profile: str):
     return {"max_single_asset": 0.35, "min_bonds": 0.20, "min_gold": 0.10}
 
 
+_BOND_ASSETS = {"BND", "AGG", "IEF", "TLT", "VGIT", "BNDX"}
+_GOLD_ASSETS = {"IGLN.L", "GLD", "IAU", "SGLN.L"}
+
+
 def classify_assets(asset_names):
-    bonds = {"BND", "AGG", "IEF", "TLT", "VGIT", "BNDX"}
-    gold = {"IGLN.L", "GLD", "IAU", "SGLN.L"}
-
-    bond_idx = [i for i, t in enumerate(asset_names) if t in bonds]
-    gold_idx = [i for i, t in enumerate(asset_names) if t in gold]
-
+    bond_idx = [i for i, t in enumerate(asset_names) if t in _BOND_ASSETS]
+    gold_idx = [i for i, t in enumerate(asset_names) if t in _GOLD_ASSETS]
     return bond_idx, gold_idx
 
 
 def bucket_for_ticker(ticker: str):
-    bonds = {"BND", "AGG", "IEF", "TLT", "VGIT", "BNDX"}
-    gold = {"IGLN.L", "GLD", "IAU", "SGLN.L"}
-    if ticker in bonds:
+    if ticker in _BOND_ASSETS:
         return "Bonds"
-    if ticker in gold:
+    if ticker in _GOLD_ASSETS:
         return "Gold"
     return "Equities"
 
