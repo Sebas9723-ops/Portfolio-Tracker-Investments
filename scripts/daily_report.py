@@ -26,6 +26,7 @@ import os
 import time
 
 import pandas as pd
+import requests
 import yfinance as yf
 
 # ── Globals ────────────────────────────────────────────────────────────────────
@@ -635,10 +636,378 @@ NOTICIAS:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 6. PDF GENERATION
+# 6. ANALYTICS — historical data, charts, risk metrics
 # ══════════════════════════════════════════════════════════════════════════════
 
-def generate_pdf(df: pd.DataFrame, analysis: str, news: dict, indices: dict) -> bytes:
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+
+_CHART_BG   = "#0b0f14"
+_CHART_GOLD = "#f3a712"
+_CHART_GRN  = "#00c805"
+_CHART_RED  = "#ff3b30"
+_CHART_GRAY = "#888888"
+_CHART_WHT  = "#e0e0e0"
+_CHART_BLUE = "#4fc3f7"
+
+
+def _chart_to_bytes(fig) -> bytes:
+    import io as _io
+    buf = _io.BytesIO()
+    fig.savefig(buf, format="png", dpi=120, bbox_inches="tight",
+                facecolor=fig.get_facecolor())
+    buf.seek(0)
+    plt.close(fig)
+    return buf.read()
+
+
+def fetch_historical_prices(tickers: list[str], period: str = "1y") -> pd.DataFrame:
+    """Fetch historical close prices. Returns df: index=date, columns=tickers."""
+    if not tickers:
+        return pd.DataFrame()
+    try:
+        raw = yf.download(tickers, period=period, auto_adjust=True,
+                          progress=False, group_by="column")
+        if raw.empty:
+            raise ValueError("empty")
+        if isinstance(raw.columns, pd.MultiIndex):
+            lvl0 = raw.columns.get_level_values(0).unique()
+            if "Close" in lvl0:
+                close = raw["Close"]
+            else:
+                close = raw.xs("Close", axis=1, level=1)
+        else:
+            close = raw[["Close"]].rename(columns={"Close": tickers[0]})
+        close.index = pd.to_datetime(close.index).normalize()
+        return close.sort_index().ffill()
+    except Exception as exc:
+        print(f"[WARN] Historical bulk failed ({exc}), falling back per-ticker...")
+
+    frames = []
+    for t in tickers:
+        try:
+            h = yf.Ticker(t).history(period=period, auto_adjust=True)
+            if not h.empty:
+                s = h["Close"].copy()
+                s.index = pd.to_datetime(s.index).normalize()
+                s.name = t
+                frames.append(s)
+        except Exception:
+            pass
+        time.sleep(0.05)
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, axis=1).sort_index().ffill()
+
+
+def build_portfolio_history(positions: pd.DataFrame,
+                            hist: pd.DataFrame,
+                            currencies: dict) -> pd.Series:
+    """Daily portfolio value in USD using current share counts (approximation)."""
+    if hist.empty:
+        return pd.Series(dtype=float)
+
+    eur = hist["EURUSD=X"].ffill().fillna(1.0) if "EURUSD=X" in hist.columns else pd.Series(1.0, index=hist.index)
+    gbp = hist["GBPUSD=X"].ffill().fillna(1.25) if "GBPUSD=X" in hist.columns else pd.Series(1.25, index=hist.index)
+
+    total = pd.Series(0.0, index=hist.index)
+    for _, pos in positions.iterrows():
+        t      = pos["Ticker"]
+        shares = float(pos["Shares"])
+        ccy    = currencies.get(t, "USD")
+        if t not in hist.columns:
+            continue
+        v = shares * hist[t].ffill()
+        if ccy == "EUR":
+            v = v * eur
+        elif ccy in ("GBP", "GBp"):
+            v = v * gbp / (100 if ccy == "GBp" else 1)
+        total = total + v.reindex(total.index).fillna(0)
+
+    return total[total > 0].sort_index()
+
+
+def calculate_risk_metrics(port_series: pd.Series,
+                           bench_series: pd.Series,
+                           df: pd.DataFrame) -> dict:
+    """Beta, Sharpe, total real return since start, max drawdown, YTD."""
+    m = {}
+
+    # ── Total real return since inception (from cost basis, not annualised) ──
+    cost  = df["Cost Basis"].dropna().sum() if "Cost Basis" in df.columns else 0
+    value = df["Value"].dropna().sum()      if "Value"      in df.columns else 0
+    pnl   = df["P&L $"].dropna().sum()      if "P&L $"      in df.columns else None
+    if cost > 0:
+        m["total_return_pct"] = (value - cost) / cost * 100
+        m["total_pnl"]        = value - cost
+        m["total_invested"]   = cost
+
+    if port_series.empty or len(port_series) < 10:
+        return m
+
+    port_ret = port_series.pct_change().dropna()
+
+    # YTD
+    ytd_start = pd.Timestamp(f"{TODAY.year}-01-01")
+    p_ytd = port_series[port_series.index >= ytd_start]
+    if len(p_ytd) >= 2:
+        m["ytd_return"] = (p_ytd.iloc[-1] / p_ytd.iloc[0] - 1) * 100
+
+    # 30d / 90d returns
+    for days, key in [(30, "return_30d"), (90, "return_90d")]:
+        if len(port_series) >= days:
+            m[key] = (port_series.iloc[-1] / port_series.iloc[-days] - 1) * 100
+
+    # Sharpe (annualised, rf=2%)
+    rf_daily = 0.02 / 252
+    if len(port_ret) >= 20:
+        excess = port_ret - rf_daily
+        m["sharpe"] = round(excess.mean() / excess.std() * 252**0.5, 2) if excess.std() > 0 else 0
+
+    # Max drawdown
+    roll_max = port_series.cummax()
+    m["max_drawdown"] = round(float(((port_series - roll_max) / roll_max).min()) * 100, 2)
+
+    # Beta vs benchmark
+    if not bench_series.empty:
+        bench_ret = bench_series.pct_change().dropna()
+        aligned   = pd.concat([port_ret, bench_ret], axis=1).dropna()
+        aligned.columns = ["p", "b"]
+        if len(aligned) >= 20:
+            m["beta"] = round(aligned.cov().loc["p", "b"] / aligned["b"].var(), 2)
+        b_ytd = bench_series[bench_series.index >= ytd_start]
+        if len(b_ytd) >= 2:
+            m["bench_ytd"] = (b_ytd.iloc[-1] / b_ytd.iloc[0] - 1) * 100
+
+    return m
+
+
+def fetch_52week_data(tickers: list[str], hist: pd.DataFrame) -> dict:
+    """52-week high/low and position within range, derived from history."""
+    result = {}
+    cutoff = pd.Timestamp.now() - pd.DateOffset(years=1)
+    for t in tickers:
+        if t not in hist.columns:
+            continue
+        try:
+            s     = hist[t].dropna()
+            s52   = s[s.index >= cutoff]
+            if s52.empty:
+                continue
+            high  = float(s52.max())
+            low   = float(s52.min())
+            curr  = float(s.iloc[-1])
+            pct   = (curr - low) / (high - low) * 100 if high != low else 50
+            result[t] = {"high": high, "low": low, "current": curr, "pct_range": pct}
+        except Exception:
+            pass
+    return result
+
+
+def fetch_dividend_info(tickers: list[str]) -> list[dict]:
+    """Upcoming dividend data per ticker from yfinance."""
+    results = []
+    for t in tickers:
+        try:
+            info      = yf.Ticker(t).info
+            div_yield = (info.get("dividendYield") or 0) * 100
+            ex_ts     = info.get("exDividendDate")
+            ex_date   = datetime.datetime.fromtimestamp(ex_ts).strftime("%b %d, %Y") if ex_ts else None
+            div_rate  = info.get("dividendRate") or 0
+            if div_rate and div_rate > 0:
+                results.append({
+                    "ticker":    t,
+                    "ex_date":   ex_date or "N/A",
+                    "div_yield": round(div_yield, 2),
+                    "div_rate":  round(div_rate, 4),
+                })
+        except Exception:
+            pass
+        time.sleep(0.1)
+    return results
+
+
+def fetch_fear_greed() -> dict:
+    """CNN Fear & Greed Index. Falls back gracefully."""
+    try:
+        r = requests.get(
+            "https://production.dataviz.cnn.io/index/fearandgreed/graphdata",
+            timeout=6, headers={"User-Agent": "Mozilla/5.0"}
+        )
+        if r.ok:
+            fg = r.json().get("fear_and_greed", {})
+            score  = round(float(fg.get("score", 0)), 1)
+            rating = fg.get("rating", "").replace("_", " ").title()
+            return {"score": score, "rating": rating}
+    except Exception as exc:
+        print(f"[WARN] Fear & Greed fetch failed: {exc}")
+    return {"score": None, "rating": "N/A"}
+
+
+def fetch_economic_calendar() -> list[dict]:
+    """This week's high/medium-impact USD/EUR/GBP events from ForexFactory."""
+    try:
+        r = requests.get(
+            "https://nfs.faireconomy.media/ff_calendar_thisweek.json",
+            timeout=8, headers={"User-Agent": "Mozilla/5.0"}
+        )
+        if r.ok:
+            events = []
+            for ev in r.json():
+                if ev.get("impact", "").lower() not in ("high", "medium"):
+                    continue
+                if ev.get("country", "") not in ("USD", "EUR", "GBP"):
+                    continue
+                events.append({
+                    "date":     ev.get("date", ""),
+                    "time":     ev.get("time", ""),
+                    "country":  ev.get("country", ""),
+                    "event":    ev.get("title", ""),
+                    "impact":   ev.get("impact", "").lower(),
+                    "forecast": ev.get("forecast", "—"),
+                    "previous": ev.get("previous", "—"),
+                })
+            return events[:12]
+    except Exception as exc:
+        print(f"[WARN] Economic calendar fetch failed: {exc}")
+    return []
+
+
+# ── Charts ────────────────────────────────────────────────────────────────────
+
+def build_performance_chart(port_series: pd.Series,
+                            bench_series: pd.Series) -> bytes | None:
+    """Portfolio vs S&P 500 normalised to 100 — last 90 days."""
+    try:
+        if port_series.empty:
+            return None
+        port  = port_series.iloc[-90:] if len(port_series) > 90 else port_series
+        pnorm = port / port.iloc[0] * 100
+
+        fig, ax = plt.subplots(figsize=(10, 3.5), facecolor=_CHART_BG)
+        ax.set_facecolor(_CHART_BG)
+        ax.plot(pnorm.index, pnorm.values, color=_CHART_GOLD, lw=2, label="Portfolio")
+        ax.fill_between(pnorm.index, 100, pnorm.values,
+                        where=(pnorm.values >= 100), alpha=0.15, color=_CHART_GRN)
+        ax.fill_between(pnorm.index, 100, pnorm.values,
+                        where=(pnorm.values < 100),  alpha=0.15, color=_CHART_RED)
+
+        if not bench_series.empty:
+            bnorm = bench_series.reindex(port.index, method="ffill").dropna()
+            if len(bnorm) >= 2:
+                bnorm = bnorm / bnorm.iloc[0] * 100
+                ax.plot(bnorm.index, bnorm.values, color=_CHART_BLUE,
+                        lw=1.5, ls="--", label="S&P 500", alpha=0.85)
+
+        ax.axhline(100, color=_CHART_GRAY, lw=0.5, ls=":")
+        ax.set_title("Portfolio vs S&P 500 — últimos 90 días (base 100)",
+                     color=_CHART_WHT, fontsize=10, pad=8)
+        ax.tick_params(colors=_CHART_GRAY, labelsize=7)
+        for sp in ax.spines.values():
+            sp.set_edgecolor("#1e2530")
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
+        ax.xaxis.set_major_locator(mdates.WeekdayLocator(interval=2))
+        plt.xticks(rotation=30, ha="right", color=_CHART_GRAY)
+        ax.legend(facecolor="#1e2530", edgecolor="none",
+                  labelcolor=_CHART_WHT, fontsize=8, loc="upper left")
+        plt.tight_layout(pad=0.5)
+        return _chart_to_bytes(fig)
+    except Exception as exc:
+        print(f"[WARN] Performance chart failed: {exc}")
+        return None
+
+
+def build_allocation_chart(df: pd.DataFrame) -> bytes | None:
+    """Donut chart of portfolio allocation."""
+    try:
+        d = df[df["Value"].notna() & (df["Value"] > 0)]
+        if d.empty:
+            return None
+        labels = d["Ticker"].tolist()
+        values = d["Value"].tolist()
+        colors = [_CHART_GOLD, _CHART_BLUE, "#81c784", "#ff8a65",
+                  "#ce93d8", "#80cbc4", "#ffcc02", "#ef9a9a"][:len(labels)]
+
+        fig, ax = plt.subplots(figsize=(5.5, 4), facecolor=_CHART_BG)
+        ax.set_facecolor(_CHART_BG)
+        wedges, _, autotexts = ax.pie(
+            values, labels=None, autopct="%1.1f%%", colors=colors,
+            pctdistance=0.75,
+            wedgeprops=dict(width=0.5, edgecolor=_CHART_BG, linewidth=2),
+            startangle=90,
+        )
+        for at in autotexts:
+            at.set_color(_CHART_WHT); at.set_fontsize(7)
+        ax.legend(wedges, labels, loc="center left", bbox_to_anchor=(1, 0.5),
+                  facecolor="#1e2530", edgecolor="none",
+                  labelcolor=_CHART_WHT, fontsize=9)
+        ax.set_title("Asignación", color=_CHART_WHT, fontsize=10, pad=8)
+        plt.tight_layout(pad=0.5)
+        return _chart_to_bytes(fig)
+    except Exception as exc:
+        print(f"[WARN] Allocation chart failed: {exc}")
+        return None
+
+
+def build_ma_chart(df: pd.DataFrame, hist: pd.DataFrame) -> bytes | None:
+    """Horizontal bar: each position's % above/below its 50-day MA."""
+    try:
+        import numpy as np
+        rows = []
+        for _, pos in df.iterrows():
+            t = pos["Ticker"]
+            if t not in hist.columns:
+                continue
+            s = hist[t].dropna()
+            if len(s) < 50:
+                continue
+            ma50 = float(s.iloc[-50:].mean())
+            curr = float(s.iloc[-1])
+            rows.append({"ticker": t, "pct": (curr - ma50) / ma50 * 100})
+        if not rows:
+            return None
+
+        tickers = [r["ticker"] for r in rows]
+        pcts    = [r["pct"]    for r in rows]
+        colors  = [_CHART_GRN if p >= 0 else _CHART_RED for p in pcts]
+
+        fig, ax = plt.subplots(
+            figsize=(7, max(2.5, len(tickers) * 0.65 + 0.5)),
+            facecolor=_CHART_BG
+        )
+        ax.set_facecolor(_CHART_BG)
+        y    = np.arange(len(tickers))
+        bars = ax.barh(y, pcts, color=colors, height=0.5, edgecolor="none")
+        ax.axvline(0, color=_CHART_GRAY, lw=0.8)
+        ax.set_yticks(y); ax.set_yticklabels(tickers, color=_CHART_WHT, fontsize=9)
+        ax.tick_params(axis="x", colors=_CHART_GRAY, labelsize=7)
+        for sp in ax.spines.values():
+            sp.set_edgecolor("#1e2530")
+        for bar, pct in zip(bars, pcts):
+            x  = bar.get_width() + (0.3 if pct >= 0 else -0.3)
+            ha = "left" if pct >= 0 else "right"
+            ax.text(x, bar.get_y() + bar.get_height() / 2,
+                    f"{pct:+.1f}%", va="center", ha=ha,
+                    color=_CHART_WHT, fontsize=7)
+        ax.set_title("Precio vs Media Móvil 50 días",
+                     color=_CHART_WHT, fontsize=10, pad=8)
+        ax.set_xlabel("% por encima / debajo de MA50",
+                      color=_CHART_GRAY, fontsize=7)
+        plt.tight_layout(pad=0.5)
+        return _chart_to_bytes(fig)
+    except Exception as exc:
+        print(f"[WARN] MA chart failed: {exc}")
+        return None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 7. PDF GENERATION
+# ══════════════════════════════════════════════════════════════════════════════
+
+def generate_pdf(df: pd.DataFrame, analysis: str, news: dict, indices: dict,
+                 analytics: dict | None = None) -> bytes:
     from reportlab.lib import colors as rlc
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle
@@ -646,8 +1015,9 @@ def generate_pdf(df: pd.DataFrame, analysis: str, news: dict, indices: dict) -> 
     from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_JUSTIFY, TA_LEFT
     from reportlab.platypus import (
         SimpleDocTemplate, Table, TableStyle, Paragraph,
-        Spacer, HRFlowable, PageBreak,
+        Spacer, HRFlowable, PageBreak, Image as RLImage,
     )
+    import io as _io
 
     # ── Palette ──────────────────────────────────────────────────────────────
     NAVY      = rlc.HexColor("#0b1729")
@@ -825,10 +1195,234 @@ def generate_pdf(df: pd.DataFrame, analysis: str, news: dict, indices: dict) -> 
         idx_table.setStyle(TableStyle(idx_ts))
         story.append(idx_table)
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # ANALYTICS PAGE
+    # ══════════════════════════════════════════════════════════════════════════
+    an = analytics or {}
+
+    story.append(PageBreak())
+    story.append(Paragraph("ANALYTICS", s_section))
+    story.append(HRFlowable(width="100%", thickness=1.5, color=GOLD, spaceAfter=10))
+
+    # ── Risk metrics table ────────────────────────────────────────────────────
+    metrics = an.get("metrics", {})
+    if metrics:
+        def _fmt_pct(v):
+            return f"{v:+.2f}%" if v is not None else "—"
+        def _fmt_val(v, prefix="$"):
+            return f"{prefix}{v:,.2f}" if v is not None else "—"
+
+        color_pct = lambda v: GREEN if (v or 0) >= 0 else RED
+
+        m_data = [
+            [Paragraph("<b>Métrica</b>", s_th), Paragraph("<b>Valor</b>", s_th)],
+        ]
+        rows_cfg = [
+            ("Retorno Real desde Inicio",  metrics.get("total_return_pct"),   "%"),
+            ("P&L Total ($)",              metrics.get("total_pnl"),           "$"),
+            ("Capital Invertido",          metrics.get("total_invested"),      "$_abs"),
+            ("Retorno YTD",                metrics.get("ytd_return"),          "%"),
+            ("Retorno 30 días",            metrics.get("return_30d"),          "%"),
+            ("Retorno 90 días",            metrics.get("return_90d"),          "%"),
+            ("S&P 500 YTD",                metrics.get("bench_ytd"),           "%"),
+            ("Sharpe Ratio (anualizado)",  metrics.get("sharpe"),              "x"),
+            ("Beta vs S&P 500",            metrics.get("beta"),                "x"),
+            ("Max Drawdown",               metrics.get("max_drawdown"),        "%"),
+        ]
+        for label, val, kind in rows_cfg:
+            if val is None:
+                txt = "—"
+                color = BLACK
+            elif kind == "%":
+                txt   = f"{val:+.2f}%"
+                color = GREEN if val >= 0 else RED
+            elif kind == "$":
+                txt   = f"${val:+,.2f}"
+                color = GREEN if val >= 0 else RED
+            elif kind == "$_abs":
+                txt   = f"${val:,.2f}"
+                color = BLACK
+            else:
+                txt   = f"{val:.2f}"
+                color = BLACK
+            m_data.append([
+                Paragraph(label, s_body),
+                Paragraph(f'<font color="{color.hexval() if hasattr(color, "hexval") else "#000"}">{txt}</font>', s_body),
+            ])
+
+        m_table = Table(m_data, colWidths=[10*cm, 7*cm])
+        m_table.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, 0), NAVY),
+            ("TEXTCOLOR",     (0, 0), (-1, 0), GOLD),
+            ("FONTNAME",      (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE",      (0, 0), (-1, -1), 9),
+            ("ROWBACKGROUNDS",(0, 1), (-1, -1), [rlc.white, LGRAY]),
+            ("GRID",          (0, 0), (-1, -1), 0.25, DIVIDER),
+            ("TOPPADDING",    (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        story.append(m_table)
+        story.append(Spacer(1, 14))
+
+    # ── Charts ────────────────────────────────────────────────────────────────
+    perf_img  = an.get("perf_chart")
+    alloc_img = an.get("alloc_chart")
+    ma_img    = an.get("ma_chart")
+
+    if perf_img:
+        story.append(Paragraph("Evolución del Portafolio vs S&P 500", s_section))
+        story.append(RLImage(_io.BytesIO(perf_img), width=17*cm, height=6*cm))
+        story.append(Spacer(1, 10))
+
+    if alloc_img or ma_img:
+        from reportlab.platypus import KeepInFrame
+        row_items = []
+        if alloc_img:
+            row_items.append(RLImage(_io.BytesIO(alloc_img), width=8*cm, height=6.5*cm))
+        if ma_img:
+            row_items.append(RLImage(_io.BytesIO(ma_img),   width=9*cm, height=6.5*cm))
+        if len(row_items) == 2:
+            chart_row = Table([row_items], colWidths=[8.5*cm, 9.5*cm])
+            chart_row.setStyle(TableStyle([("VALIGN", (0,0), (-1,-1), "TOP")]))
+            story.append(chart_row)
+        else:
+            for img in row_items:
+                story.append(img)
+        story.append(Spacer(1, 10))
+
+    # ── 52-week ranges ────────────────────────────────────────────────────────
+    data_52w = an.get("data_52w", {})
+    if data_52w:
+        story.append(Paragraph("Rango 52 Semanas", s_section))
+        story.append(HRFlowable(width="100%", thickness=0.5, color=DIVIDER, spaceAfter=6))
+        w52_rows = [[
+            Paragraph("<b>Ticker</b>", s_th),
+            Paragraph("<b>Mín 52s</b>", s_th),
+            Paragraph("<b>Actual</b>",  s_th),
+            Paragraph("<b>Máx 52s</b>", s_th),
+            Paragraph("<b>% del Rango</b>", s_th),
+        ]]
+        for t, d in data_52w.items():
+            pct  = d["pct_range"]
+            color = GREEN if pct >= 60 else (RED if pct <= 25 else BLACK)
+            w52_rows.append([
+                t,
+                f"${d['low']:,.2f}",
+                f"${d['current']:,.2f}",
+                f"${d['high']:,.2f}",
+                Paragraph(f'<font color="{"#00c805" if pct>=60 else "#ff3b30" if pct<=25 else "#000"}">{pct:.0f}%</font>', s_body),
+            ])
+        t52 = Table(w52_rows, colWidths=[2.5*cm, 3*cm, 3*cm, 3*cm, 4*cm])
+        t52.setStyle(TableStyle([
+            ("BACKGROUND",    (0,0), (-1,0), NAVY),
+            ("TEXTCOLOR",     (0,0), (-1,0), GOLD),
+            ("FONTNAME",      (0,0), (-1,0), "Helvetica-Bold"),
+            ("FONTSIZE",      (0,0), (-1,-1), 9),
+            ("ALIGN",         (1,0), (-1,-1), "RIGHT"),
+            ("ROWBACKGROUNDS",(0,1), (-1,-1), [rlc.white, LGRAY]),
+            ("GRID",          (0,0), (-1,-1), 0.25, DIVIDER),
+            ("TOPPADDING",    (0,0), (-1,-1), 4),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+        ]))
+        story.append(t52)
+        story.append(Spacer(1, 14))
+
+    # ── Dividendos ────────────────────────────────────────────────────────────
+    dividends = an.get("dividends", [])
+    if dividends:
+        story.append(Paragraph("Dividendos de las Posiciones", s_section))
+        story.append(HRFlowable(width="100%", thickness=0.5, color=DIVIDER, spaceAfter=6))
+        div_rows = [[
+            Paragraph("<b>Ticker</b>", s_th),
+            Paragraph("<b>Fecha Ex-Div</b>", s_th),
+            Paragraph("<b>Div/Acción</b>", s_th),
+            Paragraph("<b>Yield</b>", s_th),
+        ]]
+        for d in dividends:
+            div_rows.append([
+                d["ticker"],
+                d["ex_date"],
+                f"${d['div_rate']:.4f}",
+                f"{d['div_yield']:.2f}%",
+            ])
+        tdiv = Table(div_rows, colWidths=[3*cm, 5*cm, 4*cm, 4*cm])
+        tdiv.setStyle(TableStyle([
+            ("BACKGROUND",    (0,0), (-1,0), NAVY),
+            ("TEXTCOLOR",     (0,0), (-1,0), GOLD),
+            ("FONTNAME",      (0,0), (-1,0), "Helvetica-Bold"),
+            ("FONTSIZE",      (0,0), (-1,-1), 9),
+            ("ROWBACKGROUNDS",(0,1), (-1,-1), [rlc.white, LGRAY]),
+            ("GRID",          (0,0), (-1,-1), 0.25, DIVIDER),
+            ("TOPPADDING",    (0,0), (-1,-1), 4),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+        ]))
+        story.append(tdiv)
+        story.append(Spacer(1, 14))
+
+    # ── Fear & Greed + Calendario Económico ───────────────────────────────────
+    fg   = an.get("fear_greed", {})
+    econ = an.get("economic_calendar", [])
+
+    if fg.get("score") is not None or econ:
+        story.append(PageBreak())
+        story.append(Paragraph("INDICADORES DE MERCADO", s_section))
+        story.append(HRFlowable(width="100%", thickness=1.5, color=GOLD, spaceAfter=10))
+
+    if fg.get("score") is not None:
+        score  = fg["score"]
+        rating = fg.get("rating", "")
+        fg_color = (
+            "#00c805" if score >= 60 else
+            "#ff3b30" if score <= 30 else
+            "#f3a712"
+        )
+        story.append(Paragraph(
+            f'<b>Fear &amp; Greed Index (CNN):</b>  '
+            f'<font color="{fg_color}"><b>{score:.0f} — {rating}</b></font>',
+            s_body
+        ))
+        story.append(Spacer(1, 10))
+
+    if econ:
+        story.append(Paragraph("Calendario Económico — Esta Semana", s_section))
+        story.append(HRFlowable(width="100%", thickness=0.5, color=DIVIDER, spaceAfter=6))
+        econ_rows = [[
+            Paragraph("<b>Fecha/Hora</b>", s_th),
+            Paragraph("<b>País</b>", s_th),
+            Paragraph("<b>Evento</b>", s_th),
+            Paragraph("<b>Impacto</b>", s_th),
+            Paragraph("<b>Prev.</b>", s_th),
+            Paragraph("<b>Pronóst.</b>", s_th),
+        ]]
+        for ev in econ:
+            impact_color = "#ff3b30" if ev["impact"] == "high" else "#f3a712"
+            econ_rows.append([
+                f"{ev['date']} {ev['time']}",
+                ev["country"],
+                Paragraph(ev["event"][:45], s_body),
+                Paragraph(f'<font color="{impact_color}">{ev["impact"].upper()}</font>', s_body),
+                ev.get("previous", "—"),
+                ev.get("forecast", "—"),
+            ])
+        tecon = Table(econ_rows, colWidths=[3.5*cm, 1.5*cm, 6*cm, 2*cm, 2*cm, 2.5*cm])
+        tecon.setStyle(TableStyle([
+            ("BACKGROUND",    (0,0), (-1,0), NAVY),
+            ("TEXTCOLOR",     (0,0), (-1,0), GOLD),
+            ("FONTNAME",      (0,0), (-1,0), "Helvetica-Bold"),
+            ("FONTSIZE",      (0,0), (-1,-1), 8),
+            ("ROWBACKGROUNDS",(0,1), (-1,-1), [rlc.white, LGRAY]),
+            ("GRID",          (0,0), (-1,-1), 0.25, DIVIDER),
+            ("TOPPADDING",    (0,0), (-1,-1), 3),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 3),
+            ("VALIGN",        (0,0), (-1,-1), "MIDDLE"),
+        ]))
+        story.append(tecon)
+        story.append(Spacer(1, 14))
+
     story.append(PageBreak())
 
     # ── AI Analysis ───────────────────────────────────────────────────────────
-    story.append(Paragraph("ANÁLISIS IA · CLAUDE", s_section))
+    story.append(Paragraph("ANÁLISIS IA · GROQ", s_section))
     story.append(HRFlowable(width="100%", thickness=1.5, color=GOLD, spaceAfter=8))
 
     for line in analysis.split("\n"):
@@ -973,25 +1567,64 @@ def main():
     total = df["_total"].iloc[0] if not df.empty else 0
     print(f"       Total portfolio value: ${total:,.2f} {BASE_CCY}")
 
-    # ── 5. News ───────────────────────────────────────────────────────────────
-    print("[5/8] Fetching news per ticker...")
+    # ── 5. Analytics data ─────────────────────────────────────────────────────
+    print("[5/12] Fetching historical prices (1 year)...")
+    hist_tickers = tickers + ["^GSPC", "EURUSD=X", "GBPUSD=X"]
+    hist = fetch_historical_prices(hist_tickers, period="1y")
+    print(f"       History: {len(hist)} days × {len(hist.columns)} tickers")
+
+    print("[6/12] Building portfolio history & risk metrics...")
+    port_series  = build_portfolio_history(positions, hist, currencies)
+    bench_series = hist["^GSPC"].dropna() if "^GSPC" in hist.columns else pd.Series(dtype=float)
+    metrics      = calculate_risk_metrics(port_series, bench_series, df)
+    print(f"       Total return: {metrics.get('total_return_pct', 'N/A')}")
+
+    print("[7/12] Computing 52-week ranges...")
+    data_52w = fetch_52week_data(tickers, hist)
+
+    print("[8/12] Fetching dividend info...")
+    dividends = fetch_dividend_info(tickers)
+
+    print("[9/12] Fetching Fear & Greed Index...")
+    fear_greed = fetch_fear_greed()
+    print(f"       F&G: {fear_greed}")
+
+    print("[10/12] Fetching economic calendar...")
+    economic_calendar = fetch_economic_calendar()
+    print(f"       {len(economic_calendar)} events")
+
+    print("[11/12] Building charts...")
+    perf_chart  = build_performance_chart(port_series, bench_series)
+    alloc_chart = build_allocation_chart(df)
+    ma_chart    = build_ma_chart(df, hist)
+
+    analytics = {
+        "metrics":           metrics,
+        "data_52w":          data_52w,
+        "dividends":         dividends,
+        "fear_greed":        fear_greed,
+        "economic_calendar": economic_calendar,
+        "perf_chart":        perf_chart,
+        "alloc_chart":       alloc_chart,
+        "ma_chart":          ma_chart,
+    }
+
+    # ── News ──────────────────────────────────────────────────────────────────
+    print("[12/12 — part A] Fetching news per ticker...")
     news = fetch_news(tickers, max_per_ticker=3)
     n_articles = sum(len(v) for v in news.values())
     print(f"       {n_articles} news articles fetched")
 
-    # ── 6. News analysis ──────────────────────────────────────────────────────
-    print("[6/8] Analysing news with Groq...")
+    print("[12/12 — part B] Analysing news with Groq...")
     news = analyze_news_with_groq(news)
 
-    # ── 7. Portfolio analysis ─────────────────────────────────────────────────
-    print("[7/8] Calling Groq for portfolio analysis...")
+    print("[12/12 — part C] Calling Groq for portfolio analysis...")
     prompt   = build_prompt(df, news, index_prices)
     analysis = run_ai_analysis(prompt)
     print(f"       Analysis: {len(analysis)} characters")
 
-    # ── 8. PDF ────────────────────────────────────────────────────────────────
-    print("[8/8] Generating PDF...")
-    pdf_bytes = generate_pdf(df, analysis, news, index_prices)
+    print("[12/12 — part D] Generating PDF...")
+    pdf_bytes = generate_pdf(df, analysis, news, index_prices, analytics=analytics)
     out_path  = f"/tmp/portfolio_brief_{TODAY.strftime('%Y%m%d')}.pdf"
     with open(out_path, "wb") as f:
         f.write(pdf_bytes)
