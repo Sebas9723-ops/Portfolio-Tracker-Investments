@@ -13,33 +13,66 @@ from app_core import (
 @st.cache_data(ttl=60, show_spinner=False)
 def _fetch_watchlist_data(tickers: tuple) -> pd.DataFrame:
     import yfinance as yf
+
+    def _safe_float(v, default=None):
+        try:
+            f = float(v)
+            return f if f == f else default  # NaN check
+        except Exception:
+            return default
+
     rows = []
     for ticker in tickers:
+        row = {
+            "Ticker": ticker, "Name": ticker,
+            "Price": None, "Day Δ": None, "Day Δ%": None,
+            "52W High": None, "52W Low": None,
+            "Volume": None, "P/E": None, "Mkt Cap": None,
+        }
         try:
-            info = yf.Ticker(ticker).info or {}
-            current = float(info.get("currentPrice") or info.get("regularMarketPrice") or 0)
-            prev = float(info.get("previousClose") or info.get("regularMarketPreviousClose") or current)
-            day_chg = current - prev
-            day_pct = (day_chg / prev * 100) if prev else 0.0
-            rows.append({
-                "Ticker": ticker,
-                "Name": (info.get("longName") or info.get("shortName") or ticker)[:28],
-                "Price": round(current, 2),
-                "Day Δ": round(day_chg, 2),
-                "Day Δ%": round(day_pct, 2),
-                "52W High": round(float(info["fiftyTwoWeekHigh"]), 2) if info.get("fiftyTwoWeekHigh") else None,
-                "52W Low": round(float(info["fiftyTwoWeekLow"]), 2) if info.get("fiftyTwoWeekLow") else None,
-                "Volume": info.get("volume") or info.get("regularMarketVolume"),
-                "P/E": round(float(info["trailingPE"]), 1) if info.get("trailingPE") else None,
-                "Mkt Cap": info.get("marketCap"),
-            })
+            t = yf.Ticker(ticker)
+
+            # fast_info is reliable for core price data
+            fi = t.fast_info
+            current = _safe_float(getattr(fi, "last_price", None))
+            prev    = _safe_float(getattr(fi, "previous_close", None))
+
+            # Fallback: last row of recent history
+            if current is None:
+                hist = t.history(period="2d", auto_adjust=True)
+                if not hist.empty:
+                    current = _safe_float(hist["Close"].iloc[-1])
+                    prev    = _safe_float(hist["Close"].iloc[-2]) if len(hist) >= 2 else current
+
+            if current is not None:
+                prev = prev or current
+                day_chg = current - prev
+                day_pct = (day_chg / prev * 100) if prev else 0.0
+                row.update({
+                    "Price":   round(current, 4),
+                    "Day Δ":   round(day_chg, 4),
+                    "Day Δ%":  round(day_pct, 2),
+                    "52W High": round(h, 4) if (h := _safe_float(getattr(fi, "year_high", None))) else None,
+                    "52W Low":  round(l, 4) if (l := _safe_float(getattr(fi, "year_low", None))) else None,
+                    "Volume":   getattr(fi, "last_volume", None) or getattr(fi, "three_month_average_volume", None),
+                    "Mkt Cap":  _safe_float(getattr(fi, "market_cap", None)),
+                })
+
+            # .info only for supplementary fields (P/E, name) — wrapped separately
+            try:
+                info = t.info or {}
+                row["Name"] = (info.get("longName") or info.get("shortName") or ticker)[:28]
+                if info.get("trailingPE"):
+                    row["P/E"] = round(float(info["trailingPE"]), 1)
+                if row["Mkt Cap"] is None:
+                    row["Mkt Cap"] = info.get("marketCap")
+            except Exception:
+                pass
+
         except Exception:
-            rows.append({
-                "Ticker": ticker, "Name": ticker,
-                "Price": None, "Day Δ": None, "Day Δ%": None,
-                "52W High": None, "52W Low": None,
-                "Volume": None, "P/E": None, "Mkt Cap": None,
-            })
+            pass
+
+        rows.append(row)
     return pd.DataFrame(rows) if rows else pd.DataFrame()
 
 
