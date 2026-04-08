@@ -98,26 +98,22 @@ def load_portfolio() -> pd.DataFrame:
 
 
 def _load_from_private_portfolio() -> pd.DataFrame:
-    """Import real_portfolio from private_portfolio.py in the repo root."""
+    """Load portfolio from PORTFOLIO_JSON env var (GitHub Secret)."""
+    raw = os.environ.get("PORTFOLIO_JSON", "")
+    if not raw:
+        print("[WARN] PORTFOLIO_JSON secret not set")
+        return pd.DataFrame(columns=["Ticker", "Name", "Shares", "AvgCost"])
     try:
-        import importlib.util
-        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        spec = importlib.util.spec_from_file_location(
-            "private_portfolio",
-            os.path.join(repo_root, "private_portfolio.py")
-        )
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        portfolio = mod.real_portfolio
+        data = json.loads(raw)
         rows = [
-            {"Ticker": ticker, "Name": data.get("name", ticker),
-             "Shares": float(data.get("shares", 0)), "AvgCost": 0.0}
-            for ticker, data in portfolio.items()
-            if float(data.get("shares", 0)) > 0
+            {"Ticker": p["ticker"], "Name": p.get("name", p["ticker"]),
+             "Shares": float(p.get("shares", 0)), "AvgCost": float(p.get("avg_cost", 0))}
+            for p in data
+            if float(p.get("shares", 0)) > 0
         ]
         return pd.DataFrame(rows)
     except Exception as exc:
-        print(f"[WARN] Could not load private_portfolio.py: {exc}")
+        print(f"[WARN] Could not parse PORTFOLIO_JSON: {exc}")
         return pd.DataFrame(columns=["Ticker", "Name", "Shares", "AvgCost"])
 
 
