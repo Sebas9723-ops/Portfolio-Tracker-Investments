@@ -366,7 +366,7 @@ def build_app_context_runtime(app_scope: str):
         from data_providers import load_market_data_private, data_source_labels, check_alpaca_status
         live_prices_native, asset_hist_native = load_market_data_private(tickers=tickers, period="2y")
         data_source_info = data_source_labels(tickers)
-        alpaca_available = check_alpaca_status()
+        alpaca_available, _ = check_alpaca_status()
     else:
         live_prices_native, asset_hist_native = load_market_data_with_proxies(tickers=tickers, period="2y")
         data_source_info = {}

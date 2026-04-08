@@ -269,8 +269,12 @@ def render_portfolio_page(ctx):
         # Fix 5 — warn if Alpaca unavailable (US tickers are 15-min delayed)
         if ctx.get("app_scope") == "private":
             from data_providers import check_alpaca_status
-            if not check_alpaca_status():
-                st.warning("⚠️ Alpaca feed unavailable — US equity prices are ~15 min delayed (yfinance fallback).")
+            alpaca_ok, alpaca_err = check_alpaca_status()
+            if not alpaca_ok:
+                msg = f"⚠️ Alpaca feed unavailable — US equity prices are ~15 min delayed (yfinance fallback)."
+                if alpaca_err:
+                    msg += f" Error: {alpaca_err}"
+                st.warning(msg)
 
         st.dataframe(df_fresh[display_cols], use_container_width=True, height=360)
         st.caption(f"Prices refreshed at {datetime.now().strftime('%H:%M:%S')} · Market prices may be delayed")

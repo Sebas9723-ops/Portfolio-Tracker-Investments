@@ -40,19 +40,21 @@ _SOURCE_META: dict[str, tuple[str, int]] = {
 }
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def check_alpaca_status() -> bool:
-    """Returns True if Alpaca IEX credentials are valid and feed is reachable."""
+@st.cache_data(ttl=120, show_spinner=False)
+def check_alpaca_status() -> tuple[bool, str]:
+    """Returns (ok, error_message). ok=True if Alpaca is reachable."""
     try:
         result = _alpaca_latest_prices(["SPY"])
-        return bool(result)
-    except Exception:
-        return False
+        if result:
+            return True, ""
+        return False, "No data returned for SPY"
+    except Exception as e:
+        return False, str(e)
 
 
 def data_source_labels(tickers: list[str]) -> dict[str, str]:
     """Return a badge label for each ticker reflecting actual data source."""
-    alpaca_ok = check_alpaca_status()
+    alpaca_ok, _ = check_alpaca_status()
     us_label = "Live · Alpaca" if alpaca_ok else "~15 min · Yahoo"
     labels = {
         "US":       us_label,
@@ -79,13 +81,22 @@ def _alpaca_client():
 def _alpaca_latest_prices(tickers: list[str]) -> dict[str, float]:
     if not tickers:
         return {}
-    try:
-        from alpaca.data.requests import StockLatestTradeRequest
-        req = StockLatestTradeRequest(symbol_or_symbols=tickers, feed="iex")
-        trades = _alpaca_client().get_stock_latest_trade(req)
-        return {t: float(trades[t].price) for t in tickers if t in trades}
-    except Exception:
-        return {}
+    from alpaca.data.requests import StockLatestTradeRequest
+    client = _alpaca_client()
+    # Try without feed first (uses account's default), then iex as fallback
+    for feed in (None, "iex"):
+        try:
+            kwargs = {"symbol_or_symbols": tickers}
+            if feed:
+                kwargs["feed"] = feed
+            req = StockLatestTradeRequest(**kwargs)
+            trades = client.get_stock_latest_trade(req)
+            result = {t: float(trades[t].price) for t in tickers if t in trades}
+            if result:
+                return result
+        except Exception as exc:
+            print(f"[Alpaca] latest_prices feed={feed!r} failed: {exc}")
+    return {}
 
 
 # ── Alpaca: historical daily bars ─────────────────────────────────────────────
@@ -103,14 +114,24 @@ def _alpaca_historical(tickers: list[str], period: str = "2y") -> pd.DataFrame:
         days = _PERIOD_DAYS.get(period, 730)
         start = datetime.now(timezone.utc) - timedelta(days=days)
 
-        req = StockBarsRequest(
-            symbol_or_symbols=tickers,
-            timeframe=TimeFrame.Day,
-            start=start,
-            feed="iex",
-            adjustment="all",
-        )
-        raw = _alpaca_client().get_stock_bars(req).df
+        # Try without feed first, then iex as fallback
+        raw = pd.DataFrame()
+        for feed in (None, "iex"):
+            try:
+                kwargs = dict(
+                    symbol_or_symbols=tickers,
+                    timeframe=TimeFrame.Day,
+                    start=start,
+                    adjustment="all",
+                )
+                if feed:
+                    kwargs["feed"] = feed
+                req = StockBarsRequest(**kwargs)
+                raw = _alpaca_client().get_stock_bars(req).df
+                if not raw.empty:
+                    break
+            except Exception as exc:
+                print(f"[Alpaca] historical feed={feed!r} failed: {exc}")
 
         if raw.empty:
             return pd.DataFrame()
