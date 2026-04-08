@@ -1,0 +1,20 @@
+name: Keep Alive
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'   # every 6 hours
+  workflow_dispatch:          # allow manual trigger
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping private app
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 https://sebastian-portfolio.streamlit.app/)
+          echo "Private app HTTP status: $STATUS"
+
+      - name: Ping public app
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 https://portfolio-management-simulator.streamlit.app/)
+          echo "Public app HTTP status: $STATUS"

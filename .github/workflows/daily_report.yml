@@ -1,0 +1,52 @@
+name: Daily Portfolio Report
+
+on:
+  schedule:
+    # 12:30 PM UTC = 7:30 AM ET = 6:30 AM Colombia
+    # Runs Monday–Friday, 1 hour before US market opens
+    - cron: '30 12 * * 1-5'
+  workflow_dispatch:   # allow manual trigger from GitHub Actions tab
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install --quiet \
+            google-generativeai \
+            yfinance \
+            gspread \
+            google-auth \
+            reportlab \
+            requests \
+            pandas
+
+      - name: Generate and send daily report
+        env:
+          GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
+          SHEETS_SPREADSHEET_ID:    ${{ secrets.SHEETS_SPREADSHEET_ID }}
+          SHEETS_WORKSHEET:         ${{ secrets.SHEETS_WORKSHEET }}
+          GEMINI_API_KEY:           ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_BOT_TOKEN:       ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:         ${{ secrets.TELEGRAM_CHAT_ID }}
+          BASE_CURRENCY:            ${{ secrets.BASE_CURRENCY }}
+        run: python scripts/daily_report.py
+
+      - name: Upload PDF artifact (30-day archive)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: portfolio-brief-${{ github.run_number }}
+          path: /tmp/portfolio_brief_*.pdf
+          retention-days: 30

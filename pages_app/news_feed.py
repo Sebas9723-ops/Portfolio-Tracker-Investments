@@ -135,9 +135,9 @@ def _parse_iso_date(date_str: str | None) -> datetime.datetime | None:
 
 # ── Cached fetcher ────────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=86400, show_spinner=False)
 def _fetch_all_feeds(selected_sources: tuple) -> list[dict]:
-    """Fetch all selected RSS feeds. Cache for 5 minutes."""
+    """Fetch all selected RSS feeds. Cache for 24 hours."""
     all_articles = []
     for source in selected_sources:
         url = RSS_FEEDS.get(source, "")
@@ -202,7 +202,7 @@ def _render_article_card(article: dict):
 def render_news_feed_page(ctx):
     render_page_title("News Feed")
 
-    @st.fragment(run_every=300)
+    @st.fragment(run_every=3600)
     def _live():
         st.caption(f"Last refreshed: {datetime.datetime.now().strftime('%H:%M:%S')}")
 
@@ -227,7 +227,7 @@ def render_news_feed_page(ctx):
                 st.cache_data.clear()
                 st.rerun()
         with col_count:
-            st.caption("Auto-refreshes every 5 minutes. Showing up to 50 articles.")
+            st.caption("Auto-refreshes every hour. Showing up to 50 articles.")
 
         if not selected_sources:
             st.info("Select at least one news source above.")
