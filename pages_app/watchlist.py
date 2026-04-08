@@ -88,14 +88,16 @@ def _safe_float(v, default=None):
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def _fetch_tickers(tickers: tuple, preset_names: dict | None = None) -> pd.DataFrame:
+def _fetch_tickers(tickers: tuple, preset_names: tuple = ()) -> pd.DataFrame:
+    """preset_names: tuple of (ticker, name) pairs — must be hashable for cache."""
     import yfinance as yf
 
+    names_map = dict(preset_names)
     rows = []
     for ticker in tickers:
         row = {
             "Ticker": ticker,
-            "Name": (preset_names or {}).get(ticker, ticker),
+            "Name": names_map.get(ticker, ticker),
             "Price": None, "Day Δ": None, "Day Δ%": None,
             "52W High": None, "52W Low": None,
             "Volume": None, "Mkt Cap": None,
@@ -127,8 +129,8 @@ def _fetch_tickers(tickers: tuple, preset_names: dict | None = None) -> pd.DataF
                     "Mkt Cap":  _safe_float(getattr(fi, "market_cap", None)),
                 })
 
-            # Name override from .info (non-critical)
-            if (preset_names or {}).get(ticker) is None:
+            # Name from .info only when no preset name provided
+            if not names_map.get(ticker):
                 try:
                     info = t.info or {}
                     row["Name"] = (info.get("longName") or info.get("shortName") or ticker)[:30]
@@ -209,8 +211,8 @@ def _render_table(df: pd.DataFrame, show_mktcap: bool = True):
 @st.fragment(run_every=60)
 def _render_summary_bar():
     tickers = tuple(t for t, _ in _SUMMARY_TICKERS)
-    labels  = {t: label for t, label in _SUMMARY_TICKERS}
-    df = _fetch_tickers(tickers, preset_names=labels)
+    names   = tuple(_SUMMARY_TICKERS)  # already (ticker, label) pairs
+    df = _fetch_tickers(tickers, preset_names=names)
     if df.empty:
         return
 
@@ -255,29 +257,21 @@ def render_watchlist_page(ctx):
     tab_labels = list(_PRESETS.keys()) + ["My Watchlist"]
     tabs = st.tabs(tab_labels)
 
-    @st.fragment(run_every=60)
-    def _render_preset_tabs():
-        for tab, (category, meta) in zip(tabs[:-1], _PRESETS.items()):
-            with tab:
-                with st.spinner(f"Loading {category}..."):
-                    df = _fetch_tickers(tuple(meta["tickers"]), preset_names=meta["names"])
-                show_cap = category not in ("FX", "Rates & Bonds", "Indices", "Futures")
-                _render_table(df, show_mktcap=show_cap)
+    for tab, (category, meta) in zip(tabs[:-1], _PRESETS.items()):
+        with tab:
+            df = _fetch_tickers(
+                tuple(meta["tickers"]),
+                preset_names=tuple(meta["names"].items()),
+            )
+            show_cap = category not in ("FX", "Rates & Bonds", "Indices", "Futures")
+            _render_table(df, show_mktcap=show_cap)
 
-    _render_preset_tabs()
-
-    # My Watchlist tab
     with tabs[-1]:
-        @st.fragment(run_every=60)
-        def _render_custom_tab():
-            if not custom_tickers:
-                st.info("Your watchlist is empty. Add tickers below.")
-                return
-            with st.spinner("Loading prices..."):
-                df = _fetch_tickers(tuple(sorted(custom_tickers)))
+        if not custom_tickers:
+            st.info("Your watchlist is empty. Add tickers below.")
+        else:
+            df = _fetch_tickers(tuple(sorted(custom_tickers)))
             _render_table(df, show_mktcap=True)
-
-        _render_custom_tab()
 
     # ── Manage ────────────────────────────────────────────────────────────────
     st.divider()
