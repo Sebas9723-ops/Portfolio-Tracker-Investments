@@ -514,7 +514,7 @@ def _render_correlation_heatmap(ctx):
         text=text,
         texttemplate="%{text}",
         textfont=dict(size=12, color="#e6e6e6"),
-        colorbar=dict(title="r", tickfont=dict(color="#e6e6e6"), titlefont=dict(color="#e6e6e6")),
+        colorbar=dict(title="r"),
     ))
     fig.update_layout(
         paper_bgcolor="#0b0f14",
