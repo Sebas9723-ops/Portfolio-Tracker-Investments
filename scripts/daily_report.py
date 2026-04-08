@@ -406,52 +406,39 @@ Tono: profesional e institucional, estilo Bloomberg Intelligence."""
 
 
 def run_ai_analysis(prompt: str) -> str:
+    """Call Gemini using the new google-genai SDK (v1 endpoint)."""
     api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
         return "⚠️ GEMINI_API_KEY no configurada — análisis no disponible."
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        # Try models in order; skip on per-model errors and try next
-        _SKIP_ERRORS = (
-            "quota", "429", "404", "not found", "deprecated",
-            "permission", "forbidden", "disabled", "invalid",
-            "service", "unavailable", "resource", "billing",
-        )
+        from google import genai
+        client = genai.Client(api_key=api_key)
+
         last_err = ""
         for model_name in (
             "gemini-2.0-flash",
             "gemini-1.5-flash",
-            "gemini-1.5-flash-latest",
             "gemini-1.5-flash-8b",
             "gemini-1.0-pro",
         ):
             try:
-                model = genai.GenerativeModel(model_name)
-                response = model.generate_content(prompt)
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                )
                 print(f"[Gemini] Success with model: {model_name}")
                 return response.text
             except Exception as model_exc:
                 last_err = str(model_exc)
-                err_low = last_err.lower()
                 print(f"[Gemini] {model_name} failed: {last_err[:200]}")
-                if any(x in err_low for x in _SKIP_ERRORS):
-                    continue  # try next model
-                raise  # truly unexpected — surface it
+                continue  # always try next model
 
-        # All models failed — return helpful message in the PDF
         return (
-            "⚠️ Gemini no disponible con la clave configurada.\n\n"
-            f"Último error: {last_err[:300]}\n\n"
-            "SOLUCIÓN: Obtén una clave gratuita correcta en aistudio.google.com\n"
-            "1. Abre aistudio.google.com\n"
-            "2. Clic en 'Get API key' → 'Create API key in new project'\n"
-            "3. Copia la clave (empieza con AIzaSy...)\n"
-            "4. Ve a GitHub repo → Settings → Secrets → GEMINI_API_KEY → Update\n\n"
-            "IMPORTANTE: La clave debe ser de AI Studio, NO de Google Cloud Console."
+            "⚠️ Gemini no respondió con ningún modelo.\n\n"
+            f"Último error: {last_err[:300]}"
         )
     except Exception as exc:
-        return f"⚠️ Error al llamar a Gemini API: {exc}"
+        return f"⚠️ Error al importar google-genai SDK: {exc}\nInstala con: pip install google-genai"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
