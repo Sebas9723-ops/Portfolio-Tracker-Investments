@@ -1032,6 +1032,7 @@ def generate_pdf(df: pd.DataFrame, analysis: str, news: dict, indices: dict,
     LGRAY     = rlc.HexColor("#f4f5f7")
     MGRAY     = rlc.HexColor("#888888")
     DARK      = rlc.HexColor("#1a1a1a")
+    BLACK     = rlc.HexColor("#000000")
     GREEN     = rlc.HexColor("#1a7a1a")
     RED       = rlc.HexColor("#cc2020")
     DIVIDER   = rlc.HexColor("#dddddd")
@@ -1050,6 +1051,7 @@ def generate_pdf(df: pd.DataFrame, analysis: str, news: dict, indices: dict,
     s_msub    = S("sms",  fontName="Helvetica",      fontSize=8,  textColor=MGRAY, leading=10, alignment=TA_CENTER)
     s_ticker  = S("stk",  fontName="Helvetica-Bold", fontSize=10, textColor=NAVY,  leading=13, spaceBefore=8, spaceAfter=3)
     s_news    = S("snws", fontName="Helvetica",      fontSize=8.5, textColor=DARK, leading=12, leftIndent=10, spaceAfter=5)
+    s_th      = S("sth",  fontName="Helvetica-Bold", fontSize=9,  textColor=rlc.white, leading=12)
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
