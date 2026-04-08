@@ -1,4 +1,5 @@
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 from app_core import (
@@ -83,3 +84,109 @@ def render_transactions_page(ctx):
         use_container_width=True,
         height=440,
     )
+
+    # ── DCA Tracker ───────────────────────────────────────────────────────────
+    asset_hist = ctx.get("asset_hist_native", pd.DataFrame())
+    tracked = sorted(tx_df["ticker"].str.upper().unique())
+    tracked = [t for t in tracked if t in asset_hist.columns]
+
+    if not tracked:
+        return
+
+    info_section(
+        "DCA Tracker",
+        "Average cost evolution versus market price per position. "
+        "Green markers = buy entries. Blue dotted line = running avg cost. "
+        "When the price line is above the avg cost line, the position is in profit.",
+    )
+
+    for ticker in tracked:
+        ticker_tx = work[work["ticker"].str.upper() == ticker].sort_values("date")
+
+        # Reconstruct running avg cost from transactions
+        running_shares = 0.0
+        running_cost   = 0.0
+        avg_cost_pts: list[dict] = []
+
+        for _, row in ticker_tx.iterrows():
+            t = str(row["type"]).upper()
+            if t == "BUY":
+                running_shares += float(row["shares"])
+                running_cost   += float(row["shares"]) * float(row["price"]) + float(row["fees"])
+            elif t == "SELL" and running_shares > 0:
+                avg_per = running_cost / running_shares
+                running_cost   -= float(row["shares"]) * avg_per
+                running_shares -= float(row["shares"])
+                running_shares  = max(running_shares, 0.0)
+                running_cost    = max(running_cost, 0.0)
+
+            if running_shares > 1e-9:
+                avg_cost_pts.append({"date": row["date"], "avg_cost": running_cost / running_shares})
+
+        if not avg_cost_pts:
+            continue
+
+        price_series = pd.to_numeric(asset_hist[ticker], errors="coerce").dropna()
+        price_series.index = pd.to_datetime(price_series.index)
+        if price_series.empty:
+            continue
+
+        first_tx_date = pd.to_datetime(avg_cost_pts[0]["date"])
+        price_series  = price_series[price_series.index >= first_tx_date]
+        if price_series.empty:
+            continue
+
+        avg_s = (
+            pd.DataFrame(avg_cost_pts)
+            .set_index("date")["avg_cost"]
+            .reindex(price_series.index)
+            .ffill()
+            .bfill()
+        )
+
+        current_price = float(price_series.iloc[-1])
+        current_avg   = float(avg_s.iloc[-1]) if not avg_s.empty else None
+
+        if current_avg:
+            gain_pct = (current_price / current_avg - 1) * 100
+            st.metric(
+                label=ticker,
+                value=f"{current_price:.4f}",
+                delta=f"{gain_pct:+.2f}% vs avg cost {current_avg:.4f}",
+                delta_color="normal" if gain_pct >= 0 else "inverse",
+            )
+
+        buys = ticker_tx[ticker_tx["type"].str.upper() == "BUY"]
+
+        fig = go.Figure()
+        fig.add_scatter(
+            x=price_series.index, y=price_series.values,
+            name="Market Price", mode="lines",
+            line=dict(color="#f3a712", width=2),
+            hovertemplate="%{x|%Y-%m-%d}<br>Price: %{y:.4f}<extra></extra>",
+        )
+        fig.add_scatter(
+            x=avg_s.index, y=avg_s.values,
+            name="Avg Cost (DCA)", mode="lines",
+            line=dict(color="#4db8ff", width=2, dash="dot"),
+            hovertemplate="%{x|%Y-%m-%d}<br>Avg Cost: %{y:.4f}<extra></extra>",
+        )
+        if not buys.empty:
+            fig.add_scatter(
+                x=pd.to_datetime(buys["date"]), y=buys["price"],
+                name="Buy", mode="markers",
+                marker=dict(color="#4dff4d", size=9, symbol="triangle-up"),
+                hovertemplate="%{x|%Y-%m-%d}<br>Buy at: %{y:.4f}<extra></extra>",
+            )
+        fig.update_layout(
+            paper_bgcolor="#0b0f14",
+            plot_bgcolor="#0b0f14",
+            font=dict(color="#e6e6e6"),
+            height=300,
+            margin=dict(t=30, b=20, l=20, r=20),
+            xaxis_title="",
+            yaxis_title="Price (native currency)",
+            legend=dict(orientation="h", y=1.12, x=0.0),
+            title=dict(text=ticker, font=dict(color="#f3a712", size=13)),
+        )
+        st.plotly_chart(fig, use_container_width=True, key=f"dca_{ticker}")

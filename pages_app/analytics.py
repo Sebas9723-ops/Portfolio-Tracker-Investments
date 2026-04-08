@@ -487,6 +487,47 @@ def _render_contribution_growth(ctx):
     st.plotly_chart(fig, use_container_width=True, key="analytics_contribution_growth_chart")
 
 
+def _render_correlation_heatmap(ctx):
+    asset_returns = ctx.get("asset_returns")
+    if asset_returns is None or asset_returns.empty or asset_returns.shape[1] < 2:
+        return
+
+    corr = asset_returns.corr()
+    tickers = corr.columns.tolist()
+    z = corr.values.tolist()
+    text = [[f"{v:.2f}" for v in row] for row in corr.values]
+
+    info_section(
+        "Correlation Matrix",
+        "Pairwise return correlation between holdings over the available history. "
+        "1 = move in lockstep · 0 = uncorrelated · −1 = move in opposite directions. "
+        "High correlation between positions means less real diversification.",
+    )
+
+    fig = go.Figure(go.Heatmap(
+        z=z,
+        x=tickers,
+        y=tickers,
+        colorscale="RdBu_r",
+        zmin=-1,
+        zmax=1,
+        text=text,
+        texttemplate="%{text}",
+        textfont=dict(size=12, color="#e6e6e6"),
+        colorbar=dict(title="r", tickfont=dict(color="#e6e6e6"), titlefont=dict(color="#e6e6e6")),
+    ))
+    fig.update_layout(
+        paper_bgcolor="#0b0f14",
+        plot_bgcolor="#0b0f14",
+        font=dict(color="#e6e6e6"),
+        height=max(320, len(tickers) * 65),
+        margin=dict(t=20, b=20, l=20, r=20),
+        xaxis=dict(tickfont=dict(color="#f3a712")),
+        yaxis=dict(tickfont=dict(color="#f3a712")),
+    )
+    st.plotly_chart(fig, use_container_width=True, key="analytics_correlation_heatmap")
+
+
 def _render_multi_benchmark(mb):
     if not mb:
         return
@@ -576,3 +617,4 @@ def render_analytics_page(ctx):
     _render_volatility_regime(vr)
     _render_multi_benchmark(mb)
     _render_contribution_growth(ctx)
+    _render_correlation_heatmap(ctx)

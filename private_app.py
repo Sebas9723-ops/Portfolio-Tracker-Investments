@@ -26,6 +26,7 @@ from pages_app.whatif import render_whatif_page
 from pages_app.alerts import render_alerts_page
 from pages_app.income import render_income_page
 from pages_app.investment_horizon import render_investment_horizon_page
+from pages_app.xtb_import import render_xtb_import_page
 
 
 from PIL import Image as _Image
@@ -120,6 +121,7 @@ _NAV_PAGES = [
     "Custom Alerts",
     "Income",
     "Investment Horizon",
+    "XTB Import",
 ]
 
 if st.session_state.get("private_page_navigation") not in _NAV_PAGES:
@@ -189,3 +191,5 @@ elif page_name == "Income":
     render_income_page(ctx)
 elif page_name == "Investment Horizon":
     render_investment_horizon_page(ctx)
+elif page_name == "XTB Import":
+    render_xtb_import_page(ctx)
