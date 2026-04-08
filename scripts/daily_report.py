@@ -68,6 +68,9 @@ def load_portfolio() -> pd.DataFrame:
         import gspread
         from google.oauth2.service_account import Credentials
 
+        # Remove actual newlines introduced by copy-paste (the private_key
+        # uses literal \n two-char sequences, not real newlines)
+        creds_json = creds_json.replace('\r\n', '').replace('\r', '').replace('\n', '')
         creds_dict = json.loads(creds_json)
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets.readonly",
