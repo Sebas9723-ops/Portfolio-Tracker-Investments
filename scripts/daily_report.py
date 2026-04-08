@@ -194,16 +194,40 @@ def fetch_prices(tickers: list[str]) -> dict:
     return results
 
 
+_SUFFIX_CCY = {
+    # European exchanges → EUR
+    ".DE": "EUR", ".AS": "EUR", ".PA": "EUR", ".MI": "EUR",
+    ".MC": "EUR", ".BR": "EUR", ".VI": "EUR", ".HE": "EUR",
+    # London Stock Exchange → GBp (pence)
+    ".L": "GBp",
+    # Other
+    ".TO": "CAD", ".AX": "AUD", ".HK": "HKD",
+}
+
+
 def fetch_currencies(tickers: list[str]) -> dict:
-    """Returns {ticker: currency_str} using fast_info."""
+    """Return {ticker: currency} using exchange-suffix lookup (deterministic).
+    Falls back to yfinance fast_info only for tickers with no known suffix."""
     info = {}
+    unknown = []
     for t in tickers:
+        matched = next((ccy for sfx, ccy in _SUFFIX_CCY.items()
+                        if t.upper().endswith(sfx.upper())), None)
+        if matched:
+            info[t] = matched
+        else:
+            unknown.append(t)
+
+    # Only call yfinance for tickers without a known exchange suffix
+    for t in unknown:
         try:
             fi = yf.Ticker(t).fast_info
             info[t] = getattr(fi, "currency", "USD") or "USD"
         except Exception:
             info[t] = "USD"
         time.sleep(0.05)
+
+    print(f"[Currencies] {info}")
     return info
 
 
@@ -247,6 +271,7 @@ def build_summary(positions: pd.DataFrame, prices: dict, currencies: dict,
     fx_rates = fx_rates or {}
     eur_usd = fx_rates.get("EURUSD=X", {}).get("price", 1.0) or 1.0
     gbp_usd = fx_rates.get("GBPUSD=X", {}).get("price", 1.0) or 1.0
+    print(f"[FX] EUR/USD={eur_usd:.4f}  GBP/USD={gbp_usd:.4f}")
 
     def to_usd(amount: float, ccy: str) -> float:
         if ccy == "EUR":
@@ -269,6 +294,10 @@ def build_summary(positions: pd.DataFrame, prices: dict, currencies: dict,
         # Convert native-currency value to USD
         value_native = shares * price if price is not None else None
         value        = to_usd(value_native, ccy) if value_native is not None else None
+        vn_str = f"{value_native:.2f}" if value_native is not None else "N/A"
+        v_str  = f"{value:.2f}"        if value        is not None else "N/A"
+        print(f"  [{ticker}] ccy={ccy} price={price} shares={shares} "
+              f"native={vn_str} usd={v_str}")
 
         # avg_cost assumed to already be in USD (from PORTFOLIO_JSON)
         cost    = shares * avg_cost if avg_cost else None
@@ -383,7 +412,13 @@ def run_ai_analysis(prompt: str) -> str:
     try:
         import google.generativeai as genai
         genai.configure(api_key=api_key)
-        # Try models in order; skip on quota, 404, or "not found" errors
+        # Try models in order; skip on per-model errors and try next
+        _SKIP_ERRORS = (
+            "quota", "429", "404", "not found", "deprecated",
+            "permission", "forbidden", "disabled", "invalid",
+            "service", "unavailable", "resource", "billing",
+        )
+        last_err = ""
         for model_name in (
             "gemini-2.0-flash",
             "gemini-1.5-flash",
@@ -394,20 +429,26 @@ def run_ai_analysis(prompt: str) -> str:
             try:
                 model = genai.GenerativeModel(model_name)
                 response = model.generate_content(prompt)
-                print(f"[Gemini] Used model: {model_name}")
+                print(f"[Gemini] Success with model: {model_name}")
                 return response.text
             except Exception as model_exc:
-                err = str(model_exc).lower()
-                if any(x in err for x in ("quota", "429", "404", "not found", "deprecated")):
-                    print(f"[Gemini] {model_name} unavailable ({err[:80]}), trying next...")
-                    continue
-                raise  # unexpected error — surface it
+                last_err = str(model_exc)
+                err_low = last_err.lower()
+                print(f"[Gemini] {model_name} failed: {last_err[:200]}")
+                if any(x in err_low for x in _SKIP_ERRORS):
+                    continue  # try next model
+                raise  # truly unexpected — surface it
+
+        # All models failed — return helpful message in the PDF
         return (
-            "⚠️ Gemini: ningún modelo disponible con esta clave.\n\n"
-            "Obtén una clave gratuita en aistudio.google.com:\n"
-            "1. Clic en 'Get API key' → 'Create API key in new project'\n"
-            "2. Actualiza el secret GEMINI_API_KEY en GitHub.\n\n"
-            "El free tier de AI Studio da 1,500 requests/día sin costo."
+            "⚠️ Gemini no disponible con la clave configurada.\n\n"
+            f"Último error: {last_err[:300]}\n\n"
+            "SOLUCIÓN: Obtén una clave gratuita correcta en aistudio.google.com\n"
+            "1. Abre aistudio.google.com\n"
+            "2. Clic en 'Get API key' → 'Create API key in new project'\n"
+            "3. Copia la clave (empieza con AIzaSy...)\n"
+            "4. Ve a GitHub repo → Settings → Secrets → GEMINI_API_KEY → Update\n\n"
+            "IMPORTANTE: La clave debe ser de AI Studio, NO de Google Cloud Console."
         )
     except Exception as exc:
         return f"⚠️ Error al llamar a Gemini API: {exc}"
@@ -525,8 +566,9 @@ def generate_pdf(df: pd.DataFrame, analysis: str, news: dict, indices: dict) -> 
     # ── Holdings table ────────────────────────────────────────────────────────
     story.append(Paragraph("POSICIONES", s_section))
 
-    COL_W = [1.4*cm, 4.2*cm, 1.0*cm, 2.0*cm, 2.3*cm, 1.5*cm, 1.7*cm, 1.7*cm, 2.2*cm]
-    t_hdrs = ["Ticker", "Nombre", "Divisa", "Precio", "Valor", "Peso", "Hoy%", "P&L%", "P&L$"]
+    # Total usable width: 21cm - 2*(1.8cm margins) = 17.4cm
+    COL_W = [1.5*cm, 3.8*cm, 1.0*cm, 2.0*cm, 2.3*cm, 1.4*cm, 1.5*cm, 1.7*cm, 2.2*cm]
+    t_hdrs = ["Ticker", "Nombre", "Div", "Precio", "Valor", "Peso", "Hoy%", "P&L%", "P&L$"]
     t_rows = [t_hdrs]
 
     for _, r in df.iterrows():
