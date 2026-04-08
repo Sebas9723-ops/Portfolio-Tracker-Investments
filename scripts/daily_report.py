@@ -170,12 +170,17 @@ def fetch_prices(tickers: list[str]) -> dict:
     results = {}
     try:
         raw = yf.download(tickers, period="5d", auto_adjust=True,
-                          progress=False, threads=True)
+                          progress=False, group_by="column")
         if raw.empty:
-            return results
-        close = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw[["Close"]]
-        if hasattr(close, "columns") and len(tickers) == 1:
-            close.columns = tickers
+            raise ValueError("Empty response from yfinance bulk download")
+
+        # Normalize to a DataFrame with tickers as columns
+        if isinstance(raw.columns, pd.MultiIndex):
+            close = raw["Close"]
+        else:
+            # Single ticker: raw has flat columns ["Close", "Open", ...]
+            close = raw[["Close"]].rename(columns={"Close": tickers[0]})
+
         for t in tickers:
             if t not in close.columns:
                 continue
@@ -190,7 +195,29 @@ def fetch_prices(tickers: list[str]) -> dict:
                 "change_pct": (price - prev) / prev * 100 if prev else 0.0,
             }
     except Exception as exc:
-        print(f"[ERROR] Price fetch failed: {exc}")
+        print(f"[WARN] Bulk price fetch failed ({exc}), falling back to per-ticker...")
+
+    # Per-ticker fallback for any missing tickers
+    missing = [t for t in tickers if t not in results]
+    for t in missing:
+        try:
+            raw1 = yf.download(t, period="5d", auto_adjust=True, progress=False)
+            if raw1.empty:
+                continue
+            s = raw1["Close"].dropna()
+            if len(s) < 2:
+                continue
+            price = float(s.iloc[-1])
+            prev  = float(s.iloc[-2])
+            results[t] = {
+                "price":      price,
+                "prev_close": prev,
+                "change_pct": (price - prev) / prev * 100 if prev else 0.0,
+            }
+        except Exception as exc2:
+            print(f"[WARN] Price fetch failed for {t}: {exc2}")
+        time.sleep(0.1)
+
     return results
 
 
@@ -299,10 +326,11 @@ def build_summary(positions: pd.DataFrame, prices: dict, currencies: dict,
         print(f"  [{ticker}] ccy={ccy} price={price} shares={shares} "
               f"native={vn_str} usd={v_str}")
 
-        # avg_cost assumed to already be in USD (from PORTFOLIO_JSON)
-        cost    = shares * avg_cost if avg_cost else None
-        pnl     = value - cost      if (value is not None and cost) else None
-        pnl_pct = pnl / cost * 100  if (pnl is not None and cost and cost != 0) else None
+        # avg_cost is in native currency — convert to USD for consistent P&L
+        cost_native = shares * avg_cost if avg_cost else None
+        cost        = to_usd(cost_native, ccy) if cost_native is not None else None
+        pnl         = value - cost if (value is not None and cost is not None) else None
+        pnl_pct     = pnl / cost * 100 if (pnl is not None and cost and cost != 0) else None
 
         rows.append({
             "Ticker":    ticker,
