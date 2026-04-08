@@ -27,6 +27,13 @@ from pages_app.alerts import render_alerts_page
 from pages_app.income import render_income_page
 from pages_app.investment_horizon import render_investment_horizon_page
 from pages_app.xtb_import import render_xtb_import_page
+from pages_app.yield_curve import render_yield_curve_page
+from pages_app.sector_heatmap import render_sector_heatmap_page
+from pages_app.news_feed import render_news_feed_page
+from pages_app.options_chain import render_options_chain_page
+from pages_app.earnings_calendar import render_earnings_calendar_page
+from pages_app.fundamentals import render_fundamentals_page
+from pages_app.economic_calendar import render_economic_calendar_page
 
 
 from PIL import Image as _Image
@@ -122,6 +129,13 @@ _NAV_PAGES = [
     "Income",
     "Investment Horizon",
     "XTB Import",
+    "Yield Curve",
+    "Sector Heat Map",
+    "News Feed",
+    "Options Chain",
+    "Earnings Calendar",
+    "Fundamentals",
+    "Macro Dashboard",
 ]
 
 if st.session_state.get("private_page_navigation") not in _NAV_PAGES:
@@ -193,3 +207,17 @@ elif page_name == "Investment Horizon":
     render_investment_horizon_page(ctx)
 elif page_name == "XTB Import":
     render_xtb_import_page(ctx)
+elif page_name == "Yield Curve":
+    render_yield_curve_page(ctx)
+elif page_name == "Sector Heat Map":
+    render_sector_heatmap_page(ctx)
+elif page_name == "News Feed":
+    render_news_feed_page(ctx)
+elif page_name == "Options Chain":
+    render_options_chain_page(ctx)
+elif page_name == "Earnings Calendar":
+    render_earnings_calendar_page(ctx)
+elif page_name == "Fundamentals":
+    render_fundamentals_page(ctx)
+elif page_name == "Macro Dashboard":
+    render_economic_calendar_page(ctx)
