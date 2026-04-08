@@ -47,6 +47,30 @@ MARKET_INDICES = {
 }
 
 
+def _repair_json(raw: str) -> str:
+    """Remove actual newlines that are OUTSIDE JSON string values.
+    These are copy-paste artifacts (word-wrap). Newlines inside strings
+    (e.g. within the private_key value) are preserved."""
+    result = []
+    in_string = False
+    i = 0
+    while i < len(raw):
+        ch = raw[i]
+        if ch == "\\" and in_string and i + 1 < len(raw):
+            result.append(ch)
+            result.append(raw[i + 1])
+            i += 2
+            continue
+        if ch == '"':
+            in_string = not in_string
+        if ch in ("\n", "\r") and not in_string:
+            i += 1
+            continue
+        result.append(ch)
+        i += 1
+    return "".join(result)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 1. GOOGLE SHEETS — load portfolio positions
 # ══════════════════════════════════════════════════════════════════════════════
@@ -68,10 +92,21 @@ def load_portfolio() -> pd.DataFrame:
         import gspread
         from google.oauth2.service_account import Credentials
 
-        # Remove actual newlines introduced by copy-paste (the private_key
-        # uses literal \n two-char sequences, not real newlines)
-        creds_json = creds_json.replace('\r\n', '').replace('\r', '').replace('\n', '')
+        # Fix JSON broken by copy-paste newlines, then fix private key format
+        creds_json = _repair_json(creds_json)
         creds_dict = json.loads(creds_json)
+
+        # Ensure private_key has actual newlines (handles \\n literal or stripped key)
+        pk = creds_dict.get("private_key", "")
+        if pk:
+            if "\\n" in pk and "\n" not in pk:
+                pk = pk.replace("\\n", "\n")
+            if "\n" not in pk:
+                pk = pk.replace("-----BEGIN PRIVATE KEY-----",
+                                "-----BEGIN PRIVATE KEY-----\n")
+                pk = pk.replace("-----END PRIVATE KEY-----",
+                                "\n-----END PRIVATE KEY-----\n")
+            creds_dict["private_key"] = pk
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets.readonly",
             "https://www.googleapis.com/auth/drive.readonly",
