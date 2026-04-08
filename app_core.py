@@ -1897,7 +1897,7 @@ def asset_market_group(ticker: str) -> str:
     return "US"
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def build_fx_data(tickers: list[str], base_currency: str, period: str = "2y", extra_currencies: tuple[str, ...] = ()):
     needed_ccy = set(asset_currency(t) for t in tickers)
     needed_ccy.add(base_currency)
@@ -1917,7 +1917,7 @@ def build_fx_data(tickers: list[str], base_currency: str, period: str = "2y", ex
     return fx_prices, fx_hist, fx_tickers
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def load_market_data_with_proxies(tickers: list[str], period: str = "2y"):
     source_tickers = []
     seen = set()
@@ -2036,7 +2036,7 @@ def get_fx_series(from_ccy: str, to_ccy: str, fx_hist: pd.DataFrame):
     return None
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def convert_historical_to_base(asset_hist_native: pd.DataFrame, tickers: list[str], base_currency: str, fx_hist: pd.DataFrame):
     converted = {}
     missing_fx = []
@@ -2085,7 +2085,7 @@ def convert_historical_to_base(asset_hist_native: pd.DataFrame, tickers: list[st
     return out, sorted(set(missing_fx))
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def backfill_missing_proxy_history(
     historical_base: pd.DataFrame,
     tickers: list[str],
@@ -2339,7 +2339,7 @@ def build_portfolio_df(
     return df, total_value, totals
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def build_portfolio_returns(df: pd.DataFrame, historical_base: pd.DataFrame):
     usable = [ticker for ticker in df["Ticker"] if ticker in historical_base.columns]
 
@@ -2364,7 +2364,7 @@ def build_portfolio_returns(df: pd.DataFrame, historical_base: pd.DataFrame):
     return portfolio_returns, returns
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def build_benchmark_returns(base_currency: str, fx_hist: pd.DataFrame):
     bench_native = get_historical_data(["VOO"], period="2y")
     if bench_native.empty or "VOO" not in bench_native.columns:
@@ -2987,7 +2987,7 @@ def build_stress_test_table(df_current: pd.DataFrame, shocks: dict):
     return out, current_total, stressed_total
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def compute_rolling_metrics(portfolio_returns: pd.Series, benchmark_returns: pd.Series, risk_free_rate: float, window: int):
     if portfolio_returns.empty:
         return pd.DataFrame()
@@ -3487,7 +3487,7 @@ def compute_fixed_income_analytics(
     return pd.DataFrame(rows) if rows else None
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def build_blended_benchmark_returns(
     base_currency: str,
     fx_hist: pd.DataFrame,
@@ -4140,7 +4140,7 @@ def build_fx_exposure_summary(df: pd.DataFrame, base_currency: str) -> pd.DataFr
 # BLOOMBERG FEATURES — MULTI-BENCHMARK COMPARISON
 # =========================
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def build_multi_benchmark_comparison(
     portfolio_returns: pd.Series,
     base_currency: str,

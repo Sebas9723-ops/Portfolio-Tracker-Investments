@@ -1,3 +1,4 @@
+import datetime
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -18,13 +19,15 @@ from app_core import (
 )
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def _cached_frontier(asset_returns: pd.DataFrame, max_single: float, min_bonds: float, min_gold: float, rfr: float, n: int):
     constraints = {"max_single_asset": max_single, "min_bonds": min_bonds, "min_gold": min_gold}
-    return simulate_constrained_efficient_frontier(asset_returns, asset_returns.columns.tolist(), constraints, rfr, n)
+    frontier = simulate_constrained_efficient_frontier(asset_returns, asset_returns.columns.tolist(), constraints, rfr, n)
+    computed_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return frontier, computed_at
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def _cached_risk_parity(asset_returns: pd.DataFrame):
     return compute_risk_parity_weights(asset_returns)
 
@@ -237,7 +240,7 @@ def render_optimization_page(ctx):
         rfr = st.number_input("Risk-free rate", 0.00, 0.20, 0.02, 0.005, format="%.3f")
 
     # ── Compute frontier (cached) ─────────────────────────────────────────────
-    frontier = _cached_frontier(asset_returns, max_single_asset, min_bonds, min_gold, rfr, 2000)
+    frontier, frontier_computed_at = _cached_frontier(asset_returns, max_single_asset, min_bonds, min_gold, rfr, 2000)
 
     if frontier is None or frontier.empty:
         st.info("Not enough data to build the efficient frontier.")
@@ -339,6 +342,7 @@ def render_optimization_page(ctx):
         "Efficient Frontier",
         "Simulated efficient frontier, current portfolio, max Sharpe portfolio, and minimum volatility portfolio.",
     )
+    st.caption(f"Last computed: {frontier_computed_at} · Refreshes every 15 min · Use Sync Private Data to force refresh")
     st.plotly_chart(fig_frontier, use_container_width=True, key="optimization_frontier_chart_v2")
 
     ms_weights = max_sharpe_row["Weights"]
