@@ -13,7 +13,7 @@ Required environment variables:
   GCP_SERVICE_ACCOUNT_JSON   Full GCP service account JSON string
   SHEETS_SPREADSHEET_ID      Google Sheets spreadsheet ID
   SHEETS_WORKSHEET           Worksheet name (default: private_positions)
-  GEMINI_API_KEY             Google Gemini API key (free at aistudio.google.com)
+  GROQ_API_KEY               Groq API key (free at console.groq.com)
   TELEGRAM_BOT_TOKEN         Telegram bot token from @BotFather
   TELEGRAM_CHAT_ID           Telegram chat ID (your personal or group chat)
   BASE_CURRENCY              Base currency code (default: USD)
@@ -169,16 +169,24 @@ def fetch_prices(tickers: list[str]) -> dict:
         return {}
     results = {}
     try:
-        raw = yf.download(tickers, period="5d", auto_adjust=True,
+        raw = yf.download(tickers, period="10d", auto_adjust=True,
                           progress=False, group_by="column")
         if raw.empty:
             raise ValueError("Empty response from yfinance bulk download")
 
         # Normalize to a DataFrame with tickers as columns
+        # Handle both (PriceType, Ticker) and (Ticker, PriceType) MultiIndex layouts
         if isinstance(raw.columns, pd.MultiIndex):
-            close = raw["Close"]
+            lvl0 = raw.columns.get_level_values(0).unique().tolist()
+            lvl1 = raw.columns.get_level_values(1).unique().tolist()
+            if "Close" in lvl0:
+                close = raw["Close"]                        # (PriceType, Ticker)
+            elif "Close" in lvl1:
+                close = raw.xs("Close", axis=1, level=1)   # (Ticker, PriceType)
+            else:
+                raise ValueError(f"Close not found in MultiIndex levels: {lvl0[:5]}")
         else:
-            # Single ticker: raw has flat columns ["Close", "Open", ...]
+            # Single ticker: flat columns
             close = raw[["Close"]].rename(columns={"Close": tickers[0]})
 
         for t in tickers:
@@ -197,15 +205,17 @@ def fetch_prices(tickers: list[str]) -> dict:
     except Exception as exc:
         print(f"[WARN] Bulk price fetch failed ({exc}), falling back to per-ticker...")
 
-    # Per-ticker fallback for any missing tickers
+    # Per-ticker fallback (uses Ticker.history — more reliable than yf.download)
     missing = [t for t in tickers if t not in results]
     for t in missing:
         try:
-            raw1 = yf.download(t, period="5d", auto_adjust=True, progress=False)
-            if raw1.empty:
+            hist = yf.Ticker(t).history(period="10d", auto_adjust=True)
+            if hist.empty:
+                print(f"[WARN] No history for {t}")
                 continue
-            s = raw1["Close"].dropna()
+            s = hist["Close"].dropna()
             if len(s) < 2:
+                print(f"[WARN] Less than 2 data points for {t}")
                 continue
             price = float(s.iloc[-1])
             prev  = float(s.iloc[-2])
@@ -214,6 +224,7 @@ def fetch_prices(tickers: list[str]) -> dict:
                 "prev_close": prev,
                 "change_pct": (price - prev) / prev * 100 if prev else 0.0,
             }
+            print(f"[Fallback] {t} price={price:.2f}")
         except Exception as exc2:
             print(f"[WARN] Price fetch failed for {t}: {exc2}")
         time.sleep(0.1)
@@ -225,8 +236,8 @@ _SUFFIX_CCY = {
     # European exchanges → EUR
     ".DE": "EUR", ".AS": "EUR", ".PA": "EUR", ".MI": "EUR",
     ".MC": "EUR", ".BR": "EUR", ".VI": "EUR", ".HE": "EUR",
-    # London Stock Exchange → GBp (pence)
-    ".L": "GBp",
+    # NOTE: .L (LSE) intentionally omitted — some LSE stocks (e.g. IGLN.L)
+    # quote in USD, so we let yfinance fast_info determine the currency.
     # Other
     ".TO": "CAD", ".AX": "AUD", ".HK": "HKD",
 }
@@ -263,23 +274,47 @@ def fetch_currencies(tickers: list[str]) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def fetch_news(tickers: list[str], max_per_ticker: int = 3) -> dict[str, list[dict]]:
-    """Returns {ticker: [{title, publisher, published}]}."""
+    """Returns {ticker: [{title, publisher, published}]}.
+    Handles both legacy and new yfinance news structure (content-nested).
+    """
     news_map: dict[str, list[dict]] = {}
     for t in tickers:
         try:
             raw_news = yf.Ticker(t).news or []
             items = []
             for item in raw_news[:max_per_ticker]:
-                ts = item.get("providerPublishTime", 0)
-                dt = datetime.datetime.utcfromtimestamp(ts).strftime("%b %d %H:%M") if ts else ""
+                # New yfinance structure: item["content"]["title"]
+                content = item.get("content", {})
+                if content:
+                    title     = content.get("title", "")
+                    publisher = content.get("provider", {}).get("displayName", "")
+                    pub_date  = content.get("pubDate", "")
+                    try:
+                        dt = datetime.datetime.fromisoformat(
+                            pub_date.replace("Z", "+00:00")
+                        ).strftime("%b %d %H:%M") if pub_date else ""
+                    except Exception:
+                        dt = ""
+                    link = content.get("canonicalUrl", {}).get("url", "") or item.get("link", "")
+                else:
+                    # Legacy flat structure
+                    title     = item.get("title", "")
+                    publisher = item.get("publisher", "")
+                    ts        = item.get("providerPublishTime", 0)
+                    dt        = datetime.datetime.utcfromtimestamp(ts).strftime("%b %d %H:%M") if ts else ""
+                    link      = item.get("link", "")
+
+                if not title:
+                    continue
                 items.append({
-                    "title":     item.get("title", ""),
-                    "publisher": item.get("publisher", ""),
+                    "title":     title,
+                    "publisher": publisher,
                     "published": dt,
-                    "link":      item.get("link", ""),
+                    "link":      link,
                 })
             news_map[t] = items
-        except Exception:
+        except Exception as exc:
+            print(f"[WARN] News fetch failed for {t}: {exc}")
             news_map[t] = []
         time.sleep(0.15)
     return news_map
@@ -386,51 +421,80 @@ def build_prompt(df: pd.DataFrame, news: dict, indices: dict) -> str:
             for a in articles:
                 news_lines.append(f"    - [{a['published']}] {a['title']} ({a['publisher']})")
 
-    return f"""Eres un gestor de portafolios profesional con experiencia en gestión de activos institucionales.
-Genera el análisis diario del portafolio del {TODAY.strftime('%d de %B de %Y')} en español.
+    # Build per-position context with cost basis info
+    pos_detail_lines = []
+    for _, r in df.iterrows():
+        val      = f"${r['Value']:,.2f}"      if r["Value"]  is not None else "N/A"
+        wt       = f"{r['Weight %']:.1f}%"    if r["Weight %"] is not None else "N/A"
+        day      = f"{r['Day %']:+.2f}%"      if r["Day %"]  is not None else "N/A"
+        pnl_str  = (f"${r['P&L $']:+,.2f} ({r['P&L %']:+.1f}%)"
+                    if r["P&L $"] is not None else "sin costo base")
+        avg      = f"${r['Avg Cost']:.2f}"    if r["Avg Cost"] is not None else "N/A"
+        pos_detail_lines.append(
+            f"  • {r['Ticker']} | {r['Name']} | Divisa: {r['Currency']}\n"
+            f"    Valor: {val} ({wt} del portafolio) | Precio: ${r['Price']:.2f} | "
+            f"Costo promedio: {avg}\n"
+            f"    Rendimiento hoy: {day} | P&L no realizado: {pnl_str}"
+        )
 
-═══════════════════════════════════════
-PORTAFOLIO  (Valor Total: ${total:,.2f} {BASE_CCY})
-═══════════════════════════════════════
-{chr(10).join(pos_lines) if pos_lines else "  (Sin posiciones)"}
+    # FX rates for context (included in indices dict)
+    fx_lines = []
+    for ticker in ("EURUSD=X", "GBPUSD=X"):
+        if ticker in indices:
+            p = indices[ticker]
+            label = "EUR/USD" if "EUR" in ticker else "GBP/USD"
+            fx_lines.append(f"  • {label}: {p['price']:.4f} ({p['change_pct']:+.2f}% hoy)")
 
-═══════════════════════════════════════
+    return f"""Eres un CFA charterholder con 15 años de experiencia en gestión de portafolios multi-activo institucionales.
+Fecha de análisis: {TODAY.strftime('%d de %B de %Y')} ({TODAY.strftime('%A')}).
+
+════════════════════════════════════════════
+DATOS DEL PORTAFOLIO  —  Valor Total: ${total:,.2f} {BASE_CCY}
+════════════════════════════════════════════
+{chr(10).join(pos_detail_lines) if pos_detail_lines else "  (Sin posiciones)"}
+
+════════════════════════════════════════════
 MERCADOS HOY
-═══════════════════════════════════════
+════════════════════════════════════════════
 {chr(10).join(idx_lines) if idx_lines else "  (No disponible)"}
 
-═══════════════════════════════════════
+  Divisas:
+{chr(10).join(fx_lines) if fx_lines else "  (No disponible)"}
+
+════════════════════════════════════════════
 NOTICIAS RELEVANTES (últimas 24h)
-═══════════════════════════════════════
-{chr(10).join(news_lines) if news_lines else "  (Sin noticias)"}
+════════════════════════════════════════════
+{chr(10).join(news_lines) if news_lines else "  (Sin noticias disponibles de yfinance)"}
 
-═══════════════════════════════════════
+════════════════════════════════════════════
 
-Genera un análisis diario profesional con EXACTAMENTE estas secciones y encabezados:
+INSTRUCCIONES: Genera un análisis institucional profundo y accionable. Cada sección debe ser sustancial (no bullet points vacíos). Usa los datos numéricos del portafolio. Sé específico — menciona tickers, precios, porcentajes. Escribe en español profesional estilo Bloomberg Intelligence / Goldman Sachs Morning Brief.
 
 ## 📊 RESUMEN EJECUTIVO
-[2-3 oraciones sobre el estado del portafolio hoy. Menciona el P&L del día y contexto general.]
+Describe el estado actual del portafolio: valor total, P&L del día en dólares y porcentaje ponderado, posición ganadora y perdedora del día. Contextualiza en función de los índices. ¿El portafolio superó o quedó por debajo del S&P 500 hoy?
 
-## 🌍 CONTEXTO DE MERCADO
-[Análisis del entorno macro y cómo los movimientos del mercado de hoy afectan específicamente este portafolio.]
+## 🌍 CONTEXTO MACROECONÓMICO
+Analiza: (1) qué señala el VIX sobre el sentimiento de riesgo, (2) qué implica el movimiento del 10Y yield para la renta fija y acciones growth, (3) el movimiento del USD/EUR para las posiciones europeas, (4) correlación del portafolio con el entorno macro de hoy. Sé específico con los niveles numéricos.
 
 ## 🔍 ANÁLISIS POR POSICIÓN
-[Para cada posición con noticias: qué pasó, por qué importa, implicación concreta para el portafolio. Omite posiciones sin noticias relevantes.]
+Para CADA posición del portafolio: (a) rendimiento del día en contexto, (b) noticias que lo explican si las hay, (c) implicación concreta para mantener/revisar esa posición, (d) si hay P&L disponible, evalúa si está en zona de ganancia/pérdida significativa. No omitas ninguna posición.
+
+## 📈 ANÁLISIS DE ASIGNACIÓN Y DIVERSIFICACIÓN
+Evalúa: (1) concentración por activo — ¿alguna posición domina demasiado?, (2) exposición geográfica (US vs Europa), (3) balance renta variable / renta fija / oro, (4) correlación implícita entre posiciones hoy, (5) si el portafolio tiene sesgos sectoriales o de factor (growth, value, dividend, momentum).
 
 ## ⚡ OPORTUNIDADES IDENTIFICADAS
-[3 puntos concretos y accionables basados en los datos de hoy]
+3-4 oportunidades concretas y accionables con base en los datos de hoy. Para cada una: qué es la oportunidad, qué catalizador la activa, nivel de precio relevante o condición de entrada, y tamaño sugerido de ajuste.
 
 ## ⚠️ RIESGOS A VIGILAR
-[3 riesgos específicos con catalizadores concretos para los próximos días]
+4-5 riesgos específicos con: (a) descripción del riesgo, (b) catalizador o evento que lo materializaría, (c) posición del portafolio más expuesta, (d) nivel o condición de alerta. Incluye riesgos macro, de liquidez, de divisa y específicos por activo.
 
-## 🎯 ACCIONES SUGERIDAS
-[3 acciones concretas: comprar / vender / rebalancear / mantener con justificación específica y niveles de precio si aplica]
+## 🎯 PLAN DE ACCIÓN PARA LAS PRÓXIMAS 48 HORAS
+Acciones concretas priorizadas: comprar / recortar / rebalancear / mantener. Para cada acción: ticker específico, dirección, justificación cuantitativa, nivel de precio o condición de ejecución, y tamaño sugerido como % del portafolio.
 
-## 💡 CONCLUSIÓN
-[1-2 oraciones de cierre con la perspectiva general]
+## 💡 PERSPECTIVA SEMANAL
+Proyección para los próximos 5 días de trading: eventos clave a monitorear (datos macro, earnings, reuniones de bancos centrales), cómo podrían impactar cada posición, y el sesgo direccional recomendado (risk-on / risk-off / neutral).
 
-Reglas: sé específico, usa los datos del portafolio, referencia noticias concretas, evita generalidades.
-Tono: profesional e institucional, estilo Bloomberg Intelligence."""
+Reglas: mínimo 600 palabras en total. Cero generalidades — cada afirmación debe estar anclada en un dato del portafolio o del mercado. Si no hay noticias para una posición, analiza su comportamiento de precio en contexto de mercado."""
 
 
 def run_ai_analysis(prompt: str) -> str:
