@@ -65,42 +65,40 @@ def _render_var_section(ctx):
         st.caption(f"Note: based on {n_obs} daily observations — results stabilize with >252 days.")
 
     info_section(
-        "Value at Risk — Historical",
-        "Worst expected daily loss at 95% and 99% confidence based on actual return distribution.",
+        "Value at Risk (VaR / CVaR)",
+        "How much you can lose in a single day at 95% and 99% confidence — and what the average looks like on those worst days.",
     )
-    c1, c2, c3, c4 = st.columns(4)
-    info_metric(c1, "VaR 95% (1-day)", _fmt_pct(vc.get("hist_var_95")), "You lose more than this only 5% of days.")
-    info_metric(c2, "CVaR 95% (1-day)", _fmt_pct(vc.get("hist_cvar_95")), "Average loss on the worst 5% of days.")
-    info_metric(c3, "VaR 99% (1-day)", _fmt_pct(vc.get("hist_var_99")), "You lose more than this only 1% of days.")
-    info_metric(c4, "CVaR 99% (1-day)", _fmt_pct(vc.get("hist_cvar_99")), "Average loss on the worst 1% of days.")
+    if n_obs < 252:
+        st.caption(f"Based on {n_obs} daily observations — results stabilize with >252 days.")
 
-    info_section(
-        "Value at Risk — Parametric (Normal)",
-        "VaR/CVaR assuming normally distributed returns — faster but underestimates tail risk.",
-    )
-    p1, p2, p3, p4 = st.columns(4)
-    info_metric(p1, "VaR 95% (1-day)", _fmt_pct(vc.get("param_var_95")), "Parametric 95% VaR.")
-    info_metric(p2, "CVaR 95% (1-day)", _fmt_pct(vc.get("param_cvar_95")), "Parametric 95% CVaR.")
-    info_metric(p3, "VaR 99% (1-day)", _fmt_pct(vc.get("param_var_99")), "Parametric 99% VaR.")
-    info_metric(p4, "CVaR 99% (1-day)", _fmt_pct(vc.get("param_cvar_99")), "Parametric 99% CVaR.")
+    tab_hist, tab_param, tab_ann = st.tabs(["Historical", "Parametric (Normal)", "Annual (√252 rule)"])
 
-    # Annual approximation (sqrt of time rule)
-    ccy = ctx.get("base_currency", "USD")
-    port_val = float(ctx.get("total_portfolio_value", 0.0))
-    if port_val > 0:
-        info_section(
-            "Annual VaR Approximation",
-            f"Daily VaR scaled to annual terms (√252 rule) in {ccy}.",
-        )
-        a1, a2, a3, a4 = st.columns(4)
-        ann_var_95 = float(vc.get("hist_var_95", 0)) * (252 ** 0.5) * port_val
-        ann_cvar_95 = float(vc.get("hist_cvar_95", 0)) * (252 ** 0.5) * port_val
-        ann_var_99 = float(vc.get("hist_var_99", 0)) * (252 ** 0.5) * port_val
-        ann_cvar_99 = float(vc.get("hist_cvar_99", 0)) * (252 ** 0.5) * port_val
-        info_metric(a1, f"Annual VaR 95% ({ccy})", f"{ann_var_95:,.2f}", "Estimated annual loss at 95%.")
-        info_metric(a2, f"Annual CVaR 95% ({ccy})", f"{ann_cvar_95:,.2f}", "Estimated annual tail loss at 95%.")
-        info_metric(a3, f"Annual VaR 99% ({ccy})", f"{ann_var_99:,.2f}", "Estimated annual loss at 99%.")
-        info_metric(a4, f"Annual CVaR 99% ({ccy})", f"{ann_cvar_99:,.2f}", "Estimated annual tail loss at 99%.")
+    with tab_hist:
+        c1, c2, c3, c4 = st.columns(4)
+        info_metric(c1, "VaR 95%",  _fmt_pct(vc.get("hist_var_95")),  "On 95 of 100 days your loss is less than this.")
+        info_metric(c2, "CVaR 95%", _fmt_pct(vc.get("hist_cvar_95")), "Average loss on the worst 5% of days.")
+        info_metric(c3, "VaR 99%",  _fmt_pct(vc.get("hist_var_99")),  "On 99 of 100 days your loss is less than this.")
+        info_metric(c4, "CVaR 99%", _fmt_pct(vc.get("hist_cvar_99")), "Average loss on the worst 1% of days.")
+
+    with tab_param:
+        p1, p2, p3, p4 = st.columns(4)
+        info_metric(p1, "VaR 95%",  _fmt_pct(vc.get("param_var_95")),  "Parametric 95% VaR (assumes normal distribution).")
+        info_metric(p2, "CVaR 95%", _fmt_pct(vc.get("param_cvar_95")), "Parametric 95% CVaR.")
+        info_metric(p3, "VaR 99%",  _fmt_pct(vc.get("param_var_99")),  "Parametric 99% VaR.")
+        info_metric(p4, "CVaR 99%", _fmt_pct(vc.get("param_cvar_99")), "Parametric 99% CVaR.")
+
+    with tab_ann:
+        ccy = ctx.get("base_currency", "USD")
+        port_val = float(ctx.get("total_portfolio_value", 0.0))
+        if port_val > 0:
+            scale = 252 ** 0.5
+            a1, a2, a3, a4 = st.columns(4)
+            info_metric(a1, f"VaR 95% ({ccy})",  f"{float(vc.get('hist_var_95', 0)) * scale * port_val:,.2f}", "Daily VaR 95% × √252.")
+            info_metric(a2, f"CVaR 95% ({ccy})", f"{float(vc.get('hist_cvar_95', 0)) * scale * port_val:,.2f}", "Daily CVaR 95% × √252.")
+            info_metric(a3, f"VaR 99% ({ccy})",  f"{float(vc.get('hist_var_99', 0)) * scale * port_val:,.2f}", "Daily VaR 99% × √252.")
+            info_metric(a4, f"CVaR 99% ({ccy})", f"{float(vc.get('hist_cvar_99', 0)) * scale * port_val:,.2f}", "Daily CVaR 99% × √252.")
+        else:
+            st.info("Portfolio value required for annualised amounts.")
 
 
 def _render_risk_budget_data(risk_budget_df):

@@ -188,15 +188,16 @@ def _render_black_litterman(ctx, usable):
     st.plotly_chart(fig, use_container_width=True, key="bl_returns_chart")
 
     # Summary table
+    cw_map = dict(zip(usable, current_weights))
     rows = [
         {
             "Ticker": t,
             "Equilibrium Return": f"{eq_returns.get(t, 0):.2%}",
             "BL Posterior Return": f"{post_returns.get(t, 0):.2%}",
             "Δ vs Equilibrium": f"{post_returns.get(t, 0) - eq_returns.get(t, 0):+.2%}",
-            "Current Weight": f"{current_weights[i]:.2%}",
+            "Current Weight": f"{cw_map.get(t, 0.0):.2%}",
         }
-        for i, t in enumerate(usable)
+        for t in usable
     ]
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 

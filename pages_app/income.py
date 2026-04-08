@@ -90,8 +90,17 @@ def render_income_page(ctx):
         cal_display["Pay Date"] = pd.to_datetime(cal_display["Pay Date"]).dt.strftime("%Y-%m-%d")
         st.dataframe(cal_display[["Pay Date", "Ticker", "Name", amount_col]], use_container_width=True, height=280)
     else:
-        info_section("Dividend Calendar", "Dividend calendar requires tickers to be present in DIVIDEND_META.")
-        st.info("Add your tickers to the DIVIDEND_META map in app_core.py to see projected payments.")
+        portfolio_tickers = sorted(df["Ticker"].astype(str).unique())
+        calendar_tickers = set(calendar_df["Ticker"].astype(str).unique()) if not calendar_df.empty else set()
+        missing = [t for t in portfolio_tickers if t not in calendar_tickers]
+        info_section("Dividend Calendar", "No dividend calendar data found for current holdings.")
+        if missing:
+            st.info(
+                f"The following tickers are not in DIVIDEND_META: **{', '.join(missing)}**. "
+                "Add them to `DIVIDEND_META` in `app_core.py` to see projected payments."
+            )
+        else:
+            st.info("Add tickers to `DIVIDEND_META` in `app_core.py` to see projected payments.")
 
     # ── Income Breakdown by position ─────────────────────────────────────────
     info_section("Income Breakdown", "Estimated income contribution by position using approximate trailing yields.")

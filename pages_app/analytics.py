@@ -268,9 +268,19 @@ def _render_returns_comparison(ctx):
     info_metric(r1c2, "Total P&L", pnl_str, "Unrealized + realized gain/loss in base currency.")
     info_metric(r1c3, "Invested Capital", invested_str, "Sum of cost basis across all open positions.")
 
+    twr_tooltip = (
+        f"Chain-linked over {n_periods} snapshots ({start} → {end})."
+        if twr_val is not None
+        else "No snapshots saved yet. Use Save Portfolio Snapshot from the Dashboard to enable TWR."
+    )
+    mwr_tooltip = (
+        f"Annualized IRR from {n_tx} transactions."
+        if mwr_val is not None
+        else "Need ≥2 transactions with dates to compute IRR."
+    )
     c1, c2, c3, c4 = st.columns(4)
-    info_metric(c1, "TWR", _fmt(twr_val) if twr_val is not None else "—", f"Chain-linked over {n_periods} snapshots ({start} → {end}).")
-    info_metric(c2, "MWR (IRR)", _fmt(mwr_val) if mwr_val is not None else "—", f"Annualized IRR from {n_tx} transactions.")
+    info_metric(c1, "TWR", _fmt(twr_val) if twr_val is not None else "—", twr_tooltip)
+    info_metric(c2, "MWR (IRR)", _fmt(mwr_val) if mwr_val is not None else "—", mwr_tooltip)
     info_metric(c3, "Historical Return", _fmt(ctx.get("total_return")), "Cumulative return from price history.")
     excess = (twr_val or 0.0) - (mwr_val or 0.0) if twr_val is not None and mwr_val is not None else None
     info_metric(c4, "TWR − MWR", _fmt(excess) if excess is not None else "—", "Positive = timing helped; Negative = timing hurt.")

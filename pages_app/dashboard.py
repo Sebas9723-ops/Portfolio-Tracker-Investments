@@ -543,22 +543,18 @@ def render_dashboard(ctx):
         else:
             st.dataframe(alerts_df, use_container_width=True, height=260)
 
-    info_section(
-        "Data Quality Checks",
-        "Validation checks for prices, shares, optimization availability, benchmark, and cash balances.",
-    )
-    st.dataframe(quality_df, use_container_width=True, height=260)
+    with st.expander("Data Quality Checks", expanded=False):
+        st.caption("Validation checks for prices, shares, benchmark, and cash balances.")
+        st.dataframe(quality_df, use_container_width=True, height=240)
 
     if ctx["mode"] == "Private" and ctx["authenticated"]:
-        info_section(
-            "Recent Audit Trail",
-            "Most recent changes made through Private Manager and written automatically into the Transactions ledger.",
-        )
-        audit_df = _build_recent_audit_trail(ctx, limit=8)
-        if audit_df.empty:
-            st.info("No Private Manager audit entries found.")
-        else:
-            st.dataframe(audit_df, use_container_width=True, height=260)
+        with st.expander("Recent Audit Trail", expanded=False):
+            st.caption("Most recent changes made through Private Manager, written automatically into the Transactions ledger.")
+            audit_df = _build_recent_audit_trail(ctx, limit=8)
+            if audit_df.empty:
+                st.info("No Private Manager audit entries found.")
+            else:
+                st.dataframe(audit_df, use_container_width=True, height=260)
 
     perf_fig = _build_performance_vs_benchmark_pct_chart(ctx)
     if perf_fig is not None:
@@ -602,42 +598,31 @@ def render_dashboard(ctx):
         report_df = build_snapshot_report_table(snapshots_df)
         monthly_df = build_monthly_snapshot_summary(snapshots_df)
 
-        left3, right3 = st.columns(2)
+        tab_charts, tab_report, tab_monthly = st.tabs(["Charts", "Full Report", "Monthly Summary"])
 
-        with left3:
-            info_section(
-                "Portfolio Timeline",
-                "Historical total portfolio value, holdings, and cash based on saved snapshots.",
-            )
-            if timeline_fig is None:
-                st.info("No snapshots available yet. Use Save Portfolio Snapshot to start building history.")
+        with tab_charts:
+            left3, right3 = st.columns(2)
+            with left3:
+                st.caption("Portfolio Timeline — total value, holdings, and cash")
+                if timeline_fig is None:
+                    st.info("No snapshots yet. Use Save Portfolio Snapshot to start building history.")
+                else:
+                    st.plotly_chart(timeline_fig, use_container_width=True, key="snapshot_timeline_chart_phase5a")
+            with right3:
+                st.caption("Allocation Timeline — weight history for largest positions")
+                if allocation_fig is None:
+                    st.info("Allocation history will appear after snapshots are stored.")
+                else:
+                    st.plotly_chart(allocation_fig, use_container_width=True, key="allocation_timeline_chart_phase5a")
+
+        with tab_report:
+            if report_df.empty:
+                st.info("No snapshot report available yet.")
             else:
-                st.plotly_chart(timeline_fig, use_container_width=True, key="snapshot_timeline_chart_phase5a")
+                st.dataframe(report_df, use_container_width=True, height=380)
 
-        with right3:
-            info_section(
-                "Allocation Timeline",
-                "Weight history for the largest current positions based on saved snapshots.",
-            )
-            if allocation_fig is None:
-                st.info("Allocation history will appear after snapshots are stored.")
+        with tab_monthly:
+            if monthly_df.empty:
+                st.info("No monthly summary available yet.")
             else:
-                st.plotly_chart(allocation_fig, use_container_width=True, key="allocation_timeline_chart_phase5a")
-
-        info_section(
-            "Historical Report Base",
-            "Saved portfolio timeline ready for future monthly reporting and historical analytics.",
-        )
-        if report_df.empty:
-            st.info("No snapshot report available yet.")
-        else:
-            st.dataframe(report_df, use_container_width=True, height=320)
-
-        info_section(
-            "Monthly Snapshot Summary",
-            "Latest saved snapshot of each month with month-over-month change.",
-        )
-        if monthly_df.empty:
-            st.info("No monthly summary available yet.")
-        else:
-            st.dataframe(monthly_df, use_container_width=True, height=260)
+                st.dataframe(monthly_df, use_container_width=True, height=320)
