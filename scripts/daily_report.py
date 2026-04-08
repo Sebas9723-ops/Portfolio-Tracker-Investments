@@ -1506,7 +1506,77 @@ def generate_pdf(df: pd.DataFrame, analysis: str, news: dict, indices: dict,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 7. TELEGRAM
+# 7. EMAIL
+# ══════════════════════════════════════════════════════════════════════════════
+
+def send_email(pdf_bytes: bytes, total: float, day_pnl: float,
+               n_positions: int, n_articles: int) -> bool:
+    """Send the PDF report as an email attachment via SMTP.
+
+    Required env vars:
+      EMAIL_FROM      Sender address (e.g. you@gmail.com)
+      EMAIL_TO        Recipient address (comma-separated for multiple)
+      EMAIL_PASSWORD  SMTP password / Gmail App Password
+
+    Optional env vars:
+      EMAIL_SMTP_HOST  default: smtp.gmail.com
+      EMAIL_SMTP_PORT  default: 587
+    """
+    import smtplib
+    from email.message import EmailMessage
+
+    sender   = os.environ.get("EMAIL_FROM", "")
+    recipient = os.environ.get("EMAIL_TO", "")
+    password = os.environ.get("EMAIL_PASSWORD", "")
+
+    if not sender or not recipient or not password:
+        print("[WARN] Email credentials missing (EMAIL_FROM / EMAIL_TO / EMAIL_PASSWORD) — skipping")
+        return False
+
+    smtp_host = os.environ.get("EMAIL_SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(os.environ.get("EMAIL_SMTP_PORT", "587"))
+
+    sign = "📈" if day_pnl >= 0 else "📉"
+    subject = f"{sign} Portfolio Daily Brief — {TODAY.strftime('%d %b %Y')}"
+
+    body = (
+        f"Portfolio Daily Brief\n"
+        f"{'─' * 40}\n"
+        f"Fecha:      {TODAY.strftime('%A, %d de %B de %Y')}\n"
+        f"Valor:      ${total:,.2f} {BASE_CCY}\n"
+        f"P&L hoy:    ${day_pnl:+,.2f}\n"
+        f"Posiciones: {n_positions}\n"
+        f"Noticias:   {n_articles} artículos analizados\n"
+        f"{'─' * 40}\n\n"
+        f"El informe completo con análisis IA, gráficos y métricas de riesgo\n"
+        f"se encuentra adjunto en PDF.\n\n"
+        f"Análisis por Llama 3.3 70B (Groq) · Portfolio Tracker\n"
+    )
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"]    = sender
+    msg["To"]      = recipient
+    msg.set_content(body)
+
+    filename = f"portfolio_brief_{TODAY.strftime('%Y%m%d')}.pdf"
+    msg.add_attachment(pdf_bytes, maintype="application", subtype="pdf", filename=filename)
+
+    try:
+        with smtplib.SMTP(smtp_host, smtp_port) as smtp:
+            smtp.ehlo()
+            smtp.starttls()
+            smtp.login(sender, password)
+            smtp.send_message(msg)
+        print(f"[Email] Sent to {recipient}: {filename}")
+        return True
+    except Exception as exc:
+        print(f"[ERROR] Email send: {exc}")
+        return False
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 8. TELEGRAM
 # ══════════════════════════════════════════════════════════════════════════════
 
 def send_telegram(pdf_bytes: bytes, caption: str) -> bool:
@@ -1652,6 +1722,10 @@ def main():
         f"<i>Análisis por Llama 3.3 70B · Portfolio Tracker</i>"
     )
     send_telegram(pdf_bytes, caption)
+
+    # ── Email ──────────────────────────────────────────────────────────────────
+    send_email(pdf_bytes, total=total, day_pnl=day_pnl,
+               n_positions=len(tickers), n_articles=n_articles)
 
     print("\n[DONE] Report complete.\n")
 
