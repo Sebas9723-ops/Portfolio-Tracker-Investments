@@ -81,44 +81,33 @@ def _repair_json(raw: str) -> str:
 
 def load_portfolio() -> pd.DataFrame:
     """
-    Load portfolio from PORTFOLIO_JSON secret (includes shares + avg_cost).
+    Load portfolio positions with Shares and AvgCost.
+    Primary source: Google Sheets (always up-to-date with transactions).
+    Fallback: PORTFOLIO_JSON env var (GitHub Secret).
     Returns DataFrame: Ticker | Name | Shares | AvgCost
     """
-    df = _load_from_private_portfolio()
-    if df.empty:
-        print("[WARN] PORTFOLIO_JSON returned no positions")
+    df = _load_from_sheets()
+    if not df.empty:
+        print(f"[Portfolio] Loaded {len(df)} positions from Google Sheets")
         return df
-    print(f"[Portfolio] {len(df)} positions: {', '.join(df['Ticker'].tolist())}")
+
+    print("[WARN] Sheets unavailable, falling back to PORTFOLIO_JSON")
+    df = _load_from_portfolio_json()
+    if df.empty:
+        print("[WARN] PORTFOLIO_JSON also returned no positions")
+    else:
+        print(f"[Portfolio] Loaded {len(df)} positions from PORTFOLIO_JSON")
     return df
 
 
-def _load_from_private_portfolio() -> pd.DataFrame:
-    """Load portfolio from PORTFOLIO_JSON env var (GitHub Secret)."""
-    raw = os.environ.get("PORTFOLIO_JSON", "")
-    if not raw:
-        print("[WARN] PORTFOLIO_JSON secret not set")
-        return pd.DataFrame(columns=["Ticker", "Name", "Shares", "AvgCost"])
-    try:
-        data = json.loads(raw)
-        rows = [
-            {"Ticker": p["ticker"], "Name": p.get("name", p["ticker"]),
-             "Shares": float(p.get("shares", 0)), "AvgCost": float(p.get("avg_cost", 0))}
-            for p in data
-            if float(p.get("shares", 0)) > 0
-        ]
-        return pd.DataFrame(rows)
-    except Exception as exc:
-        print(f"[WARN] Could not parse PORTFOLIO_JSON: {exc}")
-        return pd.DataFrame(columns=["Ticker", "Name", "Shares", "AvgCost"])
-
-
-def _load_avg_cost_from_sheets() -> pd.DataFrame:
-    """Try to read AvgCost per ticker from Google Sheets. Returns empty df on failure."""
+def _load_from_sheets() -> pd.DataFrame:
+    """Load Ticker, Name, Shares, AvgCost from the private_positions Google Sheet."""
     creds_json = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "")
     sheet_id   = os.environ.get("SHEETS_SPREADSHEET_ID", "")
     ws_name    = os.environ.get("SHEETS_WORKSHEET", "private_positions")
 
     if not creds_json or not sheet_id:
+        print("[Sheets] GCP_SERVICE_ACCOUNT_JSON or SHEETS_SPREADSHEET_ID not set")
         return pd.DataFrame()
     try:
         import gspread
@@ -142,18 +131,50 @@ def _load_avg_cost_from_sheets() -> pd.DataFrame:
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         gc = gspread.authorize(creds)
         ws = gc.open_by_key(sheet_id).worksheet(ws_name)
-        records = ws.get_all_records()
+        records = ws.get_all_records(value_render_option="UNFORMATTED_VALUE")
         df = pd.DataFrame(records)
-        if df.empty or "AvgCost" not in df.columns:
+
+        if df.empty or "Ticker" not in df.columns:
+            print("[Sheets] Empty or missing Ticker column")
             return pd.DataFrame()
-        df["AvgCost"] = pd.to_numeric(df["AvgCost"], errors="coerce").fillna(0)
-        # Keep only rows with a reasonable AvgCost (> 0 and < $50,000 per share)
-        df = df[(df["AvgCost"] > 0) & (df["AvgCost"] < 50000)]
-        print(f"[Sheets] Got AvgCost for {len(df)} tickers")
-        return df[["Ticker", "AvgCost"]].drop_duplicates("Ticker")
+
+        df["Shares"]  = pd.to_numeric(df.get("Shares",  0), errors="coerce").fillna(0)
+        df["AvgCost"] = pd.to_numeric(df.get("AvgCost", 0), errors="coerce").fillna(0)
+        df["Ticker"]  = df["Ticker"].astype(str).str.strip()
+        df["Name"]    = df.get("Name", df["Ticker"]).fillna(df["Ticker"]).astype(str)
+
+        # Only positions with shares
+        df = df[df["Shares"] > 0].copy()
+        if df.empty:
+            print("[Sheets] No positions with Shares > 0")
+            return pd.DataFrame()
+
+        print(f"[Sheets] {len(df)} positions: {', '.join(df['Ticker'].tolist())}")
+        return df[["Ticker", "Name", "Shares", "AvgCost"]].reset_index(drop=True)
+
     except Exception as exc:
-        print(f"[WARN] Sheets AvgCost fetch failed: {exc}")
+        print(f"[WARN] Sheets load failed: {exc}")
         return pd.DataFrame()
+
+
+def _load_from_portfolio_json() -> pd.DataFrame:
+    """Load portfolio from PORTFOLIO_JSON env var (GitHub Secret). Fallback only."""
+    raw = os.environ.get("PORTFOLIO_JSON", "")
+    if not raw:
+        print("[WARN] PORTFOLIO_JSON secret not set")
+        return pd.DataFrame(columns=["Ticker", "Name", "Shares", "AvgCost"])
+    try:
+        data = json.loads(raw)
+        rows = [
+            {"Ticker": p["ticker"], "Name": p.get("name", p["ticker"]),
+             "Shares": float(p.get("shares", 0)), "AvgCost": float(p.get("avg_cost", 0))}
+            for p in data
+            if float(p.get("shares", 0)) > 0
+        ]
+        return pd.DataFrame(rows)
+    except Exception as exc:
+        print(f"[WARN] Could not parse PORTFOLIO_JSON: {exc}")
+        return pd.DataFrame(columns=["Ticker", "Name", "Shares", "AvgCost"])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -242,6 +263,11 @@ _SUFFIX_CCY = {
     ".TO": "CAD", ".AX": "AUD", ".HK": "HKD",
 }
 
+# Tickers whose yfinance currency differs from their exchange convention
+_CURRENCY_OVERRIDE = {
+    "IGLN.L": "USD",   # iShares Physical Gold ETC — quoted in USD on LSE
+}
+
 
 def fetch_currencies(tickers: list[str]) -> dict:
     """Return {ticker: currency} using exchange-suffix lookup (deterministic).
@@ -264,6 +290,9 @@ def fetch_currencies(tickers: list[str]) -> dict:
         except Exception:
             info[t] = "USD"
         time.sleep(0.05)
+
+    # Apply overrides last (highest priority)
+    info.update({t: ccy for t, ccy in _CURRENCY_OVERRIDE.items() if t in tickers})
 
     print(f"[Currencies] {info}")
     return info
