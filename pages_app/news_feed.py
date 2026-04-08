@@ -202,54 +202,60 @@ def _render_article_card(article: dict):
 def render_news_feed_page(ctx):
     render_page_title("News Feed")
 
-    # ── Controls ──────────────────────────────────────────────────────────────
-    col_sources, col_filter = st.columns([2, 1])
+    @st.fragment(run_every=300)
+    def _live():
+        st.caption(f"Last refreshed: {datetime.datetime.now().strftime('%H:%M:%S')}")
 
-    with col_sources:
-        selected_sources = st.multiselect(
-            "Sources",
-            options=list(RSS_FEEDS.keys()),
-            default=list(RSS_FEEDS.keys())[:4],
-            key="news_sources",
+        # ── Controls ──────────────────────────────────────────────────────────────
+        col_sources, col_filter = st.columns([2, 1])
+
+        with col_sources:
+            selected_sources = st.multiselect(
+                "Sources",
+                options=list(RSS_FEEDS.keys()),
+                default=list(RSS_FEEDS.keys())[:4],
+                key="news_sources",
+            )
+
+        with col_filter:
+            keyword = st.text_input("Filter headlines", placeholder="e.g. Fed, inflation...",
+                                    key="news_keyword")
+
+        col_refresh, col_count = st.columns([1, 3])
+        with col_refresh:
+            if st.button("Refresh Feed", key="news_refresh"):
+                st.cache_data.clear()
+                st.rerun()
+        with col_count:
+            st.caption("Auto-refreshes every 5 minutes. Showing up to 50 articles.")
+
+        if not selected_sources:
+            st.info("Select at least one news source above.")
+            return
+
+        # ── Fetch ─────────────────────────────────────────────────────────────────
+        with st.spinner("Loading news feeds..."):
+            articles = _fetch_all_feeds(tuple(sorted(selected_sources)))
+
+        if not articles:
+            st.warning("No articles fetched. Some feeds may be temporarily unavailable.")
+            return
+
+        # ── Filter by keyword ─────────────────────────────────────────────────────
+        if keyword.strip():
+            kw = keyword.strip().lower()
+            articles = [a for a in articles if kw in a.get("title", "").lower() or kw in a.get("summary", "").lower()]
+
+        if not articles:
+            st.info(f"No articles match the keyword '{keyword}'.")
+            return
+
+        info_section(
+            "Latest Headlines",
+            f"{len(articles)} articles · {datetime.datetime.now().strftime('%H:%M:%S')}",
         )
 
-    with col_filter:
-        keyword = st.text_input("Filter headlines", placeholder="e.g. Fed, inflation...",
-                                key="news_keyword")
+        for article in articles:
+            _render_article_card(article)
 
-    col_refresh, col_count = st.columns([1, 3])
-    with col_refresh:
-        if st.button("Refresh Feed", key="news_refresh"):
-            st.cache_data.clear()
-            st.rerun()
-    with col_count:
-        st.caption("Auto-refreshes every 5 minutes. Showing up to 50 articles.")
-
-    if not selected_sources:
-        st.info("Select at least one news source above.")
-        return
-
-    # ── Fetch ─────────────────────────────────────────────────────────────────
-    with st.spinner("Loading news feeds..."):
-        articles = _fetch_all_feeds(tuple(sorted(selected_sources)))
-
-    if not articles:
-        st.warning("No articles fetched. Some feeds may be temporarily unavailable.")
-        return
-
-    # ── Filter by keyword ─────────────────────────────────────────────────────
-    if keyword.strip():
-        kw = keyword.strip().lower()
-        articles = [a for a in articles if kw in a.get("title", "").lower() or kw in a.get("summary", "").lower()]
-
-    if not articles:
-        st.info(f"No articles match the keyword '{keyword}'.")
-        return
-
-    info_section(
-        "Latest Headlines",
-        f"{len(articles)} articles · {datetime.datetime.now().strftime('%H:%M:%S')}",
-    )
-
-    for article in articles:
-        _render_article_card(article)
+    _live()

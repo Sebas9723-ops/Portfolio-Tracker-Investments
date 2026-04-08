@@ -1,3 +1,4 @@
+import datetime
 """
 Options Chain page — live options chain viewer for any ticker.
 Uses yfinance option_chain() for data. No external API keys required.
@@ -214,105 +215,111 @@ def _iv_smile_chart(calls: pd.DataFrame, puts: pd.DataFrame, current_price: floa
 def render_options_chain_page(ctx):
     render_page_title("Options Chain")
 
-    # ── Ticker input ──────────────────────────────────────────────────────────
-    portfolio_tickers = list(ctx.get("updated_portfolio", {}).keys())
-    default_ticker = portfolio_tickers[0] if portfolio_tickers else "AAPL"
+    @st.fragment(run_every=60)
+    def _live():
+        st.caption(f"Last refreshed: {datetime.datetime.now().strftime('%H:%M:%S')}")
 
-    col_ticker, col_expiry = st.columns([2, 2])
-    with col_ticker:
-        ticker = st.text_input("Ticker", value=default_ticker, key="opt_ticker").upper().strip()
+        # ── Ticker input ──────────────────────────────────────────────────────────
+        portfolio_tickers = list(ctx.get("updated_portfolio", {}).keys())
+        default_ticker = portfolio_tickers[0] if portfolio_tickers else "AAPL"
 
-    if not ticker:
-        st.info("Enter a ticker to load options chain.")
-        return
+        col_ticker, col_expiry = st.columns([2, 2])
+        with col_ticker:
+            ticker = st.text_input("Ticker", value=default_ticker, key="opt_ticker").upper().strip()
 
-    with st.spinner(f"Loading options for {ticker}..."):
-        expiries = _fetch_options_expiries(ticker)
-        current_price = _fetch_current_price(ticker)
+        if not ticker:
+            st.info("Enter a ticker to load options chain.")
+            return
 
-    if not expiries:
-        st.error(f"No options data available for {ticker}. Options may not trade on this security.")
-        return
+        with st.spinner(f"Loading options for {ticker}..."):
+            expiries = _fetch_options_expiries(ticker)
+            current_price = _fetch_current_price(ticker)
 
-    with col_expiry:
-        selected_expiry = st.selectbox("Expiry", expiries, key="opt_expiry")
+        if not expiries:
+            st.error(f"No options data available for {ticker}. Options may not trade on this security.")
+            return
 
-    if not selected_expiry:
-        return
+        with col_expiry:
+            selected_expiry = st.selectbox("Expiry", expiries, key="opt_expiry")
 
-    with st.spinner("Loading option chain..."):
-        calls, puts = _fetch_option_chain(ticker, selected_expiry)
+        if not selected_expiry:
+            return
 
-    if calls.empty and puts.empty:
-        st.error("Could not load option chain. Try a different expiry.")
-        return
+        with st.spinner("Loading option chain..."):
+            calls, puts = _fetch_option_chain(ticker, selected_expiry)
 
-    price = current_price or 0.0
+        if calls.empty and puts.empty:
+            st.error("Could not load option chain. Try a different expiry.")
+            return
 
-    # ── Key metrics ───────────────────────────────────────────────────────────
-    info_section("Options Metrics", f"{ticker} · Expiry: {selected_expiry}")
+        price = current_price or 0.0
 
-    atm = _atm_iv(calls if not calls.empty else puts, price)
-    pcr = _compute_put_call_ratio(calls, puts)
-    max_pain = _compute_max_pain(calls, puts)
+        # ── Key metrics ───────────────────────────────────────────────────────────
+        info_section("Options Metrics", f"{ticker} · Expiry: {selected_expiry}")
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Current Price", f"{price:.2f}" if price else "—")
-    col2.metric("ATM IV", f"{atm:.1f}%" if atm else "—")
-    col3.metric("Put/Call Ratio", f"{pcr:.3f}" if pcr else "—")
-    col4.metric("Max Pain", f"{max_pain:.2f}" if max_pain else "—")
+        atm = _atm_iv(calls if not calls.empty else puts, price)
+        pcr = _compute_put_call_ratio(calls, puts)
+        max_pain = _compute_max_pain(calls, puts)
 
-    st.markdown("")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Current Price", f"{price:.2f}" if price else "—")
+        col2.metric("ATM IV", f"{atm:.1f}%" if atm else "—")
+        col3.metric("Put/Call Ratio", f"{pcr:.3f}" if pcr else "—")
+        col4.metric("Max Pain", f"{max_pain:.2f}" if max_pain else "—")
 
-    # ── Side-by-side chains ───────────────────────────────────────────────────
-    info_section("Option Chain", "Calls (left) and Puts (right) for selected expiry.")
+        st.markdown("")
 
-    calls_display = _prepare_chain_table(calls, price, is_calls=True)
-    puts_display = _prepare_chain_table(puts, price, is_calls=False)
+        # ── Side-by-side chains ───────────────────────────────────────────────────
+        info_section("Option Chain", "Calls (left) and Puts (right) for selected expiry.")
 
-    col_calls, col_puts = st.columns(2)
+        calls_display = _prepare_chain_table(calls, price, is_calls=True)
+        puts_display = _prepare_chain_table(puts, price, is_calls=False)
 
-    with col_calls:
-        st.markdown(f"**CALLS** — {len(calls_display)} strikes")
-        if not calls_display.empty:
-            def _style_calls(row):
-                styles = [""] * len(row)
-                if "ITM" in row.index and row["ITM"]:
-                    styles = [f"background-color: rgba(243,167,18,0.12)"] * len(row)
-                return styles
-            st.dataframe(
-                calls_display.style.apply(_style_calls, axis=1),
-                use_container_width=True,
-                height=min(600, max(200, 35 * len(calls_display) + 48)),
-                hide_index=True,
-            )
-        else:
-            st.info("No call data.")
+        col_calls, col_puts = st.columns(2)
 
-    with col_puts:
-        st.markdown(f"**PUTS** — {len(puts_display)} strikes")
-        if not puts_display.empty:
-            def _style_puts(row):
-                styles = [""] * len(row)
-                if "ITM" in row.index and row["ITM"]:
-                    styles = [f"background-color: rgba(243,167,18,0.12)"] * len(row)
-                return styles
-            st.dataframe(
-                puts_display.style.apply(_style_puts, axis=1),
-                use_container_width=True,
-                height=min(600, max(200, 35 * len(puts_display) + 48)),
-                hide_index=True,
-            )
-        else:
-            st.info("No put data.")
+        with col_calls:
+            st.markdown(f"**CALLS** — {len(calls_display)} strikes")
+            if not calls_display.empty:
+                def _style_calls(row):
+                    styles = [""] * len(row)
+                    if "ITM" in row.index and row["ITM"]:
+                        styles = [f"background-color: rgba(243,167,18,0.12)"] * len(row)
+                    return styles
+                st.dataframe(
+                    calls_display.style.apply(_style_calls, axis=1),
+                    use_container_width=True,
+                    height=min(600, max(200, 35 * len(calls_display) + 48)),
+                    hide_index=True,
+                )
+            else:
+                st.info("No call data.")
 
-    st.markdown("")
+        with col_puts:
+            st.markdown(f"**PUTS** — {len(puts_display)} strikes")
+            if not puts_display.empty:
+                def _style_puts(row):
+                    styles = [""] * len(row)
+                    if "ITM" in row.index and row["ITM"]:
+                        styles = [f"background-color: rgba(243,167,18,0.12)"] * len(row)
+                    return styles
+                st.dataframe(
+                    puts_display.style.apply(_style_puts, axis=1),
+                    use_container_width=True,
+                    height=min(600, max(200, 35 * len(puts_display) + 48)),
+                    hide_index=True,
+                )
+            else:
+                st.info("No put data.")
 
-    # ── Charts ────────────────────────────────────────────────────────────────
-    tab_oi, tab_iv = st.tabs(["Open Interest", "IV Smile"])
+        st.markdown("")
 
-    with tab_oi:
-        st.plotly_chart(_oi_chart(calls, puts, price), use_container_width=True, key="opt_oi_chart")
+        # ── Charts ────────────────────────────────────────────────────────────────
+        tab_oi, tab_iv = st.tabs(["Open Interest", "IV Smile"])
 
-    with tab_iv:
-        st.plotly_chart(_iv_smile_chart(calls, puts, price), use_container_width=True, key="opt_iv_smile")
+        with tab_oi:
+            st.plotly_chart(_oi_chart(calls, puts, price), use_container_width=True, key="opt_oi_chart")
+
+        with tab_iv:
+            st.plotly_chart(_iv_smile_chart(calls, puts, price), use_container_width=True, key="opt_iv_smile")
+
+    _live()

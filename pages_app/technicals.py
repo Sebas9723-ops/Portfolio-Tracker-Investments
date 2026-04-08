@@ -1,3 +1,4 @@
+import datetime
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -222,85 +223,91 @@ def _signal_badge(label: str, val, is_bullish) -> str:
 def render_technicals_page(ctx):
     render_page_title("Technical Analysis")
 
-    portfolio_tickers = list(ctx.get("updated_portfolio", {}).keys())
+    @st.fragment(run_every=900)
+    def _live():
+        st.caption(f"Last refreshed: {datetime.datetime.now().strftime('%H:%M:%S')}")
 
-    c1, c2, c3 = st.columns([2, 2, 1])
-    with c1:
-        use_custom = st.checkbox("Custom ticker", value=False, key="ta_use_custom")
-    with c2:
-        if use_custom:
-            ticker = st.text_input(
-                "Ticker", placeholder="e.g. NVDA",
-                label_visibility="collapsed", key="ta_custom_input",
-            ).upper().strip()
-        else:
-            ticker = (
-                st.selectbox("Select ticker", portfolio_tickers, key="ta_portfolio_sel")
-                if portfolio_tickers else ""
-            )
-    with c3:
-        period = st.selectbox("Period", ["3mo", "6mo", "1y", "2y", "5y"], index=1, key="ta_period")
+        portfolio_tickers = list(ctx.get("updated_portfolio", {}).keys())
 
-    if not ticker:
-        st.info("Select or enter a ticker to load technical analysis.")
-        return
+        c1, c2, c3 = st.columns([2, 2, 1])
+        with c1:
+            use_custom = st.checkbox("Custom ticker", value=False, key="ta_use_custom")
+        with c2:
+            if use_custom:
+                ticker = st.text_input(
+                    "Ticker", placeholder="e.g. NVDA",
+                    label_visibility="collapsed", key="ta_custom_input",
+                ).upper().strip()
+            else:
+                ticker = (
+                    st.selectbox("Select ticker", portfolio_tickers, key="ta_portfolio_sel")
+                    if portfolio_tickers else ""
+                )
+        with c3:
+            period = st.selectbox("Period", ["3mo", "6mo", "1y", "2y", "5y"], index=1, key="ta_period")
 
-    with st.spinner(f"Loading {ticker}..."):
-        raw = _fetch_ohlcv(ticker, period)
+        if not ticker:
+            st.info("Select or enter a ticker to load technical analysis.")
+            return
 
-    if raw is None or raw.empty:
-        st.error(f"No price data found for {ticker}.")
-        return
+        with st.spinner(f"Loading {ticker}..."):
+            raw = _fetch_ohlcv(ticker, period)
 
-    df = _compute_indicators(raw)
-    close = float(df["Close"].iloc[-1])
+        if raw is None or raw.empty:
+            st.error(f"No price data found for {ticker}.")
+            return
 
-    rsi_s      = df["RSI"].dropna()
-    macd_s     = df["MACD"].dropna()
-    sig_s      = df["MACD_Signal"].dropna()
-    sma20_s    = df["SMA20"].dropna()
-    sma50_s    = df["SMA50"].dropna()
-    sma200_s   = df["SMA200"].dropna()
-    bb_upper_s = df["BB_Upper"].dropna()
-    bb_lower_s = df["BB_Lower"].dropna()
+        df = _compute_indicators(raw)
+        close = float(df["Close"].iloc[-1])
 
-    rsi_val  = float(rsi_s.iloc[-1])  if not rsi_s.empty  else None
-    macd_val = float(macd_s.iloc[-1]) if not macd_s.empty else None
-    sig_val  = float(sig_s.iloc[-1])  if not sig_s.empty  else None
+        rsi_s      = df["RSI"].dropna()
+        macd_s     = df["MACD"].dropna()
+        sig_s      = df["MACD_Signal"].dropna()
+        sma20_s    = df["SMA20"].dropna()
+        sma50_s    = df["SMA50"].dropna()
+        sma200_s   = df["SMA200"].dropna()
+        bb_upper_s = df["BB_Upper"].dropna()
+        bb_lower_s = df["BB_Lower"].dropna()
 
-    # Signal badges
-    badges = []
-    if rsi_val is not None:
-        badges.append(_signal_badge("RSI (14)", rsi_val, rsi_val > 50))
-    if macd_val is not None and sig_val is not None:
-        badges.append(_signal_badge("MACD", macd_val, macd_val > sig_val))
-    if not sma20_s.empty:
-        badges.append(_signal_badge("vs SMA 20", float(sma20_s.iloc[-1]), close > float(sma20_s.iloc[-1])))
-    if not sma50_s.empty:
-        badges.append(_signal_badge("vs SMA 50", float(sma50_s.iloc[-1]), close > float(sma50_s.iloc[-1])))
-    if not sma200_s.empty:
-        badges.append(_signal_badge("vs SMA 200", float(sma200_s.iloc[-1]), close > float(sma200_s.iloc[-1])))
+        rsi_val  = float(rsi_s.iloc[-1])  if not rsi_s.empty  else None
+        macd_val = float(macd_s.iloc[-1]) if not macd_s.empty else None
+        sig_val  = float(sig_s.iloc[-1])  if not sig_s.empty  else None
 
-    if badges:
-        info_section("Signal Summary", "Bullish/Bearish read for each indicator vs current price.")
-        st.markdown("".join(badges), unsafe_allow_html=True)
+        # Signal badges
+        badges = []
+        if rsi_val is not None:
+            badges.append(_signal_badge("RSI (14)", rsi_val, rsi_val > 50))
+        if macd_val is not None and sig_val is not None:
+            badges.append(_signal_badge("MACD", macd_val, macd_val > sig_val))
+        if not sma20_s.empty:
+            badges.append(_signal_badge("vs SMA 20", float(sma20_s.iloc[-1]), close > float(sma20_s.iloc[-1])))
+        if not sma50_s.empty:
+            badges.append(_signal_badge("vs SMA 50", float(sma50_s.iloc[-1]), close > float(sma50_s.iloc[-1])))
+        if not sma200_s.empty:
+            badges.append(_signal_badge("vs SMA 200", float(sma200_s.iloc[-1]), close > float(sma200_s.iloc[-1])))
 
-    st.markdown("")
-    info_section(
-        "Chart",
-        f"{ticker} · {period} · Candlestick · SMA 20/50/200 · Bollinger Bands · Volume · RSI · MACD",
-    )
-    st.plotly_chart(_build_chart(df, ticker), use_container_width=True, key=f"ta_{ticker}_{period}")
+        if badges:
+            info_section("Signal Summary", "Bullish/Bearish read for each indicator vs current price.")
+            st.markdown("".join(badges), unsafe_allow_html=True)
 
-    info_section("Key Levels", "Price vs moving averages and Bollinger Bands.")
-    cols = st.columns(6)
-    metrics = [
-        ("Price",    f"{close:.2f}"),
-        ("SMA 20",   f"{float(sma20_s.iloc[-1]):.2f}"    if not sma20_s.empty    else "—"),
-        ("SMA 50",   f"{float(sma50_s.iloc[-1]):.2f}"    if not sma50_s.empty    else "—"),
-        ("SMA 200",  f"{float(sma200_s.iloc[-1]):.2f}"   if not sma200_s.empty   else "—"),
-        ("BB Upper", f"{float(bb_upper_s.iloc[-1]):.2f}" if not bb_upper_s.empty else "—"),
-        ("BB Lower", f"{float(bb_lower_s.iloc[-1]):.2f}" if not bb_lower_s.empty else "—"),
-    ]
-    for col, (label, val) in zip(cols, metrics):
-        col.metric(label, val)
+        st.markdown("")
+        info_section(
+            "Chart",
+            f"{ticker} · {period} · Candlestick · SMA 20/50/200 · Bollinger Bands · Volume · RSI · MACD",
+        )
+        st.plotly_chart(_build_chart(df, ticker), use_container_width=True, key=f"ta_{ticker}_{period}")
+
+        info_section("Key Levels", "Price vs moving averages and Bollinger Bands.")
+        cols = st.columns(6)
+        metrics = [
+            ("Price",    f"{close:.2f}"),
+            ("SMA 20",   f"{float(sma20_s.iloc[-1]):.2f}"    if not sma20_s.empty    else "—"),
+            ("SMA 50",   f"{float(sma50_s.iloc[-1]):.2f}"    if not sma50_s.empty    else "—"),
+            ("SMA 200",  f"{float(sma200_s.iloc[-1]):.2f}"   if not sma200_s.empty   else "—"),
+            ("BB Upper", f"{float(bb_upper_s.iloc[-1]):.2f}" if not bb_upper_s.empty else "—"),
+            ("BB Lower", f"{float(bb_lower_s.iloc[-1]):.2f}" if not bb_lower_s.empty else "—"),
+        ]
+        for col, (label, val) in zip(cols, metrics):
+            col.metric(label, val)
+
+    _live()

@@ -189,101 +189,107 @@ def _bar_chart(day_changes: dict[str, float | None]) -> go.Figure:
 def render_sector_heatmap_page(ctx):
     render_page_title("Sector Heat Map")
 
-    with st.spinner("Fetching sector ETF data..."):
-        hist = _fetch_sector_history()
-        ytd_hist = _fetch_ytd_history()
+    @st.fragment(run_every=300)
+    def _live():
+        st.caption(f"Last refreshed: {datetime.datetime.now().strftime('%H:%M:%S')}")
 
-    if hist.empty:
-        st.error("Unable to fetch sector data. Try again later.")
-        return
+        with st.spinner("Fetching sector ETF data..."):
+            hist = _fetch_sector_history()
+            ytd_hist = _fetch_ytd_history()
 
-    # Compute day changes
-    day_changes: dict[str, float | None] = {}
-    vol_30d: dict[str, float | None] = {}
-    for ticker in SECTORS:
-        if ticker not in hist.columns:
-            day_changes[ticker] = None
-            vol_30d[ticker] = None
-            continue
-        s = hist[ticker].dropna()
-        day_changes[ticker] = _pct_change(s, 1)
-        # 30-day vol = std of daily returns * sqrt(252)
-        if len(s) >= 21:
-            returns = s.pct_change().dropna().tail(21)
-            vol_30d[ticker] = float(returns.std() * (252 ** 0.5) * 100)
-        else:
-            vol_30d[ticker] = None
+        if hist.empty:
+            st.error("Unable to fetch sector data. Try again later.")
+            return
 
-    # Best / worst sector today
-    valid = {k: v for k, v in day_changes.items() if v is not None}
-    best_ticker = max(valid, key=lambda k: valid[k]) if valid else None
-    worst_ticker = min(valid, key=lambda k: valid[k]) if valid else None
-    most_vol_ticker = max({k: v for k, v in vol_30d.items() if v is not None},
-                          key=lambda k: vol_30d[k], default=None)
-
-    # ── Top metrics ───────────────────────────────────────────────────────────
-    info_section("Sector Snapshot", "Live sector ETF performance overview.")
-    col1, col2, col3 = st.columns(3)
-    if best_ticker:
-        col1.metric(f"Best Today — {SECTORS[best_ticker]}",
-                    f"{valid[best_ticker]:+.2f}%", f"{best_ticker}")
-    else:
-        col1.metric("Best Today", "—")
-    if worst_ticker:
-        col2.metric(f"Worst Today — {SECTORS[worst_ticker]}",
-                    f"{valid[worst_ticker]:+.2f}%", f"{worst_ticker}")
-    else:
-        col2.metric("Worst Today", "—")
-    if most_vol_ticker and vol_30d[most_vol_ticker]:
-        col3.metric(f"Most Volatile — {SECTORS[most_vol_ticker]}",
-                    f"{vol_30d[most_vol_ticker]:.1f}% ann.", "30-day realized vol")
-    else:
-        col3.metric("Most Volatile", "—")
-
-    st.markdown("")
-
-    # ── Heat map grid ─────────────────────────────────────────────────────────
-    info_section("Heat Map", "Color intensity indicates magnitude of today's move.")
-    _render_heatmap_grid(day_changes)
-
-    st.markdown("")
-
-    # ── Bar chart ─────────────────────────────────────────────────────────────
-    info_section("Performance Bar Chart", "Sorted by today's return.")
-    st.plotly_chart(_bar_chart(day_changes), use_container_width=True, key="sector_bar")
-
-    # ── Historical performance table ──────────────────────────────────────────
-    info_section("Historical Performance", "Returns across multiple time horizons.")
-    perf_rows = []
-    for ticker in SECTORS:
-        row = {"Ticker": ticker, "Sector": SECTORS[ticker]}
-        if ticker in hist.columns:
+        # Compute day changes
+        day_changes: dict[str, float | None] = {}
+        vol_30d: dict[str, float | None] = {}
+        for ticker in SECTORS:
+            if ticker not in hist.columns:
+                day_changes[ticker] = None
+                vol_30d[ticker] = None
+                continue
             s = hist[ticker].dropna()
-            row["1D %"] = round(_pct_change(s, 1) or 0, 2)
-            row["5D %"] = round(_pct_change(s, 5) or 0, 2)
-            row["1M %"] = round(_pct_change(s, 21) or 0, 2)
-            row["3M %"] = round(_pct_since_start(s) or 0, 2)
+            day_changes[ticker] = _pct_change(s, 1)
+            # 30-day vol = std of daily returns * sqrt(252)
+            if len(s) >= 21:
+                returns = s.pct_change().dropna().tail(21)
+                vol_30d[ticker] = float(returns.std() * (252 ** 0.5) * 100)
+            else:
+                vol_30d[ticker] = None
+
+        # Best / worst sector today
+        valid = {k: v for k, v in day_changes.items() if v is not None}
+        best_ticker = max(valid, key=lambda k: valid[k]) if valid else None
+        worst_ticker = min(valid, key=lambda k: valid[k]) if valid else None
+        most_vol_ticker = max({k: v for k, v in vol_30d.items() if v is not None},
+                              key=lambda k: vol_30d[k], default=None)
+
+        # ── Top metrics ───────────────────────────────────────────────────────────
+        info_section("Sector Snapshot", "Live sector ETF performance overview.")
+        col1, col2, col3 = st.columns(3)
+        if best_ticker:
+            col1.metric(f"Best Today — {SECTORS[best_ticker]}",
+                        f"{valid[best_ticker]:+.2f}%", f"{best_ticker}")
         else:
-            row["1D %"] = row["5D %"] = row["1M %"] = row["3M %"] = None
-
-        if not ytd_hist.empty and ticker in ytd_hist.columns:
-            row["YTD %"] = round(_pct_since_start(ytd_hist[ticker].dropna()) or 0, 2)
+            col1.metric("Best Today", "—")
+        if worst_ticker:
+            col2.metric(f"Worst Today — {SECTORS[worst_ticker]}",
+                        f"{valid[worst_ticker]:+.2f}%", f"{worst_ticker}")
         else:
-            row["YTD %"] = None
+            col2.metric("Worst Today", "—")
+        if most_vol_ticker and vol_30d[most_vol_ticker]:
+            col3.metric(f"Most Volatile — {SECTORS[most_vol_ticker]}",
+                        f"{vol_30d[most_vol_ticker]:.1f}% ann.", "30-day realized vol")
+        else:
+            col3.metric("Most Volatile", "—")
 
-        perf_rows.append(row)
+        st.markdown("")
 
-    perf_df = pd.DataFrame(perf_rows)
+        # ── Heat map grid ─────────────────────────────────────────────────────────
+        info_section("Heat Map", "Color intensity indicates magnitude of today's move.")
+        _render_heatmap_grid(day_changes)
 
-    def _color_cell(val):
-        try:
-            v = float(val)
-            if v > 0:  return "color: #4dff4d"
-            if v < 0:  return "color: #ff4d4d"
-        except Exception:
-            pass
-        return "color: #888888"
+        st.markdown("")
 
-    pct_cols = ["1D %", "5D %", "1M %", "3M %", "YTD %"]
-    styled = perf_df.style.map(_color_cell, subset=pct_cols)
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+        # ── Bar chart ─────────────────────────────────────────────────────────────
+        info_section("Performance Bar Chart", "Sorted by today's return.")
+        st.plotly_chart(_bar_chart(day_changes), use_container_width=True, key="sector_bar")
+
+        # ── Historical performance table ──────────────────────────────────────────
+        info_section("Historical Performance", "Returns across multiple time horizons.")
+        perf_rows = []
+        for ticker in SECTORS:
+            row = {"Ticker": ticker, "Sector": SECTORS[ticker]}
+            if ticker in hist.columns:
+                s = hist[ticker].dropna()
+                row["1D %"] = round(_pct_change(s, 1) or 0, 2)
+                row["5D %"] = round(_pct_change(s, 5) or 0, 2)
+                row["1M %"] = round(_pct_change(s, 21) or 0, 2)
+                row["3M %"] = round(_pct_since_start(s) or 0, 2)
+            else:
+                row["1D %"] = row["5D %"] = row["1M %"] = row["3M %"] = None
+
+            if not ytd_hist.empty and ticker in ytd_hist.columns:
+                row["YTD %"] = round(_pct_since_start(ytd_hist[ticker].dropna()) or 0, 2)
+            else:
+                row["YTD %"] = None
+
+            perf_rows.append(row)
+
+        perf_df = pd.DataFrame(perf_rows)
+
+        def _color_cell(val):
+            try:
+                v = float(val)
+                if v > 0:  return "color: #4dff4d"
+                if v < 0:  return "color: #ff4d4d"
+            except Exception:
+                pass
+            return "color: #888888"
+
+        pct_cols = ["1D %", "5D %", "1M %", "3M %", "YTD %"]
+        styled = perf_df.style.map(_color_cell, subset=pct_cols)
+        st.dataframe(styled, use_container_width=True, hide_index=True)
+
+    _live()

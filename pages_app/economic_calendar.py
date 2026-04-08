@@ -212,144 +212,150 @@ def _render_macro_card(col, ticker: str, label: str, suffix: str, series: pd.Ser
 def render_economic_calendar_page(ctx):
     render_page_title("Macro Dashboard")
 
-    tab_macro, tab_cal = st.tabs(["Macro Indicators", "Economic Calendar"])
+    @st.fragment(run_every=300)
+    def _live():
+        st.caption(f"Last refreshed: {datetime.datetime.now().strftime('%H:%M:%S')}")
 
-    # ── Tab: Macro Dashboard ─────────────────────────────────────────────────
-    with tab_macro:
-        info_section("Key Macro Indicators", "Live prices · 1Y sparklines · 1D and 1M changes.")
+        tab_macro, tab_cal = st.tabs(["Macro Indicators", "Economic Calendar"])
 
-        with st.spinner("Fetching macro data..."):
-            macro_data = _fetch_macro_history()
+        # ── Tab: Macro Dashboard ─────────────────────────────────────────────────
+        with tab_macro:
+            info_section("Key Macro Indicators", "Live prices · 1Y sparklines · 1D and 1M changes.")
 
-        n_cols = 4
-        indicators = MACRO_INDICATORS
-        for i in range(0, len(indicators), n_cols):
-            batch = indicators[i:i + n_cols]
-            cols = st.columns(n_cols)
-            for col, (ticker, label, suffix, _) in zip(cols, batch):
-                series = macro_data.get(ticker)
-                _render_macro_card(col, ticker, label, suffix, series)
+            with st.spinner("Fetching macro data..."):
+                macro_data = _fetch_macro_history()
+
+            n_cols = 4
+            indicators = MACRO_INDICATORS
+            for i in range(0, len(indicators), n_cols):
+                batch = indicators[i:i + n_cols]
+                cols = st.columns(n_cols)
+                for col, (ticker, label, suffix, _) in zip(cols, batch):
+                    series = macro_data.get(ticker)
+                    _render_macro_card(col, ticker, label, suffix, series)
+                st.markdown("")
+
+            # ── Full-size 1Y charts ────────────────────────────────────────────
             st.markdown("")
-
-        # ── Full-size 1Y charts ────────────────────────────────────────────
-        st.markdown("")
-        info_section("1-Year Price Charts", "Select an indicator to view.")
-        selected_label = st.selectbox(
-            "Indicator",
-            [label for _, label, _, _ in MACRO_INDICATORS],
-            key="macro_sel_indicator",
-        )
-        selected_ticker = next(
-            (t for t, l, _, _ in MACRO_INDICATORS if l == selected_label), None
-        )
-        if selected_ticker and selected_ticker in macro_data:
-            series = macro_data[selected_ticker]
-            fig = go.Figure(go.Scatter(
-                x=series.index, y=series.values,
-                mode="lines",
-                line=dict(color=_GOLD, width=1.5),
-                fill="tozeroy",
-                fillcolor="rgba(243,167,18,0.07)",
-                hovertemplate="%{x|%b %d}<br>%{y:.4f}<extra></extra>",
-            ))
-            fig.update_layout(
-                paper_bgcolor=_BLOOMBERG_BG, plot_bgcolor=_BLOOMBERG_BG,
-                font=dict(color="#e6e6e6", size=12),
-                height=340,
-                margin=dict(t=30, b=30, l=60, r=20),
-                xaxis=dict(gridcolor="#1a1f2e"),
-                yaxis=dict(gridcolor="#1a1f2e"),
-                title=dict(text=selected_label, font=dict(color=_GOLD, size=13)),
-                hovermode="x unified",
+            info_section("1-Year Price Charts", "Select an indicator to view.")
+            selected_label = st.selectbox(
+                "Indicator",
+                [label for _, label, _, _ in MACRO_INDICATORS],
+                key="macro_sel_indicator",
             )
-            st.plotly_chart(fig, use_container_width=True, key="macro_full_chart")
-
-    # ── Tab: Economic Calendar ────────────────────────────────────────────────
-    with tab_cal:
-        info_section("Economic Calendar", "Key US macro events — FOMC, CPI, NFP.")
-
-        col_filter, col_days = st.columns([2, 1])
-        with col_filter:
-            event_filter = st.multiselect(
-                "Event types",
-                ["Non-Farm Payrolls", "CPI (Consumer Price Index)",
-                 "FOMC Meeting", "FOMC Rate Decision"],
-                default=["Non-Farm Payrolls", "CPI (Consumer Price Index)",
-                         "FOMC Meeting", "FOMC Rate Decision"],
-                key="cal_event_filter",
+            selected_ticker = next(
+                (t for t, l, _, _ in MACRO_INDICATORS if l == selected_label), None
             )
-        with col_days:
-            days_ahead = st.number_input("Days ahead", min_value=7, max_value=365, value=90,
-                                         step=7, key="cal_days_ahead")
-
-        today = datetime.date.today()
-        cutoff = today + datetime.timedelta(days=int(days_ahead))
-
-        filtered = []
-        for ev in ECONOMIC_EVENTS:
-            try:
-                d = datetime.date.fromisoformat(ev["date"])
-            except Exception:
-                continue
-            if today <= d <= cutoff:
-                if not event_filter or ev["event"] in event_filter:
-                    filtered.append({**ev, "_date": d})
-
-        filtered.sort(key=lambda e: e["_date"])
-
-        if not filtered:
-            st.info("No events in the selected window / filter.")
-        else:
-            st.markdown(f"**{len(filtered)} events** in the next {days_ahead} days.")
-            st.markdown("")
-
-            for ev in filtered:
-                d = ev["_date"]
-                days_out = (d - today).days
-                impact = ev.get("impact", "Medium")
-                impact_color = _RED if impact == "High" else _GOLD if impact == "Medium" else "#888"
-
-                this_week_badge = ""
-                if days_out <= 7:
-                    this_week_badge = f"<span style='background:#1a3a0d;color:{_GREEN};font-size:10px;padding:1px 7px;border-radius:3px;font-family:monospace;margin-left:8px;'>THIS WEEK</span>"
-                today_badge = ""
-                if days_out == 0:
-                    today_badge = f"<span style='background:#3a1a0d;color:{_GOLD};font-size:10px;padding:1px 7px;border-radius:3px;font-family:monospace;margin-left:4px;'>TODAY</span>"
-
-                st.markdown(
-                    f"""<div style='background:#111820;border:1px solid #1e2535;border-radius:5px;
-                    padding:10px 14px;margin-bottom:5px;display:flex;align-items:center;'>
-                    <div style='min-width:100px;color:#888;font-size:12px;font-family:monospace;'>
-                        {d.strftime('%a %b %d')}</div>
-                    <div style='flex:1;'>
-                        <span style='color:#e6e6e6;font-weight:bold;font-family:monospace;font-size:13px;'>
-                            {ev['event']}</span>
-                        {this_week_badge}{today_badge}
-                        <span style='color:#888;font-size:11px;margin-left:8px;'>{ev['country']}</span>
-                    </div>
-                    <div style='min-width:60px;text-align:right;'>
-                        <span style='color:{impact_color};font-size:11px;font-family:monospace;font-weight:bold;'>
-                            {impact.upper()}</span>
-                        <div style='color:#555;font-size:10px;font-family:monospace;'>
-                            {days_out}d</div>
-                    </div>
-                    </div>""",
-                    unsafe_allow_html=True,
+            if selected_ticker and selected_ticker in macro_data:
+                series = macro_data[selected_ticker]
+                fig = go.Figure(go.Scatter(
+                    x=series.index, y=series.values,
+                    mode="lines",
+                    line=dict(color=_GOLD, width=1.5),
+                    fill="tozeroy",
+                    fillcolor="rgba(243,167,18,0.07)",
+                    hovertemplate="%{x|%b %d}<br>%{y:.4f}<extra></extra>",
+                ))
+                fig.update_layout(
+                    paper_bgcolor=_BLOOMBERG_BG, plot_bgcolor=_BLOOMBERG_BG,
+                    font=dict(color="#e6e6e6", size=12),
+                    height=340,
+                    margin=dict(t=30, b=30, l=60, r=20),
+                    xaxis=dict(gridcolor="#1a1f2e"),
+                    yaxis=dict(gridcolor="#1a1f2e"),
+                    title=dict(text=selected_label, font=dict(color=_GOLD, size=13)),
+                    hovermode="x unified",
                 )
+                st.plotly_chart(fig, use_container_width=True, key="macro_full_chart")
 
-        # ── Show all as table ──────────────────────────────────────────────
-        st.markdown("")
-        with st.expander("View as table", expanded=False):
-            table_events = [
-                {
-                    "Date": ev["date"],
-                    "Event": ev["event"],
-                    "Impact": ev["impact"],
-                    "Country": ev["country"],
-                    "Days Until": (datetime.date.fromisoformat(ev["date"]) - today).days,
-                }
-                for ev in ECONOMIC_EVENTS
-                if today <= datetime.date.fromisoformat(ev["date"]) <= cutoff
-            ]
-            if table_events:
-                st.dataframe(pd.DataFrame(table_events), use_container_width=True, hide_index=True)
+        # ── Tab: Economic Calendar ────────────────────────────────────────────────
+        with tab_cal:
+            info_section("Economic Calendar", "Key US macro events — FOMC, CPI, NFP.")
+
+            col_filter, col_days = st.columns([2, 1])
+            with col_filter:
+                event_filter = st.multiselect(
+                    "Event types",
+                    ["Non-Farm Payrolls", "CPI (Consumer Price Index)",
+                     "FOMC Meeting", "FOMC Rate Decision"],
+                    default=["Non-Farm Payrolls", "CPI (Consumer Price Index)",
+                             "FOMC Meeting", "FOMC Rate Decision"],
+                    key="cal_event_filter",
+                )
+            with col_days:
+                days_ahead = st.number_input("Days ahead", min_value=7, max_value=365, value=90,
+                                             step=7, key="cal_days_ahead")
+
+            today = datetime.date.today()
+            cutoff = today + datetime.timedelta(days=int(days_ahead))
+
+            filtered = []
+            for ev in ECONOMIC_EVENTS:
+                try:
+                    d = datetime.date.fromisoformat(ev["date"])
+                except Exception:
+                    continue
+                if today <= d <= cutoff:
+                    if not event_filter or ev["event"] in event_filter:
+                        filtered.append({**ev, "_date": d})
+
+            filtered.sort(key=lambda e: e["_date"])
+
+            if not filtered:
+                st.info("No events in the selected window / filter.")
+            else:
+                st.markdown(f"**{len(filtered)} events** in the next {days_ahead} days.")
+                st.markdown("")
+
+                for ev in filtered:
+                    d = ev["_date"]
+                    days_out = (d - today).days
+                    impact = ev.get("impact", "Medium")
+                    impact_color = _RED if impact == "High" else _GOLD if impact == "Medium" else "#888"
+
+                    this_week_badge = ""
+                    if days_out <= 7:
+                        this_week_badge = f"<span style='background:#1a3a0d;color:{_GREEN};font-size:10px;padding:1px 7px;border-radius:3px;font-family:monospace;margin-left:8px;'>THIS WEEK</span>"
+                    today_badge = ""
+                    if days_out == 0:
+                        today_badge = f"<span style='background:#3a1a0d;color:{_GOLD};font-size:10px;padding:1px 7px;border-radius:3px;font-family:monospace;margin-left:4px;'>TODAY</span>"
+
+                    st.markdown(
+                        f"""<div style='background:#111820;border:1px solid #1e2535;border-radius:5px;
+                        padding:10px 14px;margin-bottom:5px;display:flex;align-items:center;'>
+                        <div style='min-width:100px;color:#888;font-size:12px;font-family:monospace;'>
+                            {d.strftime('%a %b %d')}</div>
+                        <div style='flex:1;'>
+                            <span style='color:#e6e6e6;font-weight:bold;font-family:monospace;font-size:13px;'>
+                                {ev['event']}</span>
+                            {this_week_badge}{today_badge}
+                            <span style='color:#888;font-size:11px;margin-left:8px;'>{ev['country']}</span>
+                        </div>
+                        <div style='min-width:60px;text-align:right;'>
+                            <span style='color:{impact_color};font-size:11px;font-family:monospace;font-weight:bold;'>
+                                {impact.upper()}</span>
+                            <div style='color:#555;font-size:10px;font-family:monospace;'>
+                                {days_out}d</div>
+                        </div>
+                        </div>""",
+                        unsafe_allow_html=True,
+                    )
+
+            # ── Show all as table ──────────────────────────────────────────────
+            st.markdown("")
+            with st.expander("View as table", expanded=False):
+                table_events = [
+                    {
+                        "Date": ev["date"],
+                        "Event": ev["event"],
+                        "Impact": ev["impact"],
+                        "Country": ev["country"],
+                        "Days Until": (datetime.date.fromisoformat(ev["date"]) - today).days,
+                    }
+                    for ev in ECONOMIC_EVENTS
+                    if today <= datetime.date.fromisoformat(ev["date"]) <= cutoff
+                ]
+                if table_events:
+                    st.dataframe(pd.DataFrame(table_events), use_container_width=True, hide_index=True)
+
+    _live()

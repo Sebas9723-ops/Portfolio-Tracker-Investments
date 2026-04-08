@@ -1,3 +1,4 @@
+import datetime
 """
 Yield Curve page — Bloomberg Terminal style US Treasury yield curve viewer.
 Fetches available Treasury yield tickers from yfinance and plots the curve.
@@ -147,87 +148,93 @@ def _yield_history_chart(hist: pd.DataFrame) -> go.Figure:
 def render_yield_curve_page(ctx):
     render_page_title("Yield Curve")
 
-    with st.spinner("Fetching Treasury yield data..."):
-        hist = _fetch_yield_history()
+    @st.fragment(run_every=300)
+    def _live():
+        st.caption(f"Last refreshed: {datetime.datetime.now().strftime('%H:%M:%S')}")
 
-    if hist.empty:
-        st.error("Unable to fetch Treasury yield data. Try again later.")
-        return
+        with st.spinner("Fetching Treasury yield data..."):
+            hist = _fetch_yield_history()
 
-    today_snap = _get_snapshot(hist, 0)
-    ago_1m_snap = _get_snapshot(hist, 21)
+        if hist.empty:
+            st.error("Unable to fetch Treasury yield data. Try again later.")
+            return
 
-    # ── Inversion warning banner ──────────────────────────────────────────────
-    tnx = today_snap.get("10Y")
-    irx = today_snap.get("3M")
-    if tnx is not None and irx is not None and irx > tnx:
-        st.markdown(
-            f"""<div style='background:#3d0d0d;border:1px solid {_RED};border-radius:6px;
-            padding:12px 18px;margin-bottom:16px;font-family:monospace;color:{_RED};font-size:14px;'>
-            ⚠ YIELD CURVE INVERTED — 3M ({irx:.2f}%) > 10Y ({tnx:.2f}%) — Recession signal active
-            </div>""",
-            unsafe_allow_html=True,
-        )
+        today_snap = _get_snapshot(hist, 0)
+        ago_1m_snap = _get_snapshot(hist, 21)
 
-    # ── Top metrics ───────────────────────────────────────────────────────────
-    info_section("Key Rates", "Current US Treasury yields and key spread indicators.")
+        # ── Inversion warning banner ──────────────────────────────────────────────
+        tnx = today_snap.get("10Y")
+        irx = today_snap.get("3M")
+        if tnx is not None and irx is not None and irx > tnx:
+            st.markdown(
+                f"""<div style='background:#3d0d0d;border:1px solid {_RED};border-radius:6px;
+                padding:12px 18px;margin-bottom:16px;font-family:monospace;color:{_RED};font-size:14px;'>
+                ⚠ YIELD CURVE INVERTED — 3M ({irx:.2f}%) > 10Y ({tnx:.2f}%) — Recession signal active
+                </div>""",
+                unsafe_allow_html=True,
+            )
 
-    spread_3m10y = (tnx - irx) if (tnx is not None and irx is not None) else None
-    fvx = today_snap.get("5Y")
-    tyx = today_snap.get("30Y")
-    spread_5y10y = (tnx - fvx) if (tnx is not None and fvx is not None) else None
+        # ── Top metrics ───────────────────────────────────────────────────────────
+        info_section("Key Rates", "Current US Treasury yields and key spread indicators.")
 
-    def _delta(tenor: str) -> str | None:
-        now = today_snap.get(tenor)
-        ago = ago_1m_snap.get(tenor)
-        if now is None or ago is None:
-            return None
-        return f"{now - ago:+.2f}% (1M)"
+        spread_3m10y = (tnx - irx) if (tnx is not None and irx is not None) else None
+        fvx = today_snap.get("5Y")
+        tyx = today_snap.get("30Y")
+        spread_5y10y = (tnx - fvx) if (tnx is not None and fvx is not None) else None
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("3M T-Bill",  f"{irx:.2f}%"  if irx  is not None else "—", _delta("3M"))
-    col2.metric("10Y Note",   f"{tnx:.2f}%"  if tnx  is not None else "—", _delta("10Y"))
-    col3.metric("30Y Bond",   f"{tyx:.2f}%"  if tyx  is not None else "—", _delta("30Y"))
-    col4.metric("3M–10Y Spread",
-                f"{spread_3m10y:+.2f}%" if spread_3m10y is not None else "—",
-                "Inverted" if (spread_3m10y is not None and spread_3m10y < 0) else "Normal",
-                delta_color="inverse" if (spread_3m10y is not None and spread_3m10y < 0) else "normal")
+        def _delta(tenor: str) -> str | None:
+            now = today_snap.get(tenor)
+            ago = ago_1m_snap.get(tenor)
+            if now is None or ago is None:
+                return None
+            return f"{now - ago:+.2f}% (1M)"
 
-    st.markdown("")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("3M T-Bill",  f"{irx:.2f}%"  if irx  is not None else "—", _delta("3M"))
+        col2.metric("10Y Note",   f"{tnx:.2f}%"  if tnx  is not None else "—", _delta("10Y"))
+        col3.metric("30Y Bond",   f"{tyx:.2f}%"  if tyx  is not None else "—", _delta("30Y"))
+        col4.metric("3M–10Y Spread",
+                    f"{spread_3m10y:+.2f}%" if spread_3m10y is not None else "—",
+                    "Inverted" if (spread_3m10y is not None and spread_3m10y < 0) else "Normal",
+                    delta_color="inverse" if (spread_3m10y is not None and spread_3m10y < 0) else "normal")
 
-    # ── Yield curve shape chart ───────────────────────────────────────────────
-    info_section("Yield Curve Shape", "Current curve vs 1 month ago vs 1 year ago.")
-    st.plotly_chart(_yield_curve_chart(hist), use_container_width=True, key="yc_shape_chart")
+        st.markdown("")
 
-    # ── Historical yields chart ───────────────────────────────────────────────
-    info_section("Historical Yields", "Each tenor's yield over the past 12 months.")
-    st.plotly_chart(_yield_history_chart(hist), use_container_width=True, key="yc_history_chart")
+        # ── Yield curve shape chart ───────────────────────────────────────────────
+        info_section("Yield Curve Shape", "Current curve vs 1 month ago vs 1 year ago.")
+        st.plotly_chart(_yield_curve_chart(hist), use_container_width=True, key="yc_shape_chart")
 
-    # ── Data table ────────────────────────────────────────────────────────────
-    info_section("Yield Data Table", "Snapshot values at key lookback points.")
-    rows = []
-    for tenor in list(YIELD_TICKERS.keys()):
-        now_v = today_snap.get(tenor)
-        ago1m = ago_1m_snap.get(tenor)
-        ago1y = _get_snapshot(hist, 252).get(tenor)
-        rows.append({
-            "Tenor": tenor,
-            "Current (%)": round(now_v, 3) if now_v else None,
-            "1M Ago (%)": round(ago1m, 3) if ago1m else None,
-            "1Y Ago (%)": round(ago1y, 3) if ago1y else None,
-            "1M Chg (bps)": round((now_v - ago1m) * 100, 1) if (now_v and ago1m) else None,
-            "1Y Chg (bps)": round((now_v - ago1y) * 100, 1) if (now_v and ago1y) else None,
-        })
-    tbl = pd.DataFrame(rows)
+        # ── Historical yields chart ───────────────────────────────────────────────
+        info_section("Historical Yields", "Each tenor's yield over the past 12 months.")
+        st.plotly_chart(_yield_history_chart(hist), use_container_width=True, key="yc_history_chart")
 
-    def _color_bps(val):
-        try:
-            v = float(val)
-            if v > 0:  return "color: #ff4d4d"
-            if v < 0:  return "color: #4dff4d"
-        except Exception:
-            pass
-        return "color: #888888"
+        # ── Data table ────────────────────────────────────────────────────────────
+        info_section("Yield Data Table", "Snapshot values at key lookback points.")
+        rows = []
+        for tenor in list(YIELD_TICKERS.keys()):
+            now_v = today_snap.get(tenor)
+            ago1m = ago_1m_snap.get(tenor)
+            ago1y = _get_snapshot(hist, 252).get(tenor)
+            rows.append({
+                "Tenor": tenor,
+                "Current (%)": round(now_v, 3) if now_v else None,
+                "1M Ago (%)": round(ago1m, 3) if ago1m else None,
+                "1Y Ago (%)": round(ago1y, 3) if ago1y else None,
+                "1M Chg (bps)": round((now_v - ago1m) * 100, 1) if (now_v and ago1m) else None,
+                "1Y Chg (bps)": round((now_v - ago1y) * 100, 1) if (now_v and ago1y) else None,
+            })
+        tbl = pd.DataFrame(rows)
 
-    styled = tbl.style.map(_color_bps, subset=["1M Chg (bps)", "1Y Chg (bps)"])
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+        def _color_bps(val):
+            try:
+                v = float(val)
+                if v > 0:  return "color: #ff4d4d"
+                if v < 0:  return "color: #4dff4d"
+            except Exception:
+                pass
+            return "color: #888888"
+
+        styled = tbl.style.map(_color_bps, subset=["1M Chg (bps)", "1Y Chg (bps)"])
+        st.dataframe(styled, use_container_width=True, hide_index=True)
+
+    _live()

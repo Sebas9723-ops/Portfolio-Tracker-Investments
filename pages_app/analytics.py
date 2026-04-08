@@ -1,3 +1,4 @@
+import datetime
 import json
 
 import numpy as np
@@ -557,74 +558,79 @@ def _render_multi_benchmark(mb):
 def render_analytics_page(ctx):
     render_page_title("Analytics")
 
-    portfolio_returns = ctx.get("portfolio_returns", pd.Series(dtype=float))
-    benchmark_returns = ctx.get("resolved_benchmark_returns", pd.Series(dtype=float))
-    asset_returns = ctx.get("asset_returns")
-    df = ctx.get("df", pd.DataFrame())
-    base_currency = ctx.get("base_currency", "USD")
-    fx_hist = ctx.get("fx_hist")
-    max_dd = float(ctx.get("max_drawdown", 0.0))
-    policy_map = ctx.get("policy_target_map", {})
+    @st.fragment(run_every=900)
+    def _live():
+        st.caption(f"Last refreshed: {datetime.datetime.now().strftime('%H:%M:%S')}")
 
-    # ── Sidebar controls ──────────────────────────────────────────────────────
-    with st.sidebar.expander("Analytics Settings", expanded=False):
-        rolling_window = st.slider("Rolling Window (days)", 21, 252, 63, 21, key="ana_roll_win")
-        rfr = st.number_input("Risk-free rate", 0.00, 0.20, 0.02, 0.005, format="%.3f", key="ana_rfr")
-        voo_w = st.slider("Blended benchmark VOO %", 0, 100, 60, 5, key="ana_voo_w") / 100.0
+        portfolio_returns = ctx.get("portfolio_returns", pd.Series(dtype=float))
+        benchmark_returns = ctx.get("resolved_benchmark_returns", pd.Series(dtype=float))
+        asset_returns = ctx.get("asset_returns")
+        df = ctx.get("df", pd.DataFrame())
+        base_currency = ctx.get("base_currency", "USD")
+        fx_hist = ctx.get("fx_hist")
+        max_dd = float(ctx.get("max_drawdown", 0.0))
+        policy_map = ctx.get("policy_target_map", {})
 
-    # ── Compute (all cached) ──────────────────────────────────────────────────
-    rolling_df = pd.DataFrame()
-    extended = {}
-    brinson_df = None
-    ff3 = None
-    vr = None
-    mb = None
+        # ── Sidebar controls ──────────────────────────────────────────────────────
+        with st.sidebar.expander("Analytics Settings", expanded=False):
+            rolling_window = st.slider("Rolling Window (days)", 21, 252, 63, 21, key="ana_roll_win")
+            rfr = st.number_input("Risk-free rate", 0.00, 0.20, 0.02, 0.005, format="%.3f", key="ana_rfr")
+            voo_w = st.slider("Blended benchmark VOO %", 0, 100, 60, 5, key="ana_voo_w") / 100.0
 
-    if not portfolio_returns.empty and not benchmark_returns.empty:
-        rolling_df = _cached_rolling(portfolio_returns, benchmark_returns, rfr, rolling_window)
-        extended = _cached_extended(portfolio_returns, benchmark_returns, rfr, max_dd) or {}
+        # ── Compute (all cached) ──────────────────────────────────────────────────
+        rolling_df = pd.DataFrame()
+        extended = {}
+        brinson_df = None
+        ff3 = None
+        vr = None
+        mb = None
 
-    if not df.empty and asset_returns is not None and not asset_returns.empty and policy_map:
-        policy_json = json.dumps({k: float(v) for k, v in policy_map.items()})
-        brinson_df = _cached_brinson(df, asset_returns, policy_json, benchmark_returns)
+        if not portfolio_returns.empty and not benchmark_returns.empty:
+            rolling_df = _cached_rolling(portfolio_returns, benchmark_returns, rfr, rolling_window)
+            extended = _cached_extended(portfolio_returns, benchmark_returns, rfr, max_dd) or {}
 
-    if not portfolio_returns.empty and len(portfolio_returns) >= 60:
-        ff3 = _cached_ff3(portfolio_returns, rfr)
+        if not df.empty and asset_returns is not None and not asset_returns.empty and policy_map:
+            policy_json = json.dumps({k: float(v) for k, v in policy_map.items()})
+            brinson_df = _cached_brinson(df, asset_returns, policy_json, benchmark_returns)
 
-    if not portfolio_returns.empty:
-        vr = _cached_vol_regime(portfolio_returns)
-        if fx_hist is not None:
-            mb = _cached_multi_benchmark(portfolio_returns, base_currency, fx_hist, rfr)
+        if not portfolio_returns.empty and len(portfolio_returns) >= 60:
+            ff3 = _cached_ff3(portfolio_returns, rfr)
 
-    # ── Header metrics ────────────────────────────────────────────────────────
-    rel = _compute_relative_metrics(ctx)
-    alpha_txt = "—" if rel is None or rel["alpha"] is None else f"{rel['alpha']:.2%}"
-    beta_txt  = "—" if rel is None or rel["beta"] is None else f"{rel['beta']:.2f}"
-    te_txt    = "—" if rel is None or rel["tracking_error"] is None else f"{rel['tracking_error']:.2%}"
-    ir_txt    = "—" if rel is None or rel["information_ratio"] is None else f"{rel['information_ratio']:.2f}"
+        if not portfolio_returns.empty:
+            vr = _cached_vol_regime(portfolio_returns)
+            if fx_hist is not None:
+                mb = _cached_multi_benchmark(portfolio_returns, base_currency, fx_hist, rfr)
 
-    c1, c2, c3, c4 = st.columns(4)
-    info_metric(c1, "Alpha", alpha_txt, "Annualized alpha versus VOO.")
-    info_metric(c2, "Beta", beta_txt, "Portfolio beta versus VOO.")
-    info_metric(c3, "Tracking Error", te_txt, "Annualized tracking error versus VOO.")
-    info_metric(c4, "Information Ratio", ir_txt, "Information ratio versus VOO.")
+        # ── Header metrics ────────────────────────────────────────────────────────
+        rel = _compute_relative_metrics(ctx)
+        alpha_txt = "—" if rel is None or rel["alpha"] is None else f"{rel['alpha']:.2%}"
+        beta_txt  = "—" if rel is None or rel["beta"] is None else f"{rel['beta']:.2f}"
+        te_txt    = "—" if rel is None or rel["tracking_error"] is None else f"{rel['tracking_error']:.2%}"
+        ir_txt    = "—" if rel is None or rel["information_ratio"] is None else f"{rel['information_ratio']:.2f}"
 
-    perf_fig = _build_performance_chart_pct(ctx)
-    if perf_fig is not None:
-        info_section("Performance", "Portfolio and VOO cumulative performance in percentage terms.")
-        st.plotly_chart(perf_fig, use_container_width=True, key="analytics_performance_pct_chart_fixed_v2")
+        c1, c2, c3, c4 = st.columns(4)
+        info_metric(c1, "Alpha", alpha_txt, "Annualized alpha versus VOO.")
+        info_metric(c2, "Beta", beta_txt, "Portfolio beta versus VOO.")
+        info_metric(c3, "Tracking Error", te_txt, "Annualized tracking error versus VOO.")
+        info_metric(c4, "Information Ratio", ir_txt, "Information ratio versus VOO.")
 
-    _render_extended_ratios(extended)
-    _render_returns_comparison(ctx)
-    _render_brinson(brinson_df)
-    _render_ff3(ff3)
+        perf_fig = _build_performance_chart_pct(ctx)
+        if perf_fig is not None:
+            info_section("Performance", "Portfolio and VOO cumulative performance in percentage terms.")
+            st.plotly_chart(perf_fig, use_container_width=True, key="analytics_performance_pct_chart_fixed_v2")
 
-    rolling_fig = _build_rolling_metrics_chart(rolling_df if not rolling_df.empty else None)
-    if rolling_fig is not None:
-        info_section("Rolling Metrics", "Rolling volatility, Sharpe, beta, and drawdown over time.")
-        st.plotly_chart(rolling_fig, use_container_width=True, key="analytics_rolling_metrics_chart_fixed_v2")
+        _render_extended_ratios(extended)
+        _render_returns_comparison(ctx)
+        _render_brinson(brinson_df)
+        _render_ff3(ff3)
 
-    _render_volatility_regime(vr)
-    _render_multi_benchmark(mb)
-    _render_contribution_growth(ctx)
-    _render_correlation_heatmap(ctx)
+        rolling_fig = _build_rolling_metrics_chart(rolling_df if not rolling_df.empty else None)
+        if rolling_fig is not None:
+            info_section("Rolling Metrics", "Rolling volatility, Sharpe, beta, and drawdown over time.")
+            st.plotly_chart(rolling_fig, use_container_width=True, key="analytics_rolling_metrics_chart_fixed_v2")
+
+        _render_volatility_regime(vr)
+        _render_multi_benchmark(mb)
+        _render_contribution_growth(ctx)
+        _render_correlation_heatmap(ctx)
+    _live()

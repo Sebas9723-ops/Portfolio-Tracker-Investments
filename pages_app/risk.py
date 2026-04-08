@@ -1,3 +1,4 @@
+import datetime
 import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
@@ -233,83 +234,89 @@ def _render_alert_summary(ctx):
 def render_risk_page(ctx):
     render_page_title("Risk")
 
-    # ── Sidebar controls ──────────────────────────────────────────────────────
-    with st.sidebar.expander("Stress Testing", expanded=False):
-        equity_shock = st.number_input("Equities Shock", -1.0, 1.0, -0.10, 0.01, format="%.2f", key="risk_eq_shock")
-        bonds_shock  = st.number_input("Bonds Shock",    -1.0, 1.0, -0.03, 0.01, format="%.2f", key="risk_bd_shock")
-        gold_shock   = st.number_input("Gold Shock",      -1.0, 1.0,  0.05, 0.01, format="%.2f", key="risk_gd_shock")
-        rolling_window = st.slider("Rolling Window (days)", 21, 252, 63, 21, key="risk_roll_win")
-        max_single_c = st.number_input("Max concentration", 0.05, 1.0, 0.40, 0.05, format="%.2f", key="risk_conc")
-        min_bonds_c  = st.number_input("Min bonds alloc",   0.00, 1.0, 0.05, 0.05, format="%.2f", key="risk_bonds")
+    @st.fragment(run_every=900)
+    def _live():
+        st.caption(f"Last refreshed: {datetime.datetime.now().strftime('%H:%M:%S')}")
 
-    df = ctx.get("df", pd.DataFrame())
-    asset_returns = ctx.get("asset_returns")
-    portfolio_returns = ctx.get("portfolio_returns", pd.Series(dtype=float))
-    resolved_benchmark = ctx.get("resolved_benchmark_returns", pd.Series(dtype=float))
-    base_currency = ctx.get("base_currency", "USD")
+        # ── Sidebar controls ──────────────────────────────────────────────────────
+        with st.sidebar.expander("Stress Testing", expanded=False):
+            equity_shock = st.number_input("Equities Shock", -1.0, 1.0, -0.10, 0.01, format="%.2f", key="risk_eq_shock")
+            bonds_shock  = st.number_input("Bonds Shock",    -1.0, 1.0, -0.03, 0.01, format="%.2f", key="risk_bd_shock")
+            gold_shock   = st.number_input("Gold Shock",      -1.0, 1.0,  0.05, 0.01, format="%.2f", key="risk_gd_shock")
+            rolling_window = st.slider("Rolling Window (days)", 21, 252, 63, 21, key="risk_roll_win")
+            max_single_c = st.number_input("Max concentration", 0.05, 1.0, 0.40, 0.05, format="%.2f", key="risk_conc")
+            min_bonds_c  = st.number_input("Min bonds alloc",   0.00, 1.0, 0.05, 0.05, format="%.2f", key="risk_bonds")
 
-    # ── Compute (all cached) ──────────────────────────────────────────────────
-    stress_df, fig_stress, current_tv, stressed_tv = _cached_stress(df, equity_shock, bonds_shock, gold_shock)
-    stress_pnl = stressed_tv - current_tv
-    stress_return = (stressed_tv / current_tv - 1) if current_tv > 0 else 0.0
+        df = ctx.get("df", pd.DataFrame())
+        asset_returns = ctx.get("asset_returns")
+        portfolio_returns = ctx.get("portfolio_returns", pd.Series(dtype=float))
+        resolved_benchmark = ctx.get("resolved_benchmark_returns", pd.Series(dtype=float))
+        base_currency = ctx.get("base_currency", "USD")
 
-    rolling_df = pd.DataFrame()
-    if not portfolio_returns.empty and not resolved_benchmark.empty:
-        rfr = float(ctx.get("risk_free_rate", get_risk_free_rate()))
-        rolling_df = _cached_rolling(portfolio_returns, resolved_benchmark, rolling_window, rfr)
+        # ── Compute (all cached) ──────────────────────────────────────────────────
+        stress_df, fig_stress, current_tv, stressed_tv = _cached_stress(df, equity_shock, bonds_shock, gold_shock)
+        stress_pnl = stressed_tv - current_tv
+        stress_return = (stressed_tv / current_tv - 1) if current_tv > 0 else 0.0
 
-    risk_budget_df, fixed_income_df, fig_corr, fx_df = (None, None, None, None)
-    if not df.empty and asset_returns is not None and not asset_returns.empty:
-        risk_budget_df, fixed_income_df, fig_corr, fx_df = _cached_risk_analytics(df, asset_returns, base_currency)
+        rolling_df = pd.DataFrame()
+        if not portfolio_returns.empty and not resolved_benchmark.empty:
+            rfr = float(ctx.get("risk_free_rate", get_risk_free_rate()))
+            rolling_df = _cached_rolling(portfolio_returns, resolved_benchmark, rolling_window, rfr)
 
-    var_cvar = ctx.get("var_cvar", {})
-    var_95 = abs(float((var_cvar or {}).get("hist_var_95", 0.0)))
-    constraints = {"max_single_asset": max_single_c, "min_bonds": min_bonds_c, "min_gold": 0.0}
-    compliance_results = check_mandate_compliance(
-        df=df, max_drawdown=ctx.get("max_drawdown", 0.0),
-        tracking_error=ctx.get("tracking_error", 0.0),
-        var_cvar={"hist_var_95": -var_95}, constraints=constraints,
-    )
+        risk_budget_df, fixed_income_df, fig_corr, fx_df = (None, None, None, None)
+        if not df.empty and asset_returns is not None and not asset_returns.empty:
+            risk_budget_df, fixed_income_df, fig_corr, fx_df = _cached_risk_analytics(df, asset_returns, base_currency)
 
-    # ── Header metrics ────────────────────────────────────────────────────────
-    c1, c2, c3, c4 = st.columns(4)
-    info_metric(c1, "Volatility", _fmt_pct(ctx.get("volatility", 0)), "Annualized volatility.")
-    info_metric(c2, "Max Drawdown", _fmt_pct(ctx.get("max_drawdown", 0)), "Maximum peak-to-trough drawdown.")
-    info_metric(c3, "Stress PnL", f"{base_currency} {stress_pnl:,.2f}", "PnL under configured stress scenario.")
-    info_metric(c4, "Stress Return", _fmt_pct(stress_return), "Return under configured stress scenario.")
-
-    _render_var_section(ctx)
-
-    info_section("Correlation Matrix", "Pairwise correlation between portfolio assets.")
-    if fig_corr is not None:
-        st.plotly_chart(fig_corr, use_container_width=True, key="risk_correlation_heatmap")
-    else:
-        st.info("Need at least 2 assets with return history.")
-
-    info_section("Stress Test", "Per-position stressed values under configured shocks.")
-    st.plotly_chart(fig_stress, use_container_width=True, key="risk_stress_chart")
-    st.dataframe(stress_df, use_container_width=True, height=300)
-
-    if not rolling_df.empty and "Rolling Drawdown" in rolling_df.columns:
-        info_section("Rolling Drawdown", "Rolling drawdown over time.")
-        dd_fig = go.Figure()
-        dd_fig.add_scatter(
-            x=rolling_df.index, y=rolling_df["Rolling Drawdown"],
-            fill="tozeroy", fillcolor="rgba(244,67,54,0.15)",
-            line=dict(color="#f44336"),
-            hovertemplate="%{x|%Y-%m-%d}<br>Drawdown: %{y:.2%}<extra></extra>",
+        var_cvar = ctx.get("var_cvar", {})
+        var_95 = abs(float((var_cvar or {}).get("hist_var_95", 0.0)))
+        constraints = {"max_single_asset": max_single_c, "min_bonds": min_bonds_c, "min_gold": 0.0}
+        compliance_results = check_mandate_compliance(
+            df=df, max_drawdown=ctx.get("max_drawdown", 0.0),
+            tracking_error=ctx.get("tracking_error", 0.0),
+            var_cvar={"hist_var_95": -var_95}, constraints=constraints,
         )
-        dd_fig.update_layout(
-            paper_bgcolor="#0b0f14", plot_bgcolor="#0b0f14",
-            font=dict(color="#e6e6e6"), height=280,
-            margin=dict(t=20, b=20, l=20, r=20),
-            yaxis=dict(tickformat=".0%"),
-        )
-        st.plotly_chart(dd_fig, use_container_width=True, key="risk_rolling_drawdown_chart")
 
-    # Pass computed data via ctx-like dicts to the sub-renderers
-    _render_risk_budget_data(risk_budget_df)
-    _render_fixed_income_data(fixed_income_df)
-    _render_compliance_data(compliance_results)
-    _render_fx_exposure_data(fx_df, base_currency)
-    _render_alert_summary(ctx)
+        # ── Header metrics ────────────────────────────────────────────────────────
+        c1, c2, c3, c4 = st.columns(4)
+        info_metric(c1, "Volatility", _fmt_pct(ctx.get("volatility", 0)), "Annualized volatility.")
+        info_metric(c2, "Max Drawdown", _fmt_pct(ctx.get("max_drawdown", 0)), "Maximum peak-to-trough drawdown.")
+        info_metric(c3, "Stress PnL", f"{base_currency} {stress_pnl:,.2f}", "PnL under configured stress scenario.")
+        info_metric(c4, "Stress Return", _fmt_pct(stress_return), "Return under configured stress scenario.")
+
+        _render_var_section(ctx)
+
+        info_section("Correlation Matrix", "Pairwise correlation between portfolio assets.")
+        if fig_corr is not None:
+            st.plotly_chart(fig_corr, use_container_width=True, key="risk_correlation_heatmap")
+        else:
+            st.info("Need at least 2 assets with return history.")
+
+        info_section("Stress Test", "Per-position stressed values under configured shocks.")
+        st.plotly_chart(fig_stress, use_container_width=True, key="risk_stress_chart")
+        st.dataframe(stress_df, use_container_width=True, height=300)
+
+        if not rolling_df.empty and "Rolling Drawdown" in rolling_df.columns:
+            info_section("Rolling Drawdown", "Rolling drawdown over time.")
+            dd_fig = go.Figure()
+            dd_fig.add_scatter(
+                x=rolling_df.index, y=rolling_df["Rolling Drawdown"],
+                fill="tozeroy", fillcolor="rgba(244,67,54,0.15)",
+                line=dict(color="#f44336"),
+                hovertemplate="%{x|%Y-%m-%d}<br>Drawdown: %{y:.2%}<extra></extra>",
+            )
+            dd_fig.update_layout(
+                paper_bgcolor="#0b0f14", plot_bgcolor="#0b0f14",
+                font=dict(color="#e6e6e6"), height=280,
+                margin=dict(t=20, b=20, l=20, r=20),
+                yaxis=dict(tickformat=".0%"),
+            )
+            st.plotly_chart(dd_fig, use_container_width=True, key="risk_rolling_drawdown_chart")
+
+        # Pass computed data via ctx-like dicts to the sub-renderers
+        _render_risk_budget_data(risk_budget_df)
+        _render_fixed_income_data(fixed_income_df)
+        _render_compliance_data(compliance_results)
+        _render_fx_exposure_data(fx_df, base_currency)
+        _render_alert_summary(ctx)
+
+    _live()
