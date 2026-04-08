@@ -560,6 +560,80 @@ def run_ai_analysis(prompt: str) -> str:
         return f"⚠️ Error al importar groq SDK: {exc}\nInstala con: pip install groq"
 
 
+def analyze_news_with_groq(news: dict) -> dict:
+    """Call Groq to add a 2-3 sentence analysis to each news article.
+    Returns the same news dict with an 'analysis' key added per article.
+    """
+    api_key = os.environ.get("GROQ_API_KEY", "")
+    if not api_key:
+        return news
+
+    # Flatten all articles with a global index
+    flat: list[tuple[str, dict]] = []
+    for ticker, articles in news.items():
+        for a in articles:
+            if a.get("title"):
+                flat.append((ticker, a))
+
+    if not flat:
+        return news
+
+    numbered = "\n".join(
+        f"[{i}] [{ticker}] \"{a['title']}\" — {a.get('publisher', '')} ({a.get('published', '')})"
+        for i, (ticker, a) in enumerate(flat)
+    )
+
+    prompt = f"""Eres un analista financiero de renta variable y renta fija.
+Para cada noticia abajo, escribe UN PÁRRAFO CORTO (2-3 oraciones en español) que explique:
+1. Qué ocurrió exactamente
+2. Por qué importa para ese activo / sector
+3. Qué implicación tiene para un inversor
+
+Responde ÚNICAMENTE con líneas en este formato exacto, una por noticia, sin texto adicional:
+[índice] Análisis aquí.
+
+NOTICIAS:
+{numbered}"""
+
+    try:
+        from groq import Groq
+        client = Groq(api_key=api_key)
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = response.choices[0].message.content or ""
+
+        # Parse [index] analysis lines
+        analyses: dict[int, str] = {}
+        for line in text.split("\n"):
+            line = line.strip()
+            if line.startswith("[") and "]" in line:
+                try:
+                    idx = int(line[1:line.index("]")])
+                    body = line[line.index("]") + 1:].strip()
+                    if body:
+                        analyses[idx] = body
+                except ValueError:
+                    pass
+
+        # Write analysis back into the news dict (deep copy to avoid mutation issues)
+        result: dict[str, list[dict]] = {t: [dict(a) for a in arts] for t, arts in news.items()}
+        t_idx: dict[str, int] = {t: 0 for t in news}
+        for i, (ticker, orig) in enumerate(flat):
+            for a in result[ticker]:
+                if a.get("title") == orig.get("title") and "analysis" not in a:
+                    a["analysis"] = analyses.get(i, "")
+                    break
+
+        print(f"[Groq News] Analysed {len(analyses)}/{len(flat)} articles")
+        return result
+
+    except Exception as exc:
+        print(f"[WARN] News analysis with Groq failed: {exc}")
+        return news
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 6. PDF GENERATION
 # ══════════════════════════════════════════════════════════════════════════════
@@ -784,14 +858,38 @@ def generate_pdf(df: pd.DataFrame, analysis: str, news: dict, indices: dict) -> 
                 continue
             story.append(Paragraph(ticker, s_ticker))
             for a in articles:
-                title = a["title"].replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
-                pub   = a.get("publisher", "")
-                dt    = a.get("published", "")
-                story.append(Paragraph(
-                    f"<b>{title}</b><br/>"
-                    f"<font color='#888888' size='7'>{pub}  ·  {dt}</font>",
-                    s_news
-                ))
+                def _xe(s: str) -> str:
+                    return s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+
+                title    = _xe(a.get("title", ""))
+                pub      = _xe(a.get("publisher", ""))
+                dt       = a.get("published", "")
+                analysis = _xe(a.get("analysis", ""))
+                link     = a.get("link", "").replace("&", "&amp;")
+
+                # Title: clickable link if URL available
+                if link:
+                    title_part = (
+                        f'<link href="{link}">'
+                        f'<font color="#1a5fb4"><u>{title}</u></font>'
+                        f'</link>'
+                    )
+                else:
+                    title_part = f"<b>{title}</b>"
+
+                meta = f"<font color='#888888' size='7'>{pub}  ·  {dt}</font>"
+
+                if analysis:
+                    body = (
+                        f"{title_part}<br/>"
+                        f"{meta}<br/>"
+                        f"<font color='#333333' size='8'>{analysis}</font>"
+                    )
+                else:
+                    body = f"{title_part}<br/>{meta}"
+
+                story.append(Paragraph(body, s_news))
+                story.append(Spacer(1, 4))
 
     # ── Footer ────────────────────────────────────────────────────────────────
     story.append(Spacer(1, 20))
@@ -848,7 +946,7 @@ def main():
     print(f"{'='*60}\n")
 
     # ── 1. Portfolio ──────────────────────────────────────────────────────────
-    print("[1/7] Loading portfolio from Google Sheets...")
+    print("[1/8] Loading portfolio from Google Sheets...")
     positions = load_portfolio()
     if positions.empty:
         print("[ABORT] No positions found. Exiting.")
@@ -857,7 +955,7 @@ def main():
     print(f"       {len(tickers)} positions: {', '.join(tickers)}")
 
     # ── 2. Prices ─────────────────────────────────────────────────────────────
-    print("[2/7] Fetching prices...")
+    print("[2/8] Fetching prices...")
     all_tickers  = tickers + list(MARKET_INDICES.keys())
     all_prices   = fetch_prices(all_tickers)
     port_prices  = {t: all_prices[t] for t in tickers  if t in all_prices}
@@ -865,30 +963,34 @@ def main():
     print(f"       Got prices for {len(port_prices)}/{len(tickers)} portfolio tickers")
 
     # ── 3. Currencies ─────────────────────────────────────────────────────────
-    print("[3/7] Fetching ticker currencies...")
+    print("[3/8] Fetching ticker currencies...")
     currencies = fetch_currencies(tickers)
 
     # ── 4. Build summary ──────────────────────────────────────────────────────
-    print("[4/7] Building portfolio summary...")
+    print("[4/8] Building portfolio summary...")
     fx_rates = {t: all_prices[t] for t in ("EURUSD=X", "GBPUSD=X") if t in all_prices}
     df = build_summary(positions, port_prices, currencies, fx_rates=fx_rates)
     total = df["_total"].iloc[0] if not df.empty else 0
     print(f"       Total portfolio value: ${total:,.2f} {BASE_CCY}")
 
     # ── 5. News ───────────────────────────────────────────────────────────────
-    print("[5/7] Fetching news per ticker...")
+    print("[5/8] Fetching news per ticker...")
     news = fetch_news(tickers, max_per_ticker=3)
     n_articles = sum(len(v) for v in news.values())
     print(f"       {n_articles} news articles fetched")
 
-    # ── 6. Claude analysis ────────────────────────────────────────────────────
-    print("[6/7] Calling Claude for AI analysis...")
+    # ── 6. News analysis ──────────────────────────────────────────────────────
+    print("[6/8] Analysing news with Groq...")
+    news = analyze_news_with_groq(news)
+
+    # ── 7. Portfolio analysis ─────────────────────────────────────────────────
+    print("[7/8] Calling Groq for portfolio analysis...")
     prompt   = build_prompt(df, news, index_prices)
     analysis = run_ai_analysis(prompt)
     print(f"       Analysis: {len(analysis)} characters")
 
-    # ── 7. PDF ────────────────────────────────────────────────────────────────
-    print("[7/7] Generating PDF...")
+    # ── 8. PDF ────────────────────────────────────────────────────────────────
+    print("[8/8] Generating PDF...")
     pdf_bytes = generate_pdf(df, analysis, news, index_prices)
     out_path  = f"/tmp/portfolio_brief_{TODAY.strftime('%Y%m%d')}.pdf"
     with open(out_path, "wb") as f:
