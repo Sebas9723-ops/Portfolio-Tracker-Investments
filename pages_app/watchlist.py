@@ -89,59 +89,85 @@ def _safe_float(v, default=None):
 
 @st.cache_data(ttl=60, show_spinner=False)
 def _fetch_tickers(tickers: tuple, preset_names: tuple = ()) -> pd.DataFrame:
-    """preset_names: tuple of (ticker, name) pairs — must be hashable for cache."""
+    """
+    Bulk-fetches price data using yf.download() (one API call for all tickers),
+    then uses fast_info only as fallback for tickers that download missed.
+    preset_names: tuple of (ticker, name) pairs — hashable for @st.cache_data.
+    """
     import yfinance as yf
 
+    if not tickers:
+        return pd.DataFrame()
+
     names_map = dict(preset_names)
-    rows = []
-    for ticker in tickers:
-        row = {
-            "Ticker": ticker,
-            "Name": names_map.get(ticker, ticker),
+    rows_map: dict[str, dict] = {
+        t: {
+            "Ticker": t, "Name": names_map.get(t, t),
             "Price": None, "Day Δ": None, "Day Δ%": None,
             "52W High": None, "52W Low": None,
             "Volume": None, "Mkt Cap": None,
         }
-        try:
-            t = yf.Ticker(ticker)
-            fi = t.fast_info
+        for t in tickers
+    }
 
-            current = _safe_float(getattr(fi, "last_price", None))
-            prev    = _safe_float(getattr(fi, "previous_close", None))
+    # ── 1. Bulk download (1 request for all tickers in this group) ────────────
+    try:
+        raw = yf.download(
+            list(tickers), period="5d", auto_adjust=True,
+            progress=False, threads=True,
+        )
+        multi = isinstance(raw.columns, pd.MultiIndex)
 
-            if current is None:
-                hist = t.history(period="2d", auto_adjust=True)
-                if not hist.empty:
-                    current = _safe_float(hist["Close"].iloc[-1])
-                    prev    = _safe_float(hist["Close"].iloc[-2]) if len(hist) >= 2 else current
-
-            if current is not None:
-                prev    = prev or current
-                day_chg = current - prev
-                day_pct = (day_chg / prev * 100) if prev else 0.0
-                row.update({
-                    "Price":    round(current, 4),
-                    "Day Δ":    round(day_chg, 4),
-                    "Day Δ%":   round(day_pct, 2),
-                    "52W High": round(h, 4) if (h := _safe_float(getattr(fi, "year_high", None))) else None,
-                    "52W Low":  round(l, 4) if (l := _safe_float(getattr(fi, "year_low", None))) else None,
-                    "Volume":   getattr(fi, "last_volume", None),
-                    "Mkt Cap":  _safe_float(getattr(fi, "market_cap", None)),
+        for ticker in tickers:
+            try:
+                close  = (raw["Close"][ticker] if multi else raw["Close"]).dropna()
+                volume = (raw["Volume"][ticker] if multi else raw["Volume"]).dropna()
+                if close.empty:
+                    continue
+                current  = float(close.iloc[-1])
+                prev     = float(close.iloc[-2]) if len(close) >= 2 else current
+                day_chg  = current - prev
+                day_pct  = (day_chg / prev * 100) if prev else 0.0
+                rows_map[ticker].update({
+                    "Price":   round(current, 4),
+                    "Day Δ":   round(day_chg, 4),
+                    "Day Δ%":  round(day_pct, 2),
+                    "Volume":  int(volume.iloc[-1]) if not volume.empty else None,
                 })
+            except Exception:
+                pass
+    except Exception:
+        pass
 
-            # Name from .info only when no preset name provided
-            if not names_map.get(ticker):
-                try:
-                    info = t.info or {}
-                    row["Name"] = (info.get("longName") or info.get("shortName") or ticker)[:30]
-                except Exception:
-                    pass
+    # ── 2. fast_info per ticker: 52W range, market cap, price fallback ────────
+    for ticker in tickers:
+        try:
+            fi  = yf.Ticker(ticker).fast_info
+            h   = _safe_float(getattr(fi, "year_high", None))
+            l   = _safe_float(getattr(fi, "year_low",  None))
+            mc  = _safe_float(getattr(fi, "market_cap", None))
+            if h:  rows_map[ticker]["52W High"] = round(h, 4)
+            if l:  rows_map[ticker]["52W Low"]  = round(l, 4)
+            if mc: rows_map[ticker]["Mkt Cap"]  = mc
 
+            # Price fallback if download produced nothing
+            if rows_map[ticker]["Price"] is None:
+                fp      = _safe_float(getattr(fi, "last_price",      None))
+                fp_prev = _safe_float(getattr(fi, "previous_close",  None))
+                if fp:
+                    fp_prev  = fp_prev or fp
+                    day_chg  = fp - fp_prev
+                    day_pct  = (day_chg / fp_prev * 100) if fp_prev else 0.0
+                    rows_map[ticker].update({
+                        "Price":  round(fp, 4),
+                        "Day Δ":  round(day_chg, 4),
+                        "Day Δ%": round(day_pct, 2),
+                        "Volume": _safe_float(getattr(fi, "last_volume", None)),
+                    })
         except Exception:
             pass
 
-        rows.append(row)
-    return pd.DataFrame(rows) if rows else pd.DataFrame()
+    return pd.DataFrame(list(rows_map.values()))
 
 
 # ── Formatting helpers ─────────────────────────────────────────────────────────
