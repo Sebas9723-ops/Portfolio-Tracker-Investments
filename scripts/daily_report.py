@@ -406,39 +406,37 @@ Tono: profesional e institucional, estilo Bloomberg Intelligence."""
 
 
 def run_ai_analysis(prompt: str) -> str:
-    """Call Gemini using the new google-genai SDK (v1 endpoint)."""
-    api_key = os.environ.get("GEMINI_API_KEY", "")
+    """Call Groq LLM API for portfolio analysis."""
+    api_key = os.environ.get("GROQ_API_KEY", "")
     if not api_key:
-        return "⚠️ GEMINI_API_KEY no configurada — análisis no disponible."
+        return "⚠️ GROQ_API_KEY no configurada — análisis no disponible."
     try:
-        from google import genai
-        client = genai.Client(api_key=api_key)
+        from groq import Groq
+        client = Groq(api_key=api_key)
 
         last_err = ""
         for model_name in (
-            "gemini-2.0-flash",
-            "gemini-1.5-flash",
-            "gemini-1.5-flash-8b",
-            "gemini-1.0-pro",
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
         ):
             try:
-                response = client.models.generate_content(
+                response = client.chat.completions.create(
                     model=model_name,
-                    contents=prompt,
+                    messages=[{"role": "user", "content": prompt}],
                 )
-                print(f"[Gemini] Success with model: {model_name}")
-                return response.text
+                print(f"[Groq] Success with model: {model_name}")
+                return response.choices[0].message.content
             except Exception as model_exc:
                 last_err = str(model_exc)
-                print(f"[Gemini] {model_name} failed: {last_err[:200]}")
+                print(f"[Groq] {model_name} failed: {last_err[:200]}")
                 continue  # always try next model
 
         return (
-            "⚠️ Gemini no respondió con ningún modelo.\n\n"
+            "⚠️ Groq no respondió con ningún modelo.\n\n"
             f"Último error: {last_err[:300]}"
         )
     except Exception as exc:
-        return f"⚠️ Error al importar google-genai SDK: {exc}\nInstala con: pip install google-genai"
+        return f"⚠️ Error al importar groq SDK: {exc}\nInstala con: pip install groq"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -679,7 +677,7 @@ def generate_pdf(df: pd.DataFrame, analysis: str, news: dict, indices: dict) -> 
     story.append(HRFlowable(width="100%", thickness=0.5, color=MGRAY))
     story.append(Spacer(1, 4))
     story.append(Paragraph(
-        f"Generado el {NOW.strftime('%d/%m/%Y %H:%M UTC')}  ·  Portfolio Tracker  ·  Análisis por Gemini 2.0 Flash (Google)",
+        f"Generado el {NOW.strftime('%d/%m/%Y %H:%M UTC')}  ·  Portfolio Tracker  ·  Análisis por Llama 3.3 70B (Groq)",
         s_note
     ))
 
@@ -788,7 +786,7 @@ def main():
         f"💼 Valor: <b>${total:,.2f} {BASE_CCY}</b>\n"
         f"{sign} P&amp;L hoy: <b>${day_pnl:+,.2f}</b>\n"
         f"📊 {len(tickers)} posiciones · {n_articles} noticias analizadas\n\n"
-        f"<i>Análisis por Gemini 2.0 Flash · Portfolio Tracker</i>"
+        f"<i>Análisis por Llama 3.3 70B · Portfolio Tracker</i>"
     )
     send_telegram(pdf_bytes, caption)
 
