@@ -77,26 +77,64 @@ def _repair_json(raw: str) -> str:
 
 def load_portfolio() -> pd.DataFrame:
     """
-    Read private_positions worksheet.
+    Primary source: private_portfolio.py in the repo (reliable share counts).
+    Supplements AvgCost from Google Sheets if available and sensible.
     Returns DataFrame: Ticker | Name | Shares | AvgCost
     """
+    # ── Step 1: load shares from private_portfolio.py ────────────────────────
+    df = _load_from_private_portfolio()
+    if df.empty:
+        print("[WARN] private_portfolio.py returned no positions")
+        return df
+
+    # ── Step 2: try to get AvgCost from Sheets ───────────────────────────────
+    sheets_df = _load_avg_cost_from_sheets()
+    if not sheets_df.empty:
+        cost_map = dict(zip(sheets_df["Ticker"], sheets_df["AvgCost"]))
+        df["AvgCost"] = df["Ticker"].map(cost_map).fillna(0)
+
+    print(f"[Portfolio] {len(df)} positions: {', '.join(df['Ticker'].tolist())}")
+    return df
+
+
+def _load_from_private_portfolio() -> pd.DataFrame:
+    """Import real_portfolio from private_portfolio.py in the repo root."""
+    try:
+        import importlib.util
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        spec = importlib.util.spec_from_file_location(
+            "private_portfolio",
+            os.path.join(repo_root, "private_portfolio.py")
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        portfolio = mod.real_portfolio
+        rows = [
+            {"Ticker": ticker, "Name": data.get("name", ticker),
+             "Shares": float(data.get("shares", 0)), "AvgCost": 0.0}
+            for ticker, data in portfolio.items()
+            if float(data.get("shares", 0)) > 0
+        ]
+        return pd.DataFrame(rows)
+    except Exception as exc:
+        print(f"[WARN] Could not load private_portfolio.py: {exc}")
+        return pd.DataFrame(columns=["Ticker", "Name", "Shares", "AvgCost"])
+
+
+def _load_avg_cost_from_sheets() -> pd.DataFrame:
+    """Try to read AvgCost per ticker from Google Sheets. Returns empty df on failure."""
     creds_json = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "")
     sheet_id   = os.environ.get("SHEETS_SPREADSHEET_ID", "")
     ws_name    = os.environ.get("SHEETS_WORKSHEET", "private_positions")
 
     if not creds_json or not sheet_id:
-        print("[WARN] GCP credentials or sheet ID missing — portfolio will be empty")
-        return pd.DataFrame(columns=["Ticker", "Name", "Shares", "AvgCost"])
-
+        return pd.DataFrame()
     try:
         import gspread
         from google.oauth2.service_account import Credentials
 
-        # Fix JSON broken by copy-paste newlines, then fix private key format
         creds_json = _repair_json(creds_json)
         creds_dict = json.loads(creds_json)
-
-        # Ensure private_key has actual newlines (handles \\n literal or stripped key)
         pk = creds_dict.get("private_key", "")
         if pk:
             if "\\n" in pk and "\n" not in pk:
@@ -107,27 +145,24 @@ def load_portfolio() -> pd.DataFrame:
                 pk = pk.replace("-----END PRIVATE KEY-----",
                                 "\n-----END PRIVATE KEY-----\n")
             creds_dict["private_key"] = pk
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets.readonly",
-            "https://www.googleapis.com/auth/drive.readonly",
-        ]
+
+        scopes = ["https://www.googleapis.com/auth/spreadsheets.readonly",
+                  "https://www.googleapis.com/auth/drive.readonly"]
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         gc = gspread.authorize(creds)
-        sh = gc.open_by_key(sheet_id)
-        ws = sh.worksheet(ws_name)
+        ws = gc.open_by_key(sheet_id).worksheet(ws_name)
         records = ws.get_all_records()
         df = pd.DataFrame(records)
-        if df.empty:
-            return df
-        df["Shares"]  = pd.to_numeric(df.get("Shares",  0), errors="coerce").fillna(0)
-        df["AvgCost"] = pd.to_numeric(df.get("AvgCost", 0), errors="coerce").fillna(0)
-        # Remove zero-share rows
-        df = df[df["Shares"] > 0].reset_index(drop=True)
-        print(f"[Sheets] Loaded {len(df)} positions")
-        return df
+        if df.empty or "AvgCost" not in df.columns:
+            return pd.DataFrame()
+        df["AvgCost"] = pd.to_numeric(df["AvgCost"], errors="coerce").fillna(0)
+        # Keep only rows with a reasonable AvgCost (> 0 and < $50,000 per share)
+        df = df[(df["AvgCost"] > 0) & (df["AvgCost"] < 50000)]
+        print(f"[Sheets] Got AvgCost for {len(df)} tickers")
+        return df[["Ticker", "AvgCost"]].drop_duplicates("Ticker")
     except Exception as exc:
-        print(f"[ERROR] Google Sheets load failed: {exc}")
-        return pd.DataFrame(columns=["Ticker", "Name", "Shares", "AvgCost"])
+        print(f"[WARN] Sheets AvgCost fetch failed: {exc}")
+        return pd.DataFrame()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -338,9 +373,25 @@ def run_ai_analysis(prompt: str) -> str:
     try:
         import google.generativeai as genai
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.0-flash")
-        response = model.generate_content(prompt)
-        return response.text
+        # Try gemini-1.5-flash first, fall back to gemini-1.0-pro
+        for model_name in ("gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-pro"):
+            try:
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(prompt)
+                print(f"[Gemini] Used model: {model_name}")
+                return response.text
+            except Exception as model_exc:
+                if "quota" in str(model_exc).lower() or "429" in str(model_exc):
+                    continue  # try next model
+                raise
+        return (
+            "⚠️ Gemini quota agotada en todos los modelos.\n\n"
+            "Para activar el free tier correcto:\n"
+            "1. Ve a aistudio.google.com\n"
+            "2. Clic en 'Get API key' → 'Create API key in new project'\n"
+            "3. Actualiza el secret GEMINI_API_KEY en GitHub con esa nueva clave.\n\n"
+            "El free tier de AI Studio da 1,500 requests/día sin costo."
+        )
     except Exception as exc:
         return f"⚠️ Error al llamar a Gemini API: {exc}"
 
