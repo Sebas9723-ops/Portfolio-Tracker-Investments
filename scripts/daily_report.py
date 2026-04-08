@@ -44,7 +44,11 @@ MARKET_INDICES = {
     "CL=F":    "WTI Oil",
     "BTC-USD": "Bitcoin",
     "EURUSD=X": "EUR/USD",
+    "GBPUSD=X": "GBP/USD",
 }
+
+# FX tickers that should NOT appear in the market indices display section
+_FX_TICKERS = {"EURUSD=X", "GBPUSD=X"}
 
 
 def _repair_json(raw: str) -> str:
@@ -77,22 +81,13 @@ def _repair_json(raw: str) -> str:
 
 def load_portfolio() -> pd.DataFrame:
     """
-    Primary source: private_portfolio.py in the repo (reliable share counts).
-    Supplements AvgCost from Google Sheets if available and sensible.
+    Load portfolio from PORTFOLIO_JSON secret (includes shares + avg_cost).
     Returns DataFrame: Ticker | Name | Shares | AvgCost
     """
-    # ── Step 1: load shares from private_portfolio.py ────────────────────────
     df = _load_from_private_portfolio()
     if df.empty:
-        print("[WARN] private_portfolio.py returned no positions")
+        print("[WARN] PORTFOLIO_JSON returned no positions")
         return df
-
-    # ── Step 2: try to get AvgCost from Sheets ───────────────────────────────
-    sheets_df = _load_avg_cost_from_sheets()
-    if not sheets_df.empty:
-        cost_map = dict(zip(sheets_df["Ticker"], sheets_df["AvgCost"]))
-        df["AvgCost"] = df["Ticker"].map(cost_map).fillna(0)
-
     print(f"[Portfolio] {len(df)} positions: {', '.join(df['Ticker'].tolist())}")
     return df
 
@@ -243,8 +238,23 @@ def fetch_news(tickers: list[str], max_per_ticker: int = 3) -> dict[str, list[di
 # 4. PORTFOLIO SUMMARY DataFrame
 # ══════════════════════════════════════════════════════════════════════════════
 
-def build_summary(positions: pd.DataFrame, prices: dict, currencies: dict) -> pd.DataFrame:
-    """Enrich positions with live prices, P&L, and weight."""
+def build_summary(positions: pd.DataFrame, prices: dict, currencies: dict,
+                  fx_rates: dict | None = None) -> pd.DataFrame:
+    """Enrich positions with live prices, P&L, and weight.
+    fx_rates: {ticker: price} for FX pairs (e.g. EURUSD=X, GBPUSD=X).
+    Values are converted to BASE_CCY (USD) using FX rates.
+    """
+    fx_rates = fx_rates or {}
+    eur_usd = fx_rates.get("EURUSD=X", {}).get("price", 1.0) or 1.0
+    gbp_usd = fx_rates.get("GBPUSD=X", {}).get("price", 1.0) or 1.0
+
+    def to_usd(amount: float, ccy: str) -> float:
+        if ccy == "EUR":
+            return amount * eur_usd
+        if ccy in ("GBP", "GBp"):   # GBp = pence (London)
+            return amount * gbp_usd / (100 if ccy == "GBp" else 1)
+        return amount  # USD or unknown → assume USD
+
     rows = []
     for _, pos in positions.iterrows():
         ticker   = str(pos["Ticker"]).strip()
@@ -252,14 +262,18 @@ def build_summary(positions: pd.DataFrame, prices: dict, currencies: dict) -> pd
         shares   = float(pos.get("Shares",  0))
         avg_cost = float(pos.get("AvgCost", 0))
         p        = prices.get(ticker, {})
-        price    = p.get("price")
+        price    = p.get("price")       # price in native currency
         chg      = p.get("change_pct")
         ccy      = currencies.get(ticker, "USD")
 
-        value    = shares * price          if price                    else None
-        cost     = shares * avg_cost       if avg_cost                 else None
-        pnl      = value  - cost           if (value and cost)         else None
-        pnl_pct  = pnl / cost * 100        if (pnl is not None and cost and cost != 0) else None
+        # Convert native-currency value to USD
+        value_native = shares * price if price is not None else None
+        value        = to_usd(value_native, ccy) if value_native is not None else None
+
+        # avg_cost assumed to already be in USD (from PORTFOLIO_JSON)
+        cost    = shares * avg_cost if avg_cost else None
+        pnl     = value - cost      if (value is not None and cost) else None
+        pnl_pct = pnl / cost * 100  if (pnl is not None and cost and cost != 0) else None
 
         rows.append({
             "Ticker":    ticker,
@@ -304,7 +318,7 @@ def build_prompt(df: pd.DataFrame, news: dict, indices: dict) -> str:
     idx_lines = [
         f"  • {name}: {p['price']:.2f} ({p['change_pct']:+.2f}% hoy)"
         for ticker, name in MARKET_INDICES.items()
-        if (p := indices.get(ticker))
+        if ticker not in _FX_TICKERS and (p := indices.get(ticker))
     ]
 
     # News block
@@ -369,23 +383,30 @@ def run_ai_analysis(prompt: str) -> str:
     try:
         import google.generativeai as genai
         genai.configure(api_key=api_key)
-        # Try gemini-1.5-flash first, fall back to gemini-1.0-pro
-        for model_name in ("gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-pro"):
+        # Try models in order; skip on quota, 404, or "not found" errors
+        for model_name in (
+            "gemini-2.0-flash",
+            "gemini-1.5-flash",
+            "gemini-1.5-flash-latest",
+            "gemini-1.5-flash-8b",
+            "gemini-1.0-pro",
+        ):
             try:
                 model = genai.GenerativeModel(model_name)
                 response = model.generate_content(prompt)
                 print(f"[Gemini] Used model: {model_name}")
                 return response.text
             except Exception as model_exc:
-                if "quota" in str(model_exc).lower() or "429" in str(model_exc):
-                    continue  # try next model
-                raise
+                err = str(model_exc).lower()
+                if any(x in err for x in ("quota", "429", "404", "not found", "deprecated")):
+                    print(f"[Gemini] {model_name} unavailable ({err[:80]}), trying next...")
+                    continue
+                raise  # unexpected error — surface it
         return (
-            "⚠️ Gemini quota agotada en todos los modelos.\n\n"
-            "Para activar el free tier correcto:\n"
-            "1. Ve a aistudio.google.com\n"
-            "2. Clic en 'Get API key' → 'Create API key in new project'\n"
-            "3. Actualiza el secret GEMINI_API_KEY en GitHub con esa nueva clave.\n\n"
+            "⚠️ Gemini: ningún modelo disponible con esta clave.\n\n"
+            "Obtén una clave gratuita en aistudio.google.com:\n"
+            "1. Clic en 'Get API key' → 'Create API key in new project'\n"
+            "2. Actualiza el secret GEMINI_API_KEY en GitHub.\n\n"
             "El free tier de AI Studio da 1,500 requests/día sin costo."
         )
     except Exception as exc:
@@ -551,6 +572,8 @@ def generate_pdf(df: pd.DataFrame, analysis: str, news: dict, indices: dict) -> 
 
     idx_rows = [["Índice", "Precio", "Cambio"]]
     for ticker, name in MARKET_INDICES.items():
+        if ticker in _FX_TICKERS:
+            continue
         p = indices.get(ticker)
         if not p:
             continue
@@ -570,7 +593,8 @@ def generate_pdf(df: pd.DataFrame, analysis: str, news: dict, indices: dict) -> 
             ("GRID",          (0, 0), (-1, -1), 0.25, DIVIDER),
         ]
         for i, (ticker, _) in enumerate(
-            [(t, n) for t, n in MARKET_INDICES.items() if t in indices], 1
+            [(t, n) for t, n in MARKET_INDICES.items()
+             if t in indices and t not in _FX_TICKERS], 1
         ):
             chg = indices[ticker]["change_pct"]
             idx_ts.append(("TEXTCOLOR", (2, i), (2, i), GREEN if chg >= 0 else RED))
@@ -698,7 +722,8 @@ def main():
 
     # ── 4. Build summary ──────────────────────────────────────────────────────
     print("[4/7] Building portfolio summary...")
-    df = build_summary(positions, port_prices, currencies)
+    fx_rates = {t: all_prices[t] for t in ("EURUSD=X", "GBPUSD=X") if t in all_prices}
+    df = build_summary(positions, port_prices, currencies, fx_rates=fx_rates)
     total = df["_total"].iloc[0] if not df.empty else 0
     print(f"       Total portfolio value: ${total:,.2f} {BASE_CCY}")
 
