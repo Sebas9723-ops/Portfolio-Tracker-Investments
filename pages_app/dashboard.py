@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from app_core import (
+    build_portfolio_df,
     info_metric,
     info_section,
     render_market_clocks,
@@ -471,7 +472,7 @@ def _build_performance_vs_benchmark_pct_chart(ctx):
 def render_dashboard(ctx):
     render_page_title("Dashboard")
 
-    @st.fragment(run_every=300)
+    @st.fragment(run_every=60)
     def _live():
         st.caption(f"Last refreshed: {datetime.datetime.now().strftime('%H:%M:%S')}")
 
@@ -496,23 +497,48 @@ def render_dashboard(ctx):
 
         render_market_clocks()
 
-        c1, c2, c3, c4 = st.columns(4)
-        info_metric(c1, "Total Portfolio", f"{ctx['base_currency']} {ctx['total_portfolio_value']:,.2f}", "Holdings plus cash.")
-        info_metric(c2, "Invested Assets", f"{ctx['base_currency']} {ctx['holdings_value']:,.2f}", "Market value of invested holdings.")
-        info_metric(c3, "Cash", f"{ctx['base_currency']} {ctx['cash_total_value']:,.2f}", "Cash balances converted to base currency.")
-        info_metric(c4, "Unrealized PnL", f"{ctx['base_currency']} {ctx['unrealized_pnl']:,.2f}", "Open profit and loss.")
+        # Re-fetch live prices so metrics stay in sync with Portfolio page
+        tickers = list(ctx["updated_portfolio"].keys())
+        if ctx["app_scope"] == "private":
+            from data_providers import get_prices_private
+            fresh_prices = get_prices_private(tickers)
+        else:
+            from utils import get_prices
+            fresh_prices = get_prices(tickers)
 
+        _, _, pnl = build_portfolio_df(
+            updated_portfolio=ctx["updated_portfolio"],
+            live_prices_native=fresh_prices,
+            asset_hist_native=pd.DataFrame(),
+            fx_prices=ctx["fx_prices"],
+            fx_hist=ctx["fx_hist"],
+            base_currency=ctx["base_currency"],
+            tx_stats_map=ctx.get("tx_stats_map", {}),
+            fx_fallback=ctx.get("fx_rate_cache"),
+        )
+
+        holdings_value = pnl["holdings_value"]
+        cash_value = float(ctx["cash_total_value"])
+        total_portfolio = holdings_value + cash_value
+        unrealized_pnl = pnl["unrealized_pnl"]
+        invested_cap = pnl["invested_capital"]
+        total_pnl = unrealized_pnl + pnl.get("realized_pnl", 0.0)
+
+        ccy = ctx.get("base_currency", "")
+        c1, c2, c3, c4 = st.columns(4)
+        info_metric(c1, "Total Portfolio", f"{ccy} {total_portfolio:,.2f}", "Holdings plus cash.")
+        info_metric(c2, "Invested Assets", f"{ccy} {holdings_value:,.2f}", "Market value of invested holdings.")
+        info_metric(c3, "Cash", f"{ccy} {cash_value:,.2f}", "Cash balances converted to base currency.")
+        info_metric(c4, "Unrealized PnL", f"{ccy} {unrealized_pnl:,.2f}", "Open profit and loss.")
+
+        simple_return = total_pnl / invested_cap if invested_cap > 0 else None
+        sr_str = f"{simple_return:.2%}" if simple_return is not None else "—"
+        pnl_str = f"{ccy} {total_pnl:+,.2f}" if invested_cap > 0 else "—"
         c5, c6, c7, c8, c9 = st.columns(5)
         info_metric(c5, "Return", f"{ctx['total_return']:.2%}", "Cumulative return over the available history.")
         info_metric(c6, "Volatility", f"{ctx['volatility']:.2%}", "Annualized portfolio volatility.")
         info_metric(c7, "Sharpe Ratio", f"{ctx['sharpe']:.2f}", "Portfolio Sharpe ratio.")
-        invested_cap = float(ctx.get("invested_capital", 0.0))
-        total_pnl = float(ctx.get("unrealized_pnl", 0.0)) + float(ctx.get("realized_pnl", 0.0))
-        simple_return = total_pnl / invested_cap if invested_cap > 0 else None
-        sr_str = f"{simple_return:.2%}" if simple_return is not None else "—"
         info_metric(c8, "Simple Return", sr_str, "Total gain vs cost basis (unrealized + realized). Not annualized.")
-        ccy = ctx.get("base_currency", "")
-        pnl_str = f"{ccy} {total_pnl:+,.2f}" if invested_cap > 0 else "—"
         info_metric(c9, "Total P&L", pnl_str, "Unrealized + realized gain/loss in base currency.")
 
         summary_df = _build_decision_summary(ctx)
