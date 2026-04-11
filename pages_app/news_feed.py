@@ -4,6 +4,7 @@ Parses public RSS feeds using urllib + xml.etree.ElementTree (no extra deps).
 """
 
 import datetime
+import html as _html
 import urllib.request
 import xml.etree.ElementTree as ET
 
@@ -98,8 +99,11 @@ def _parse_rss_urllib(url: str, source_name: str) -> list[dict]:
 
 def _tag_text(element, tag: str) -> str:
     child = element.find(tag)
-    if child is not None and child.text:
-        return child.text
+    if child is not None:
+        # Use itertext() to capture text across nested sub-elements (e.g. CDATA with child tags)
+        text = "".join(child.itertext())
+        if text:
+            return text
     return ""
 
 
@@ -186,6 +190,7 @@ def _render_article_card(article: dict):
 
     title_html = f'<a href="{link}" target="_blank" style="color:{_GOLD};text-decoration:none;font-weight:bold;font-size:14px;font-family:monospace;">{title}</a>' if link else f'<span style="color:{_GOLD};font-weight:bold;font-size:14px;font-family:monospace;">{title}</span>'
 
+    summary_safe = _html.escape(summary) if summary else ""
     st.markdown(
         f"""<div style='background:{_CARD_BG};border:1px solid {_CARD_BORDER};border-radius:6px;
         padding:12px 16px;margin-bottom:8px;'>
@@ -196,7 +201,7 @@ def _render_article_card(article: dict):
                 {source}</span>
             <span style='color:#555;font-size:11px;font-family:monospace;'>{time_str}</span>
         </div>
-        {f'<div style="color:#aaa;font-size:12px;font-family:sans-serif;margin-top:6px;line-height:1.4;">{summary}</div>' if summary else ''}
+        {f'<div style="color:#aaa;font-size:12px;font-family:sans-serif;margin-top:6px;line-height:1.4;">{summary_safe}</div>' if summary_safe else ''}
         </div>""",
         unsafe_allow_html=True,
     )
