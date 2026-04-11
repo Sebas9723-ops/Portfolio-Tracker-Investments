@@ -1730,8 +1730,7 @@ def merge_private_portfolios(base_private: dict, custom_private: dict):
             merged[ticker]["name"] = meta["name"]
             if "avg_cost" in meta:
                 merged[ticker]["avg_cost"] = meta["avg_cost"]
-        else:
-            merged[ticker] = dict(meta)
+        # Tickers not in base portfolio are ignored — base is the source of truth
     return merged
 
 
