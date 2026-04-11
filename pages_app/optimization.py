@@ -4,6 +4,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import json
+
 from app_core import (
     build_recommended_shares_table,
     compute_black_litterman,
@@ -11,17 +13,21 @@ from app_core import (
     get_default_constraints,
     info_metric,
     info_section,
+    load_user_settings_from_sheets,
     optimize_max_sharpe,
     optimize_min_vol,
     render_page_title,
+    save_user_settings_to_sheets,
     simulate_constrained_efficient_frontier,
     weights_table,
 )
 
 
 @st.cache_data(ttl=900, show_spinner=False)
-def _cached_frontier(asset_returns: pd.DataFrame, max_single: float, min_bonds: float, min_gold: float, rfr: float, n: int):
+def _cached_frontier(asset_returns: pd.DataFrame, max_single: float, min_bonds: float, min_gold: float, rfr: float, n: int, per_ticker_bounds: tuple = ()):
     constraints = {"max_single_asset": max_single, "min_bonds": min_bonds, "min_gold": min_gold}
+    if per_ticker_bounds:
+        constraints["per_ticker_bounds"] = dict(per_ticker_bounds)
     frontier = simulate_constrained_efficient_frontier(asset_returns, asset_returns.columns.tolist(), constraints, rfr, n)
     computed_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return frontier, computed_at
@@ -239,8 +245,76 @@ def render_optimization_page(ctx):
         min_gold = st.number_input("Min gold", 0.00, 1.00, float(defaults["min_gold"]), 0.01, format="%.2f")
         rfr = st.number_input("Risk-free rate", 0.00, 0.20, 0.02, 0.005, format="%.3f")
 
+    # ── Per-ticker weight rules ───────────────────────────────────────────────
+    tickers_in_portfolio = asset_returns.columns.tolist()
+    ticker_rules = st.session_state.get("ticker_weight_rules", {})
+
+    with st.sidebar.expander("Weight Rules per Ticker", expanded=bool(ticker_rules)):
+        st.caption("Fix a ticker's weight. The rest optimise freely by Max Sharpe.")
+        new_rules = {}
+        for ticker in tickers_in_portfolio:
+            existing = ticker_rules.get(ticker, {})
+            mode = st.selectbox(
+                ticker,
+                ["Free (Max Sharpe)", "Fixed weight"],
+                index=1 if existing.get("mode") == "fixed" else 0,
+                key=f"rule_mode_{ticker}",
+            )
+            if mode == "Fixed weight":
+                default_w = float(existing.get("weight", round(1.0 / len(tickers_in_portfolio), 2)))
+                w = st.number_input(
+                    f"{ticker} fixed weight",
+                    min_value=0.0, max_value=1.0,
+                    value=default_w, step=0.01, format="%.2f",
+                    key=f"rule_w_{ticker}",
+                )
+                new_rules[ticker] = {"mode": "fixed", "weight": w}
+            else:
+                new_rules[ticker] = {"mode": "free"}
+
+        fixed_rules = {t: r for t, r in new_rules.items() if r["mode"] == "fixed"}
+        fixed_sum = sum(r["weight"] for r in fixed_rules.values())
+        if fixed_sum > 1.0:
+            st.error(f"Fixed weights sum to {fixed_sum:.0%} — must be ≤ 100%.")
+        elif fixed_rules:
+            st.info(f"Fixed: {fixed_sum:.0%} · Free to optimise: {1 - fixed_sum:.0%}")
+
+        if st.button("Apply Rules", key="apply_ticker_rules"):
+            st.session_state["ticker_weight_rules"] = new_rules
+            if ctx.get("app_scope") == "private":
+                try:
+                    current_settings = load_user_settings_from_sheets()
+                    current_settings["ticker_weight_rules"] = json.dumps(new_rules)
+                    save_user_settings_to_sheets(current_settings)
+                except Exception:
+                    pass
+            st.rerun()
+        if ticker_rules and st.button("Clear All Rules", key="clear_ticker_rules"):
+            st.session_state["ticker_weight_rules"] = {}
+            if ctx.get("app_scope") == "private":
+                try:
+                    current_settings = load_user_settings_from_sheets()
+                    current_settings.pop("ticker_weight_rules", None)
+                    save_user_settings_to_sheets(current_settings)
+                except Exception:
+                    pass
+            st.rerun()
+
+    ticker_rules = st.session_state.get("ticker_weight_rules", {})
+
+    # Build per_ticker_bounds dict from active rules
+    per_ticker_bounds_dict = {}
+    for ticker in tickers_in_portfolio:
+        rule = ticker_rules.get(ticker, {})
+        if rule.get("mode") == "fixed":
+            w = float(rule.get("weight", 0.0))
+            per_ticker_bounds_dict[ticker] = (w, w)
+
+    # Convert to hashable tuple for caching
+    ptb_tuple = tuple(sorted(per_ticker_bounds_dict.items())) if per_ticker_bounds_dict else ()
+
     # ── Compute frontier (cached) ─────────────────────────────────────────────
-    frontier, frontier_computed_at = _cached_frontier(asset_returns, max_single_asset, min_bonds, min_gold, rfr, 2000)
+    frontier, frontier_computed_at = _cached_frontier(asset_returns, max_single_asset, min_bonds, min_gold, rfr, 2000, ptb_tuple)
 
     if frontier is None or frontier.empty:
         st.info("Not enough data to build the efficient frontier.")
@@ -261,6 +335,8 @@ def render_optimization_page(ctx):
 
     # Exact optimization (primary) — falls back to Monte Carlo best if scipy fails
     _opt_constraints = {"max_single_asset": max_single_asset, "min_bonds": min_bonds, "min_gold": min_gold}
+    if per_ticker_bounds_dict:
+        _opt_constraints["per_ticker_bounds"] = per_ticker_bounds_dict
     max_sharpe_row = optimize_max_sharpe(asset_returns, usable, _opt_constraints, rfr)
     min_vol_row    = optimize_min_vol(asset_returns, usable, _opt_constraints, rfr)
     if max_sharpe_row is None:

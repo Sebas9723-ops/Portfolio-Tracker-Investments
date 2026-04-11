@@ -303,6 +303,16 @@ def build_app_context_runtime(app_scope: str):
         user_settings = private_state.get("user_settings", {})
         tx_stats_map = private_state["tx_stats_map"]
 
+        # Load persisted ticker weight rules into session_state (only on fresh session)
+        if "ticker_weight_rules" not in st.session_state:
+            import json as _json
+            _raw_rules = user_settings.get("ticker_weight_rules", "")
+            if _raw_rules:
+                try:
+                    st.session_state["ticker_weight_rules"] = _json.loads(_raw_rules)
+                except Exception:
+                    st.session_state["ticker_weight_rules"] = {}
+
         # ── Sheets availability banner ────────────────────────────────────────
         if not positions_sheet_available:
             last_ok = st.session_state.get("_sheets_last_ok", "unknown")
@@ -597,6 +607,17 @@ def build_app_context_runtime(app_scope: str):
     if asset_returns is not None and not asset_returns.empty and asset_returns.shape[1] >= 2:
         _constraints  = get_default_constraints(profile)
         _asset_names  = asset_returns.columns.tolist()
+
+        # Apply per-ticker weight rules from session_state
+        _ticker_rules = st.session_state.get("ticker_weight_rules", {})
+        if _ticker_rules:
+            _ptb = {}
+            for _ticker, _rule in _ticker_rules.items():
+                if _ticker in _asset_names and _rule.get("mode") == "fixed":
+                    _w = float(_rule.get("weight", 0.0))
+                    _ptb[_ticker] = (_w, _w)
+            if _ptb:
+                _constraints["per_ticker_bounds"] = _ptb
 
         # Exact optima via scipy SLSQP (primary)
         max_sharpe_row = optimize_max_sharpe(asset_returns, _asset_names, _constraints, risk_free_rate)

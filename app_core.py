@@ -2544,6 +2544,17 @@ def get_default_constraints(profile: str):
     return {"max_single_asset": 0.35, "min_bonds": 0.20, "min_gold": 0.10}
 
 
+def _per_ticker_bounds_list(asset_names: list[str], constraints: dict) -> list[tuple]:
+    """Return a scipy bounds list respecting per-ticker weight rules.
+
+    Each element is (lo, hi).  Fixed-weight tickers get (w, w); free tickers
+    get (0.0, max_single_asset); custom-range tickers get (lo, hi).
+    """
+    max_single = float(constraints["max_single_asset"])
+    ptb = constraints.get("per_ticker_bounds", {})
+    return [ptb.get(t, (0.0, max_single)) for t in asset_names]
+
+
 _BOND_ASSETS = {"BND", "AGG", "IEF", "TLT", "VGIT", "BNDX"}
 _GOLD_ASSETS = {"IGLN.L", "GLD", "IAU", "SGLN.L"}
 
@@ -2587,10 +2598,45 @@ def simulate_constrained_efficient_frontier(
     bond_idx, gold_idx = classify_assets(asset_names)
 
     rng = np.random.default_rng(42)
-    raw = rng.random((n_portfolios * 6, n_assets))
-    weights = raw / raw.sum(axis=1, keepdims=True)
+    per_ticker_bounds = constraints.get("per_ticker_bounds", {})
 
-    mask = weights.max(axis=1) <= max_single_asset
+    # Separate fixed tickers (lo == hi) from free tickers
+    fixed = {}   # {col_idx: weight}
+    for i, ticker in enumerate(asset_names):
+        if ticker in per_ticker_bounds:
+            lo, hi = per_ticker_bounds[ticker]
+            if abs(lo - hi) < 1e-8:
+                fixed[i] = lo
+
+    if fixed:
+        # Generate portfolios with fixed portions; randomise the rest
+        fixed_sum = sum(fixed.values())
+        free_idx = [i for i in range(n_assets) if i not in fixed]
+        if not free_idx or fixed_sum >= 1.0 - 1e-8:
+            return pd.DataFrame()
+        remaining = 1.0 - fixed_sum
+        n_free = len(free_idx)
+        raw_free = rng.random((n_portfolios * 6, n_free))
+        raw_free = np.clip(raw_free, 0.0, max_single_asset)
+        row_sums = raw_free.sum(axis=1, keepdims=True)
+        valid = row_sums.squeeze() > 1e-12
+        raw_free, row_sums = raw_free[valid], row_sums[valid]
+        free_w = raw_free / row_sums * remaining
+        weights = np.zeros((len(raw_free), n_assets))
+        for col, w in fixed.items():
+            weights[:, col] = w
+        for j, col in enumerate(free_idx):
+            weights[:, col] = free_w[:, j]
+        mask = np.ones(len(weights), dtype=bool)
+    else:
+        raw = rng.random((n_portfolios * 6, n_assets))
+        weights = raw / raw.sum(axis=1, keepdims=True)
+        mask = weights.max(axis=1) <= max_single_asset
+        # Apply non-fixed per-ticker bounds as a filter
+        for i, ticker in enumerate(asset_names):
+            if ticker in per_ticker_bounds:
+                lo, hi = per_ticker_bounds[ticker]
+                mask &= (weights[:, i] >= lo - 1e-6) & (weights[:, i] <= hi + 1e-6)
 
     if bond_idx:
         mask &= weights[:, bond_idx].sum(axis=1) >= min_bonds
@@ -2669,14 +2715,21 @@ def optimize_max_sharpe(
         _gi = gold_idx
         cons.append({"type": "ineq", "fun": lambda w, i=_gi: float(np.sum(w[i])) - min_gold})
 
-    bounds = [(0.0, max_single)] * n
+    bounds = _per_ticker_bounds_list(asset_names, constraints)
+    lo_arr = np.array([b[0] for b in bounds])
+    hi_arr = np.array([b[1] for b in bounds])
     rng = np.random.default_rng(7)
 
-    starts = [np.full(n, 1.0 / n)]
+    starts = []
+    w0 = np.clip(np.full(n, 1.0 / n), lo_arr, hi_arr)
+    if w0.sum() > 0:
+        w0 /= w0.sum()
+    starts.append(w0)
     for _ in range(31):
         raw = rng.dirichlet(np.ones(n))
-        raw = np.clip(raw, 0.0, max_single)
-        raw /= raw.sum()
+        raw = np.clip(raw, lo_arr, hi_arr)
+        if raw.sum() > 0:
+            raw /= raw.sum()
         starts.append(raw)
 
     best_w, best_val = None, np.inf
@@ -2745,8 +2798,12 @@ def optimize_min_vol(
         _gi = gold_idx
         cons.append({"type": "ineq", "fun": lambda w, i=_gi: float(np.sum(w[i])) - min_gold})
 
-    bounds = [(0.0, max_single)] * n
-    w0 = np.full(n, 1.0 / n)
+    bounds = _per_ticker_bounds_list(asset_names, constraints)
+    lo_arr = np.array([b[0] for b in bounds])
+    hi_arr = np.array([b[1] for b in bounds])
+    w0 = np.clip(np.full(n, 1.0 / n), lo_arr, hi_arr)
+    if w0.sum() > 0:
+        w0 /= w0.sum()
 
     try:
         res = minimize(
