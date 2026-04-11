@@ -320,7 +320,7 @@ def render_economic_calendar_page(ctx):
                     if days_out == 0:
                         today_badge = f"<span style='background:#3a1a0d;color:{_GOLD};font-size:10px;padding:1px 7px;border-radius:3px;font-family:monospace;margin-left:4px;'>TODAY</span>"
 
-                    st.markdown(
+                    st.html(
                         f"""<div style='background:#111820;border:1px solid #1e2535;border-radius:5px;
                         padding:10px 14px;margin-bottom:5px;display:flex;align-items:center;'>
                         <div style='min-width:100px;color:#888;font-size:12px;font-family:monospace;'>
@@ -337,8 +337,7 @@ def render_economic_calendar_page(ctx):
                             <div style='color:#555;font-size:10px;font-family:monospace;'>
                                 {days_out}d</div>
                         </div>
-                        </div>""",
-                        unsafe_allow_html=True,
+                        </div>"""
                     )
 
             # ── Show all as table ──────────────────────────────────────────────

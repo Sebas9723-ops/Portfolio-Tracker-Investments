@@ -145,11 +145,16 @@ def _fetch_all_feeds(selected_sources: tuple) -> list[dict]:
             continue
         arts = _parse_rss_urllib(url, source)
         all_articles.extend(arts)
-    # Sort by date descending
-    all_articles.sort(
-        key=lambda a: a["published"] or datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc),
-        reverse=True,
-    )
+    # Sort by date descending — normalize naive/aware datetimes to avoid TypeError
+    _epoch = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
+    def _sort_key(a):
+        pub = a["published"]
+        if pub is None:
+            return _epoch
+        if pub.tzinfo is None:
+            return pub.replace(tzinfo=datetime.timezone.utc)
+        return pub
+    all_articles.sort(key=_sort_key, reverse=True)
     return all_articles[:50]
 
 

@@ -667,6 +667,12 @@ def _render_rolling_correlation(ctx):
 def render_analytics_page(ctx):
     render_page_title("Analytics")
 
+    # ── Sidebar controls (must be outside fragment in Streamlit 1.41+) ───────────
+    with st.sidebar.expander("Analytics Settings", expanded=False):
+        st.slider("Rolling Window (days)", 21, 252, 63, 21, key="ana_roll_win")
+        st.number_input("Risk-free rate", 0.00, 0.20, 0.02, 0.005, format="%.3f", key="ana_rfr")
+        st.slider("Blended benchmark VOO %", 0, 100, 60, 5, key="ana_voo_w")
+
     @st.fragment(run_every=900)
     def _live():
         st.caption(f"Last refreshed: {datetime.datetime.now().strftime('%H:%M:%S')}")
@@ -680,11 +686,9 @@ def render_analytics_page(ctx):
         max_dd = float(ctx.get("max_drawdown", 0.0))
         policy_map = ctx.get("policy_target_map", {})
 
-        # ── Sidebar controls ──────────────────────────────────────────────────────
-        with st.sidebar.expander("Analytics Settings", expanded=False):
-            rolling_window = st.slider("Rolling Window (days)", 21, 252, 63, 21, key="ana_roll_win")
-            rfr = st.number_input("Risk-free rate", 0.00, 0.20, 0.02, 0.005, format="%.3f", key="ana_rfr")
-            voo_w = st.slider("Blended benchmark VOO %", 0, 100, 60, 5, key="ana_voo_w") / 100.0
+        rolling_window = st.session_state.get("ana_roll_win", 63)
+        rfr            = st.session_state.get("ana_rfr", 0.02)
+        voo_w          = st.session_state.get("ana_voo_w", 60) / 100.0
 
         # ── Compute (all cached) ──────────────────────────────────────────────────
         rolling_df = pd.DataFrame()

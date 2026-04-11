@@ -234,18 +234,25 @@ def _render_alert_summary(ctx):
 def render_risk_page(ctx):
     render_page_title("Risk")
 
+    # ── Sidebar controls (must be outside fragment in Streamlit 1.41+) ───────────
+    with st.sidebar.expander("Stress Testing", expanded=False):
+        st.number_input("Equities Shock", -1.0, 1.0, -0.10, 0.01, format="%.2f", key="risk_eq_shock")
+        st.number_input("Bonds Shock",    -1.0, 1.0, -0.03, 0.01, format="%.2f", key="risk_bd_shock")
+        st.number_input("Gold Shock",      -1.0, 1.0,  0.05, 0.01, format="%.2f", key="risk_gd_shock")
+        st.slider("Rolling Window (days)", 21, 252, 63, 21, key="risk_roll_win")
+        st.number_input("Max concentration", 0.05, 1.0, 0.40, 0.05, format="%.2f", key="risk_conc")
+        st.number_input("Min bonds alloc",   0.00, 1.0, 0.05, 0.05, format="%.2f", key="risk_bonds")
+
     @st.fragment(run_every=900)
     def _live():
         st.caption(f"Last refreshed: {datetime.datetime.now().strftime('%H:%M:%S')}")
 
-        # ── Sidebar controls ──────────────────────────────────────────────────────
-        with st.sidebar.expander("Stress Testing", expanded=False):
-            equity_shock = st.number_input("Equities Shock", -1.0, 1.0, -0.10, 0.01, format="%.2f", key="risk_eq_shock")
-            bonds_shock  = st.number_input("Bonds Shock",    -1.0, 1.0, -0.03, 0.01, format="%.2f", key="risk_bd_shock")
-            gold_shock   = st.number_input("Gold Shock",      -1.0, 1.0,  0.05, 0.01, format="%.2f", key="risk_gd_shock")
-            rolling_window = st.slider("Rolling Window (days)", 21, 252, 63, 21, key="risk_roll_win")
-            max_single_c = st.number_input("Max concentration", 0.05, 1.0, 0.40, 0.05, format="%.2f", key="risk_conc")
-            min_bonds_c  = st.number_input("Min bonds alloc",   0.00, 1.0, 0.05, 0.05, format="%.2f", key="risk_bonds")
+        equity_shock   = st.session_state.get("risk_eq_shock", -0.10)
+        bonds_shock    = st.session_state.get("risk_bd_shock", -0.03)
+        gold_shock     = st.session_state.get("risk_gd_shock",  0.05)
+        rolling_window = st.session_state.get("risk_roll_win",  63)
+        max_single_c   = st.session_state.get("risk_conc",      0.40)
+        min_bonds_c    = st.session_state.get("risk_bonds",     0.05)
 
         df = ctx.get("df", pd.DataFrame())
         asset_returns = ctx.get("asset_returns")
