@@ -78,6 +78,7 @@ PORTFOLIO_START_DATE = date(2026, 3, 27)
 
 PROXY_TICKER_MAP = {
     "IWDA.AS": "EUNL.DE",
+    "EIMI.UK": "EIMI.L",  # yfinance uses .L suffix for LSE tickers
 }
 
 # Tickers that don't follow the standard exchange currency convention.
