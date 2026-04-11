@@ -48,7 +48,7 @@ _YIELD_FALLBACK_MAP: dict[str, float] = {
     "8RMY.DE": 0.0, "VOO": 0.0130, "VWCE.DE": 0.0150,
     "IWDA.AS": 0.0150, "AGG": 0.0310,
     "IEF": 0.0280, "TLT": 0.0360, "IGLN.L": 0.0,
-    "GLD": 0.0, "IAU": 0.0, "ICHN.AS": 0.0,
+    "GLD": 0.0, "IAU": 0.0,
 }
 
 
@@ -100,7 +100,6 @@ DIVIDEND_META = {
     "IWDA.AS": {"yield": 0.0, "months": [], "frequency": "Accumulating"},
     "VWCE.DE": {"yield": 0.0, "months": [], "frequency": "Accumulating"},
     "EUNL.DE": {"yield": 0.0, "months": [], "frequency": "Accumulating"},
-    "ICHN.AS": {"yield": 0.0, "months": [], "frequency": "Accumulating"},
 }
 
 
@@ -1711,8 +1710,6 @@ def load_private_portfolio():
         "VWCE.DE": {"name": "All World", "shares": float(p["VWCE_DE"]), "base_shares": float(p["VWCE_DE"])},
         "IGLN.L": {"name": "Gold", "shares": float(p["IGLN_L"]), "base_shares": float(p["IGLN_L"])},
         "QQQM": {"name": "Nasdaq-100 Growth ETF", "shares": float(p.get("QQQM", 0.0)), "base_shares": float(p.get("QQQM", 0.0))},
-        "VDE": {"name": "Vanguard Energy ETF", "shares": float(p.get("VDE", 0.0)), "base_shares": float(p.get("VDE", 0.0))},
-        "ICHN.AS": {"name": "iShares China Large Cap UCITS ETF", "shares": float(p.get("ICHN_AS", 0.0)), "base_shares": float(p.get("ICHN_AS", 0.0))},
     }
 
 
