@@ -45,8 +45,8 @@ def get_risk_free_rate() -> float:
 
 
 _YIELD_FALLBACK_MAP: dict[str, float] = {
-    "SCHD": 0.0360, "VOO": 0.0130, "VWCE.DE": 0.0150,
-    "IWDA.AS": 0.0150, "BND": 0.0320, "AGG": 0.0310,
+    "8RMY.DE": 0.0, "VOO": 0.0130, "VWCE.DE": 0.0150,
+    "IWDA.AS": 0.0150, "AGG": 0.0310,
     "IEF": 0.0280, "TLT": 0.0360, "IGLN.L": 0.0,
     "GLD": 0.0, "IAU": 0.0, "ICHN.AS": 0.0,
 }
@@ -94,8 +94,7 @@ DIVIDENDS_HEADERS = ["date", "ticker", "amount", "currency", "notes"]
 
 DIVIDEND_META = {
     "VOO": {"yield": 0.015, "months": [3, 6, 9, 12], "frequency": "Quarterly"},
-    "SCHD": {"yield": 0.035, "months": [3, 6, 9, 12], "frequency": "Quarterly"},
-    "BND": {"yield": 0.032, "months": list(range(1, 13)), "frequency": "Monthly"},
+    "8RMY.DE": {"yield": 0.0, "months": [], "frequency": "Accumulating"},
     "GLD": {"yield": 0.0, "months": [], "frequency": "None"},
     "IGLN.L": {"yield": 0.0, "months": [], "frequency": "None"},
     "IWDA.AS": {"yield": 0.0, "months": [], "frequency": "Accumulating"},
@@ -1707,11 +1706,10 @@ def append_dividend_to_sheets(div_tx: dict):
 def load_private_portfolio():
     p = st.secrets["private_portfolio"]
     return {
-        "SCHD": {"name": "Dividend ETF", "shares": float(p["SCHD"]), "base_shares": float(p["SCHD"])},
+        "8RMY.DE": {"name": "iShares MSCI EM Multifactor ETF", "shares": float(p.get("8RMY_DE", 0.0)), "base_shares": float(p.get("8RMY_DE", 0.0))},
         "VOO": {"name": "S&P 500", "shares": float(p["VOO"]), "base_shares": float(p["VOO"])},
         "VWCE.DE": {"name": "All World", "shares": float(p["VWCE_DE"]), "base_shares": float(p["VWCE_DE"])},
         "IGLN.L": {"name": "Gold", "shares": float(p["IGLN_L"]), "base_shares": float(p["IGLN_L"])},
-        "BND": {"name": "Bonds", "shares": float(p["BND"]), "base_shares": float(p["BND"])},
         "QQQM": {"name": "Nasdaq-100 Growth ETF", "shares": float(p.get("QQQM", 0.0)), "base_shares": float(p.get("QQQM", 0.0))},
         "VDE": {"name": "Vanguard Energy ETF", "shares": float(p.get("VDE", 0.0)), "base_shares": float(p.get("VDE", 0.0))},
         "ICHN.AS": {"name": "iShares China Large Cap UCITS ETF", "shares": float(p.get("ICHN_AS", 0.0)), "base_shares": float(p.get("ICHN_AS", 0.0))},

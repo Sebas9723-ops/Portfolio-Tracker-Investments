@@ -9,18 +9,13 @@ public_portfolio = {
         "shares": 10.0,
         "base_shares": 10.0,
     },
-    "SCHD": {
-        "name": "Dividend ETF",
+    "8RMY.DE": {
+        "name": "iShares MSCI EM Multifactor ETF",
         "shares": 10.0,
         "base_shares": 10.0,
     },
     "GLD": {
         "name": "Gold ETF",
-        "shares": 10.0,
-        "base_shares": 10.0,
-    },
-    "BND": {
-        "name": "Bonds",
         "shares": 10.0,
         "base_shares": 10.0,
     },
