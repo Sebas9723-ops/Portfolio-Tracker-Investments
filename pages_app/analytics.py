@@ -12,7 +12,9 @@ from app_core import (
     compute_brinson_attribution,
     compute_extended_ratios,
     compute_ff3_exposure,
+    compute_return_attribution,
     compute_rolling_metrics,
+    compute_rolling_pair_correlations,
     compute_twr,
     compute_volatility_regime,
     info_metric,
@@ -555,6 +557,113 @@ def _render_multi_benchmark(mb):
         st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_return_attribution(asset_returns, historical_base, df_json, period):
+    import io
+    df = pd.read_json(io.StringIO(df_json), orient="records")
+    return compute_return_attribution(asset_returns, historical_base, df, period)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_rolling_corr(asset_returns):
+    return compute_rolling_pair_correlations(asset_returns, windows=(126, 252))
+
+
+def _render_return_attribution(ctx):
+    asset_returns = ctx.get("asset_returns")
+    historical_base = ctx.get("historical_base")
+    df = ctx.get("df", pd.DataFrame())
+    if asset_returns is None or asset_returns.empty or df.empty:
+        return
+
+    info_section(
+        "Return Attribution by ETF",
+        "Each ETF's contribution to total portfolio return = average weight × ETF return in the period.",
+    )
+    period = st.selectbox("Period", ["1M", "3M", "6M", "YTD", "1Y"], key="attr_period_sel")
+    attr_df = _cached_return_attribution(asset_returns, historical_base, df.to_json(orient="records"), period)
+    if attr_df is None or attr_df.empty:
+        st.info("Not enough data for the selected period.")
+        return
+
+    total_contrib = float(attr_df["Contribution"].sum())
+    c1, c2 = st.columns(2)
+    c1.metric("Total Attributed Return", f"{total_contrib:.2%}")
+    c2.metric("Period", period)
+
+    attr_df["ETF Return"] = attr_df["ETF Return"].map(lambda x: f"{x:.2%}")
+    attr_df["Avg Weight"] = attr_df["Avg Weight"].map(lambda x: f"{x:.1%}")
+    attr_df["Contribution"] = attr_df["Contribution"].map(lambda x: f"{x:+.2%}")
+    st.dataframe(attr_df[["Ticker", "Name", "Avg Weight", "ETF Return", "Contribution"]],
+                 use_container_width=True, hide_index=True)
+
+    raw_attr = compute_return_attribution(
+        ctx.get("asset_returns"), ctx.get("historical_base"), ctx.get("df", pd.DataFrame()), period
+    )
+    if raw_attr is not None and not raw_attr.empty:
+        colors = ["#26a69a" if v >= 0 else "#ef5350" for v in raw_attr["Contribution"]]
+        fig = go.Figure(go.Bar(
+            x=raw_attr["Ticker"],
+            y=raw_attr["Contribution"],
+            marker_color=colors,
+            text=[f"{v:+.2%}" for v in raw_attr["Contribution"]],
+            textposition="outside",
+        ))
+        fig.update_layout(
+            paper_bgcolor="#0b0f14", plot_bgcolor="#0b0f14",
+            font=dict(color="#e6e6e6"), height=320,
+            margin=dict(t=20, b=20, l=20, r=20),
+            yaxis=dict(tickformat=".1%", zeroline=True, zerolinecolor="#555"),
+            showlegend=False,
+        )
+        st.plotly_chart(fig, use_container_width=True, key="analytics_attribution_bar")
+
+
+def _render_rolling_correlation(ctx):
+    asset_returns = ctx.get("asset_returns")
+    if asset_returns is None or asset_returns.empty or asset_returns.shape[1] < 2:
+        return
+
+    info_section(
+        "Rolling Correlation",
+        "Pairwise rolling Pearson correlation between ETFs. 6M = 126 trading days · 12M = 252 trading days.",
+    )
+    corr_data = _cached_rolling_corr(asset_returns)
+    if not corr_data:
+        st.info("Not enough history for rolling correlation.")
+        return
+
+    tickers = asset_returns.columns.tolist()
+    pairs = [f"{t1}/{t2}" for i, t1 in enumerate(tickers) for t2 in tickers[i + 1:]]
+
+    mode = st.radio("View", ["All pairs", "Single pair"], horizontal=True, key="rc_mode")
+    fig = go.Figure()
+
+    if mode == "All pairs":
+        window = st.selectbox("Window", [126, 252], format_func=lambda w: "6M" if w == 126 else "12M", key="rc_win")
+        df_corr = corr_data.get(window, pd.DataFrame())
+        for col in df_corr.columns:
+            fig.add_scatter(x=df_corr.index, y=df_corr[col], mode="lines", name=col,
+                            hovertemplate="%{x|%Y-%m-%d}<br>" + col + ": %{y:.2f}<extra></extra>")
+    else:
+        pair = st.selectbox("ETF Pair", pairs, key="rc_pair")
+        for w, label in [(126, "6M"), (252, "12M")]:
+            s = corr_data.get(w, pd.DataFrame()).get(pair, pd.Series(dtype=float))
+            fig.add_scatter(x=s.index, y=s, mode="lines", name=label,
+                            hovertemplate="%{x|%Y-%m-%d}<br>" + label + ": %{y:.2f}<extra></extra>")
+
+    fig.add_hline(y=0, line_dash="dot", line_color="#555")
+    fig.update_layout(
+        paper_bgcolor="#0b0f14", plot_bgcolor="#0b0f14",
+        font=dict(color="#e6e6e6"), height=400,
+        margin=dict(t=20, b=20, l=20, r=20),
+        yaxis=dict(range=[-1.05, 1.05], tickformat=".2f", title="Correlation"),
+        xaxis_title="Date",
+        legend=dict(orientation="h", y=1.08),
+    )
+    st.plotly_chart(fig, use_container_width=True, key="analytics_rolling_corr_chart")
+
+
 def render_analytics_page(ctx):
     render_page_title("Analytics")
 
@@ -633,4 +742,6 @@ def render_analytics_page(ctx):
         _render_multi_benchmark(mb)
         _render_contribution_growth(ctx)
         _render_correlation_heatmap(ctx)
+        _render_rolling_correlation(ctx)
+        _render_return_attribution(ctx)
     _live()

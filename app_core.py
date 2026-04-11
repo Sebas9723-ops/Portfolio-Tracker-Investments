@@ -5040,6 +5040,206 @@ def update_alert_field(alert_id: str, field: str, value: str):
     _clear_google_sheets_cache()
 
 
+# =============================================================================
+# CONTRIBUTION & GOALS UTILITIES
+# =============================================================================
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_day_change_for_tickers(tickers: tuple[str, ...]) -> dict[str, float]:
+    """Return last-session % change for tickers not necessarily in the portfolio.
+    Uses yfinance 5d download and computes close-to-close return for the latest day.
+    Returns {ticker: return} where return is a decimal (e.g. -0.06 = -6%).
+    """
+    import yfinance as yf
+    result: dict[str, float] = {}
+    try:
+        raw = yf.download(list(tickers), period="5d", auto_adjust=True, progress=False)
+        if raw.empty:
+            return result
+        close = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw[["Close"]]
+        if isinstance(close, pd.Series):
+            close = close.to_frame(name=list(tickers)[0])
+        close = close.dropna(how="all")
+        if len(close) < 2:
+            return result
+        for ticker in tickers:
+            if ticker in close.columns:
+                col = close[ticker].dropna()
+                if len(col) >= 2:
+                    result[ticker] = float(col.iloc[-1] / col.iloc[-2] - 1)
+    except Exception:
+        pass
+    return result
+
+
+def simulate_etf_dilution(
+    df: "pd.DataFrame",
+    monthly_contribution: float,
+    semi_annual_contribution: float,
+    horizon_months: int,
+    expected_annual_return: float,
+) -> "pd.DataFrame":
+    """Project ETF weight evolution over time with buy-only rebalancing.
+
+    Each month the portfolio grows by expected_annual_return/12.
+    Monthly cash is added; every 6 months an extra lump sum is added.
+    Cash is deployed to the most underweight ticker (vs Target Weight).
+    Returns a DataFrame with columns: Month, Ticker, Weight, PortfolioValue.
+    """
+    if df.empty or monthly_contribution < 0:
+        return pd.DataFrame(columns=["Month", "Ticker", "Weight", "PortfolioValue"])
+
+    tickers = df["Ticker"].tolist()
+    values = {t: float(df.loc[df["Ticker"] == t, "Value"].iloc[0]) for t in tickers}
+    target_w = {t: float(df.loc[df["Ticker"] == t, "Target Weight"].iloc[0])
+                if "Target Weight" in df.columns else 1.0 / len(tickers)
+                for t in tickers}
+
+    monthly_rate = (1 + max(expected_annual_return, 0.0)) ** (1 / 12) - 1
+    records = []
+
+    # Record month 0 (current state)
+    total0 = sum(values.values()) or 1.0
+    for t in tickers:
+        records.append({"Month": 0, "Ticker": t, "Weight": values[t] / total0, "PortfolioValue": total0})
+
+    for m in range(1, horizon_months + 1):
+        # Grow all positions
+        for t in tickers:
+            values[t] *= (1 + monthly_rate)
+
+        # Cash to deploy
+        cash = monthly_contribution
+        if m % 6 == 0:
+            cash += semi_annual_contribution
+
+        if cash > 0:
+            total = sum(values.values()) or 1.0
+            weights = {t: values[t] / total for t in tickers}
+            gaps = {t: target_w.get(t, 1.0 / len(tickers)) - weights[t] for t in tickers}
+            buy_t = max(gaps, key=gaps.get)
+            values[buy_t] += cash
+
+        total = sum(values.values()) or 1.0
+        for t in tickers:
+            records.append({"Month": m, "Ticker": t, "Weight": values[t] / total, "PortfolioValue": total})
+
+    return pd.DataFrame(records)
+
+
+def compute_return_attribution(
+    asset_returns: "pd.DataFrame",
+    historical_base: "pd.DataFrame",
+    df: "pd.DataFrame",
+    period_label: str,
+) -> "pd.DataFrame":
+    """Compute each ETF's contribution to total portfolio return in a given period.
+
+    Contribution = average_weight_in_period × ETF_cumulative_return_in_period.
+    Uses historical_base prices and current Shares to derive daily weights.
+    """
+    if asset_returns is None or asset_returns.empty or df.empty:
+        return pd.DataFrame()
+
+    period_map = {"1M": 21, "3M": 63, "6M": 126, "YTD": None, "1Y": 252}
+    tickers = [t for t in df["Ticker"].tolist() if t in asset_returns.columns]
+    if not tickers:
+        return pd.DataFrame()
+
+    ret_slice = asset_returns[tickers].dropna(how="all")
+    if period_label == "YTD":
+        start = pd.Timestamp(ret_slice.index[-1].year, 1, 1) if not ret_slice.empty else None
+        if start:
+            ret_slice = ret_slice[ret_slice.index >= start]
+    else:
+        days = period_map.get(period_label, 21)
+        ret_slice = ret_slice.iloc[-days:] if len(ret_slice) >= days else ret_slice
+
+    if ret_slice.empty:
+        return pd.DataFrame()
+
+    shares_map = df.set_index("Ticker")["Shares"].to_dict()
+    rows = []
+    for t in tickers:
+        etf_ret = float((1 + ret_slice[t].dropna()).prod() - 1) if not ret_slice[t].dropna().empty else 0.0
+
+        # Compute avg weight using historical prices if available
+        avg_w = float(df.loc[df["Ticker"] == t, "Weight"].iloc[0]) if "Weight" in df.columns else 0.0
+        if historical_base is not None and t in historical_base.columns:
+            hist_slice = historical_base[tickers].loc[ret_slice.index[0]:ret_slice.index[-1]].dropna(how="all")
+            if not hist_slice.empty:
+                ticker_vals = {tk: hist_slice[tk] * shares_map.get(tk, 0.0) for tk in tickers if tk in hist_slice.columns}
+                if ticker_vals:
+                    val_df = pd.DataFrame(ticker_vals)
+                    total_vals = val_df.sum(axis=1).replace(0, np.nan)
+                    if t in val_df.columns:
+                        avg_w = float((val_df[t] / total_vals).mean())
+
+        contribution = avg_w * etf_ret
+        name = str(df.loc[df["Ticker"] == t, "Name"].iloc[0]) if "Name" in df.columns else t
+        rows.append({
+            "Ticker": t,
+            "Name": name,
+            "ETF Return": etf_ret,
+            "Avg Weight": avg_w,
+            "Contribution": contribution,
+        })
+
+    out = pd.DataFrame(rows).sort_values("Contribution", ascending=False).reset_index(drop=True)
+    return out
+
+
+def compute_rolling_pair_correlations(
+    asset_returns: "pd.DataFrame",
+    windows: tuple = (126, 252),
+) -> "dict[int, pd.DataFrame]":
+    """Compute rolling Pearson correlation for each pair of tickers.
+
+    Returns {window_days: DataFrame} where DataFrame columns are 'TickerA/TickerB'
+    pair labels and index is date.
+    """
+    if asset_returns is None or asset_returns.shape[1] < 2:
+        return {}
+
+    tickers = asset_returns.columns.tolist()
+    result: dict[int, pd.DataFrame] = {}
+    for w in windows:
+        pairs: dict[str, "pd.Series"] = {}
+        for i, t1 in enumerate(tickers):
+            for t2 in tickers[i + 1:]:
+                label = f"{t1}/{t2}"
+                pairs[label] = asset_returns[t1].rolling(w).corr(asset_returns[t2])
+        if pairs:
+            result[w] = pd.DataFrame(pairs).dropna(how="all")
+    return result
+
+
+def compute_milestone_eta(
+    current_value: float,
+    target: float,
+    monthly_contribution: float,
+    monthly_return: float,
+) -> float:
+    """Estimate months to reach a portfolio target via contributions + growth.
+
+    Uses the geometric series formula. Returns float months, or inf if unreachable.
+    """
+    if current_value >= target:
+        return 0.0
+    gap = target - current_value
+    monthly_growth = current_value * monthly_return
+    monthly_inflow = monthly_contribution + monthly_growth
+    if monthly_inflow <= 0:
+        return float("inf")
+    # Simple linear approximation (conservative — ignores compounding of contributions)
+    return gap / monthly_inflow
+
+
+# =============================================================================
+# END CONTRIBUTION & GOALS UTILITIES
+# =============================================================================
+
+
 def delete_alert(alert_id: str):
     ws = connect_alerts_worksheet()
     records = ws.get_all_values()

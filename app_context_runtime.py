@@ -462,6 +462,7 @@ def build_app_context_runtime(app_scope: str):
 
     investments_net_worth = total_portfolio_value + non_portfolio_cash_value
     monthly_contribution = float(user_settings.get("monthly_contribution", 0.0))
+    semi_annual_contribution = float(user_settings.get("semi_annual_contribution", 0.0))
 
     display_df = df[
         [
@@ -677,6 +678,7 @@ def build_app_context_runtime(app_scope: str):
         "investments_net_worth": investments_net_worth,
         "user_settings": user_settings,
         "monthly_contribution": monthly_contribution,
+        "semi_annual_contribution": semi_annual_contribution,
         "collected_dividends_df": collected_dividends_df,
         "annual_dividend_df": annual_dividend_df,
         "dividend_calendar_df": dividend_calendar_df,

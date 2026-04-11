@@ -6,6 +6,7 @@ import streamlit as st
 
 from app_core import (
     build_portfolio_df,
+    fetch_day_change_for_tickers,
     info_metric,
     info_section,
     render_market_clocks,
@@ -13,6 +14,48 @@ from app_core import (
     render_private_dashboard_logo,
     render_status_bar,
 )
+
+_MARKET_WATCH = ("VOO", "QQQM", "QQQ")
+_DROP_THRESHOLD = -0.05
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_day_changes(tickers: tuple) -> dict:
+    return fetch_day_change_for_tickers(tickers)
+
+
+def _render_drop_alerts(ctx):
+    """Show a warning banner if S&P 500, NASDAQ, or any portfolio position dropped >5%."""
+    df = ctx.get("df", pd.DataFrame())
+    asset_returns = ctx.get("asset_returns")
+    portfolio_tickers = set(df["Ticker"].tolist()) if not df.empty else set()
+
+    # Check portfolio tickers via existing asset_returns (already loaded)
+    drops = []
+    if asset_returns is not None and not asset_returns.empty:
+        for t in portfolio_tickers:
+            if t in asset_returns.columns:
+                col = asset_returns[t].dropna()
+                if len(col) >= 1:
+                    ret = float(col.iloc[-1])
+                    if ret <= _DROP_THRESHOLD:
+                        drops.append({"ticker": t, "change": ret, "in_portfolio": True})
+
+    # Check market indices (VOO/QQQM/QQQ) even if not in portfolio
+    extra = tuple(t for t in _MARKET_WATCH if t not in portfolio_tickers)
+    if extra:
+        market_changes = _cached_day_changes(extra)
+        for t, ret in market_changes.items():
+            if ret <= _DROP_THRESHOLD:
+                drops.append({"ticker": t, "change": ret, "in_portfolio": False})
+
+    for d in drops:
+        label = "S&P 500" if d["ticker"] == "VOO" else ("NASDAQ" if d["ticker"] in ("QQQM", "QQQ") else d["ticker"])
+        is_market_index = d["ticker"] in _MARKET_WATCH
+        suggestion = " — Consider doubling your contribution this month on S&P 500 and NASDAQ." if is_market_index else ""
+        st.warning(
+            f"**{label}** dropped {d['change']:.2%} today.{suggestion}",
+        )
 from pages_app.portfolio_history import (
     build_allocation_history_figure,
     build_monthly_snapshot_summary,
@@ -540,6 +583,8 @@ def render_dashboard(ctx):
         info_metric(c7, "Sharpe Ratio", f"{ctx['sharpe']:.2f}", "Portfolio Sharpe ratio.")
         info_metric(c8, "Simple Return", sr_str, "Total gain vs cost basis (unrealized + realized). Not annualized.")
         info_metric(c9, "Total P&L", pnl_str, "Unrealized + realized gain/loss in base currency.")
+
+        _render_drop_alerts(ctx)
 
         summary_df = _build_decision_summary(ctx)
         actions_df, source_label = _build_top_actions_table(ctx)
