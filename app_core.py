@@ -45,7 +45,7 @@ def get_risk_free_rate() -> float:
 
 
 _YIELD_FALLBACK_MAP: dict[str, float] = {
-    "8RMY.DE": 0.0, "VOO": 0.0130, "VWCE.DE": 0.0150,
+    "8RMY.DE": 0.0, "EIMI.UK": 0.0, "VOO": 0.0130, "VWCE.DE": 0.0150,
     "IWDA.AS": 0.0150, "AGG": 0.0310,
     "IEF": 0.0280, "TLT": 0.0360, "IGLN.L": 0.0,
     "GLD": 0.0, "IAU": 0.0,
@@ -84,6 +84,7 @@ PROXY_TICKER_MAP = {
 # Add any ticker here whose actual quote currency differs from its exchange suffix.
 TICKER_CURRENCY_OVERRIDE = {
     "IGLN.L": "USD",  # iShares Physical Gold ETC — quoted in USD on LSE, not GBP
+    "EIMI.UK": "USD",  # iShares Core MSCI EM IMI — quoted in USD on LSE, not GBP
 }
 
 PRIVATE_POSITIONS_HEADERS = ["Ticker", "Name", "Shares", "AvgCost"]
@@ -95,6 +96,7 @@ DIVIDENDS_HEADERS = ["date", "ticker", "amount", "currency", "notes"]
 DIVIDEND_META = {
     "VOO": {"yield": 0.015, "months": [3, 6, 9, 12], "frequency": "Quarterly"},
     "8RMY.DE": {"yield": 0.0, "months": [], "frequency": "Accumulating"},
+    "EIMI.UK": {"yield": 0.0, "months": [], "frequency": "Accumulating"},
     "GLD": {"yield": 0.0, "months": [], "frequency": "None"},
     "IGLN.L": {"yield": 0.0, "months": [], "frequency": "None"},
     "IWDA.AS": {"yield": 0.0, "months": [], "frequency": "Accumulating"},
@@ -1706,6 +1708,7 @@ def load_private_portfolio():
     p = st.secrets["private_portfolio"]
     return {
         "8RMY.DE": {"name": "iShares MSCI EM Multifactor ETF", "shares": float(p.get("8RMY_DE", 0.0)), "base_shares": float(p.get("8RMY_DE", 0.0))},
+        "EIMI.UK": {"name": "iShares Core MSCI EM IMI", "shares": float(p.get("EIMI_UK", 0.0)), "base_shares": float(p.get("EIMI_UK", 0.0))},
         "VOO": {"name": "S&P 500", "shares": float(p["VOO"]), "base_shares": float(p["VOO"])},
         "VWCE.DE": {"name": "All World", "shares": float(p["VWCE_DE"]), "base_shares": float(p["VWCE_DE"])},
         "IGLN.L": {"name": "Gold", "shares": float(p["IGLN_L"]), "base_shares": float(p["IGLN_L"])},
