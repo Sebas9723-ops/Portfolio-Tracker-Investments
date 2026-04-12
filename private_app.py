@@ -18,6 +18,7 @@ from pages_app.trade_log import render_trade_log_page
 from pages_app.alerts import render_alerts_page
 from pages_app.xtb_import import render_xtb_import_page
 from pages_app.transactions import render_transactions_page
+from pages_app.private_manager import render_private_manager_page
 
 from PIL import Image as _Image
 st.set_page_config(
@@ -85,7 +86,7 @@ if not st.session_state.get("private_authenticated"):
 # ── Navigation structure ───────────────────────────────────────────────────────
 
 SECTION_PAGES = {
-    "OPERATE":  ["Dashboard", "Portfolio", "Optimization", "Rebalance Center"],
+    "OPERATE":  ["Dashboard", "Portfolio", "Optimization", "Rebalance Center", "Manage Positions"],
     "ANALYZE":  ["Risk & Scenarios", "Performance", "Investment Horizon", "Projections"],
     "RESEARCH": ["Macro Dashboard", "Technicals", "Fundamentals", "What-If Simulator"],
     "SETTINGS": ["Trade Log", "Custom Alerts", "XTB Import", "Transactions"],
@@ -150,6 +151,8 @@ elif page_name == "Optimization":
     render_optimization_page(ctx)
 elif page_name == "Rebalance Center":
     render_rebalancing_page(ctx)
+elif page_name == "Manage Positions":
+    render_private_manager_page(ctx)
 elif page_name == "Risk & Scenarios":
     render_risk_scenarios_page(ctx)
 elif page_name == "Performance":
