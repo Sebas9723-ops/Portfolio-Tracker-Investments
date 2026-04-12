@@ -310,7 +310,18 @@ def render_technicals_page(ctx):
             return
 
         with st.spinner(f"Loading {ticker}..."):
-            raw = _fetch_ohlcv(ticker, period)
+            try:
+                raw = _fetch_ohlcv(ticker, period)
+            except Exception as _e:
+                err_str = str(_e)
+                if "RateLimit" in err_str or "rate limit" in err_str.lower() or "429" in err_str:
+                    st.warning(
+                        f"yfinance rate limit hit for **{ticker}**. "
+                        "Wait 30–60 seconds and refresh the page, or switch to a different ticker."
+                    )
+                else:
+                    st.error(f"Could not fetch data for {ticker}: {_e}")
+                return
 
         if raw is None or raw.empty:
             st.error(f"No price data found for {ticker}.")

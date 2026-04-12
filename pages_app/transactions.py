@@ -88,8 +88,13 @@ def render_transactions_page(ctx):
 
     # ── DCA Tracker ───────────────────────────────────────────────────────────
     asset_hist = ctx.get("asset_hist_native", pd.DataFrame())
-    tracked = sorted(tx_df["ticker"].str.upper().unique())
-    tracked = [t for t in tracked if t in asset_hist.columns]
+    # Show ALL portfolio tickers, not only those with transactions
+    df_ctx = ctx.get("df", pd.DataFrame())
+    portfolio_tickers = sorted(df_ctx["Ticker"].str.upper().tolist()) if not df_ctx.empty and "Ticker" in df_ctx.columns else []
+    tx_tickers = sorted(tx_df["ticker"].str.upper().unique()) if not tx_df.empty else []
+    # Union: portfolio tickers + any tx tickers, filtered to those in price history
+    all_tickers = sorted(set(portfolio_tickers) | set(tx_tickers))
+    tracked = [t for t in all_tickers if t in asset_hist.columns]
 
     if not tracked:
         return
@@ -124,26 +129,26 @@ def render_transactions_page(ctx):
             if running_shares > 1e-9:
                 avg_cost_pts.append({"date": row["date"], "avg_cost": running_cost / running_shares})
 
-        if not avg_cost_pts:
-            continue
-
         price_series = pd.to_numeric(asset_hist[ticker], errors="coerce").dropna()
         price_series.index = pd.to_datetime(price_series.index)
         if price_series.empty:
             continue
 
-        first_tx_date = pd.to_datetime(avg_cost_pts[0]["date"])
-        price_series  = price_series[price_series.index >= first_tx_date]
+        if avg_cost_pts:
+            first_tx_date = pd.to_datetime(avg_cost_pts[0]["date"])
+            price_series  = price_series[price_series.index >= first_tx_date]
         if price_series.empty:
             continue
 
-        avg_s = (
-            pd.DataFrame(avg_cost_pts)
-            .set_index("date")["avg_cost"]
-            .reindex(price_series.index)
-            .ffill()
-            .bfill()
-        )
+        avg_s = pd.Series(dtype=float)
+        if avg_cost_pts:
+            avg_s = (
+                pd.DataFrame(avg_cost_pts)
+                .set_index("date")["avg_cost"]
+                .reindex(price_series.index)
+                .ffill()
+                .bfill()
+            )
 
         current_price = float(price_series.iloc[-1])
         current_avg   = float(avg_s.iloc[-1]) if not avg_s.empty else None
@@ -156,8 +161,10 @@ def render_transactions_page(ctx):
                 delta=f"{gain_pct:+.2f}% vs avg cost {current_avg:.4f}",
                 delta_color="normal" if gain_pct >= 0 else "inverse",
             )
+        else:
+            st.metric(label=ticker, value=f"{current_price:.4f}", delta="No transactions yet")
 
-        buys = ticker_tx[ticker_tx["type"].str.upper() == "BUY"]
+        buys = ticker_tx[ticker_tx["type"].str.upper() == "BUY"] if not ticker_tx.empty else pd.DataFrame()
 
         fig = go.Figure()
         fig.add_scatter(
@@ -166,12 +173,13 @@ def render_transactions_page(ctx):
             line=dict(color="#f3a712", width=2),
             hovertemplate="%{x|%Y-%m-%d}<br>Price: %{y:.4f}<extra></extra>",
         )
-        fig.add_scatter(
-            x=avg_s.index, y=avg_s.values,
-            name="Avg Cost (DCA)", mode="lines",
-            line=dict(color="#4db8ff", width=2, dash="dot"),
-            hovertemplate="%{x|%Y-%m-%d}<br>Avg Cost: %{y:.4f}<extra></extra>",
-        )
+        if not avg_s.empty:
+            fig.add_scatter(
+                x=avg_s.index, y=avg_s.values,
+                name="Avg Cost (DCA)", mode="lines",
+                line=dict(color="#4db8ff", width=2, dash="dot"),
+                hovertemplate="%{x|%Y-%m-%d}<br>Avg Cost: %{y:.4f}<extra></extra>",
+            )
         if not buys.empty:
             fig.add_scatter(
                 x=pd.to_datetime(buys["date"]), y=buys["price"],

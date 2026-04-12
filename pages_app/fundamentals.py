@@ -266,6 +266,25 @@ def render_fundamentals_page(ctx):
             val = _fetch_valuation_metrics(ticker)
             inc, bal, cf = _fetch_financials(ticker)
 
+        # Detect ETF — ETFs don't have P/E, EPS, income statements etc.
+        _is_etf = False
+        try:
+            import yfinance as yf
+            _qtype = (yf.Ticker(ticker).get_info() or {}).get("quoteType", "")
+            _is_etf = str(_qtype).upper() in ("ETF", "MUTUALFUND")
+        except Exception:
+            pass
+        if not _is_etf:
+            # Fallback: if ALL valuation metrics are None, assume ETF/no-data
+            _is_etf = all(v is None for v in val.values())
+
+        if _is_etf:
+            st.info(
+                f"**{ticker}** is an ETF / fund. Traditional valuation multiples "
+                "(P/E, EPS, income statements) are not applicable. "
+                "Price and market data are shown below where available."
+            )
+
         name = fi.get("company_name") or ticker
         price = fi.get("last_price")
         ccy = fi.get("currency") or "USD"
