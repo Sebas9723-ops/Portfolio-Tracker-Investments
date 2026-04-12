@@ -138,7 +138,7 @@ def apply_bloomberg_style():
 </script>""",
         height=0,
     )
-    st.markdown(
+    st.html(
         """
         <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;800&display=swap" rel="stylesheet">
         <style>
@@ -389,7 +389,7 @@ def apply_bloomberg_style():
         }
         </style>
         """,
-        unsafe_allow_html=True,
+
     )
 
 
