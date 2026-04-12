@@ -2,39 +2,22 @@ import streamlit as st
 
 from app_core import apply_bloomberg_style
 from app_context_runtime import build_app_context_runtime
-from pages_app.analytics import render_analytics_page
 from pages_app.dashboard import render_dashboard
-from pages_app.optimization import render_optimization_page
 from pages_app.portfolio_page import render_portfolio_page
-from pages_app.performance_calendar import render_performance_calendar_page
-from pages_app.private_manager import render_private_manager_page
-from pages_app.projections import render_projections_page
+from pages_app.optimization import render_optimization_page
 from pages_app.rebalancing import render_rebalancing_page
-from pages_app.risk import render_risk_page
-from pages_app.scenarios import render_scenarios_page
-from pages_app.trade_journal import render_trade_journal_page
-from pages_app.transactions import render_transactions_page
-from pages_app.market_overview import render_market_overview_page
-from pages_app.order_blotter import render_order_blotter_page
-from pages_app.ticker_lookup import render_ticker_lookup_page
-from pages_app.watchlist import render_watchlist_page
-from pages_app.technicals import render_technicals_page
-from pages_app.backtesting import render_backtesting_page
-from pages_app.ml_signals import render_ml_signals_page
-from pages_app.paper_trading import render_paper_trading_page
-from pages_app.whatif import render_whatif_page
-from pages_app.alerts import render_alerts_page
-from pages_app.income import render_income_page
+from pages_app.risk_scenarios import render_risk_scenarios_page
+from pages_app.performance_page import render_performance_page
 from pages_app.investment_horizon import render_investment_horizon_page
-from pages_app.xtb_import import render_xtb_import_page
-from pages_app.yield_curve import render_yield_curve_page
-from pages_app.sector_heatmap import render_sector_heatmap_page
-from pages_app.news_feed import render_news_feed_page
-from pages_app.options_chain import render_options_chain_page
-from pages_app.earnings_calendar import render_earnings_calendar_page
-from pages_app.fundamentals import render_fundamentals_page
+from pages_app.projections import render_projections_page
 from pages_app.economic_calendar import render_economic_calendar_page
-
+from pages_app.technicals import render_technicals_page
+from pages_app.fundamentals import render_fundamentals_page
+from pages_app.whatif import render_whatif_page
+from pages_app.trade_log import render_trade_log_page
+from pages_app.alerts import render_alerts_page
+from pages_app.xtb_import import render_xtb_import_page
+from pages_app.transactions import render_transactions_page
 
 from PIL import Image as _Image
 st.set_page_config(
@@ -46,7 +29,7 @@ st.set_page_config(
 apply_bloomberg_style()
 
 
-# ── Login page ─────────────────────────────────────────────────────────────────
+# ── Login ──────────────────────────────────────────────────────────────────────
 
 def _check_credentials(username: str, password: str) -> bool:
     expected_password = st.secrets["auth"].get("password", "")
@@ -98,126 +81,96 @@ if not st.session_state.get("private_authenticated"):
     _render_login_page()
     st.stop()
 
-# ── Authenticated app ──────────────────────────────────────────────────────────
+
+# ── Navigation structure ───────────────────────────────────────────────────────
+
+SECTION_PAGES = {
+    "OPERATE":  ["Dashboard", "Portfolio", "Optimization", "Rebalance Center"],
+    "ANALYZE":  ["Risk & Scenarios", "Performance", "Investment Horizon", "Projections"],
+    "RESEARCH": ["Macro Dashboard", "Technicals", "Fundamentals", "What-If Simulator"],
+    "SETTINGS": ["Trade Log", "Custom Alerts", "XTB Import", "Transactions"],
+}
+
+ALL_PAGES = [p for pages in SECTION_PAGES.values() for p in pages]
+
+# Restore previously selected page; default to Dashboard
+_saved_page = st.session_state.get("private_page_navigation", "Dashboard")
+if _saved_page not in ALL_PAGES:
+    _saved_page = "Dashboard"
+
+# Find which section the saved page belongs to
+_saved_section = next(
+    (sec for sec, pages in SECTION_PAGES.items() if _saved_page in pages),
+    "OPERATE",
+)
+
+# ── Sidebar ────────────────────────────────────────────────────────────────────
 
 st.sidebar.markdown("## Portfolio Management SA")
 st.sidebar.caption("Private management version")
 
-_NAV_PAGES = [
-    "Dashboard",
-    "Watchlist",
-    "Portfolio",
-    "Transactions",
-    "Analytics",
-    "Performance Calendar",
-    "Risk",
-    "Scenarios",
-    "Optimization",
-    "Rebalance Center",
-    "Projections",
-    "Market Overview",
-    "Ticker Lookup",
-    "Technicals",
-    "Trade Journal",
-    "Order Blotter",
-    "Private Manager",
-    "Backtesting",
-    "ML Signals",
-    "Paper Trading",
-    "What-If Simulator",
-    "Custom Alerts",
-    "Income",
-    "Investment Horizon",
-    "XTB Import",
-    "Yield Curve",
-    "Sector Heat Map",
-    "News Feed",
-    "Options Chain",
-    "Earnings Calendar",
-    "Fundamentals",
-    "Macro Dashboard",
-]
-
-if st.session_state.get("private_page_navigation") not in _NAV_PAGES:
-    st.session_state["private_page_navigation"] = "Dashboard"
-
-if st.sidebar.button("Cerrar sesión", key="logout_btn"):
+if st.sidebar.button("CERRAR SESIÓN", key="logout_btn"):
     st.session_state.clear()
     st.rerun()
 
-st.sidebar.markdown("### Navigation")
-page_name = st.sidebar.selectbox(
+st.sidebar.markdown("---")
+
+section = st.sidebar.selectbox(
+    "Section",
+    list(SECTION_PAGES.keys()),
+    index=list(SECTION_PAGES.keys()).index(_saved_section),
+    key="private_section_navigation",
+    label_visibility="collapsed",
+    format_func=lambda s: f"── {s}",
+)
+
+page_name = st.sidebar.radio(
     "Page",
-    _NAV_PAGES,
-    key="private_page_navigation",
+    SECTION_PAGES[section],
+    index=SECTION_PAGES[section].index(_saved_page) if _saved_page in SECTION_PAGES[section] else 0,
+    key=f"private_page_radio_{section}",
     label_visibility="collapsed",
 )
 
+st.session_state["private_page_navigation"] = page_name
+
 st.sidebar.markdown("---")
 
+# ── Build context ──────────────────────────────────────────────────────────────
+
 ctx = build_app_context_runtime("private")
+
+# ── Route ──────────────────────────────────────────────────────────────────────
 
 if page_name == "Dashboard":
     render_dashboard(ctx)
 elif page_name == "Portfolio":
     render_portfolio_page(ctx)
-elif page_name == "Analytics":
-    render_analytics_page(ctx)
-elif page_name == "Risk":
-    render_risk_page(ctx)
-elif page_name == "Scenarios":
-    render_scenarios_page(ctx)
-elif page_name == "Projections":
-    render_projections_page(ctx)
 elif page_name == "Optimization":
     render_optimization_page(ctx)
 elif page_name == "Rebalance Center":
     render_rebalancing_page(ctx)
-elif page_name == "Transactions":
-    render_transactions_page(ctx)
-elif page_name == "Performance Calendar":
-    render_performance_calendar_page(ctx)
-elif page_name == "Trade Journal":
-    render_trade_journal_page(ctx)
-elif page_name == "Market Overview":
-    render_market_overview_page(ctx)
-elif page_name == "Order Blotter":
-    render_order_blotter_page(ctx)
-elif page_name == "Ticker Lookup":
-    render_ticker_lookup_page(ctx)
-elif page_name == "Technicals":
-    render_technicals_page(ctx)
-elif page_name == "Watchlist":
-    render_watchlist_page(ctx)
-elif page_name == "Private Manager":
-    render_private_manager_page(ctx)
-elif page_name == "Backtesting":
-    render_backtesting_page(ctx)
-elif page_name == "ML Signals":
-    render_ml_signals_page(ctx)
-elif page_name == "Paper Trading":
-    render_paper_trading_page(ctx)
-elif page_name == "What-If Simulator":
-    render_whatif_page(ctx)
-elif page_name == "Custom Alerts":
-    render_alerts_page(ctx)
-elif page_name == "Income":
-    render_income_page(ctx)
+elif page_name == "Risk & Scenarios":
+    render_risk_scenarios_page(ctx)
+elif page_name == "Performance":
+    render_performance_page(ctx)
 elif page_name == "Investment Horizon":
     render_investment_horizon_page(ctx)
-elif page_name == "XTB Import":
-    render_xtb_import_page(ctx)
-elif page_name == "Yield Curve":
-    render_yield_curve_page(ctx)
-elif page_name == "Sector Heat Map":
-    render_sector_heatmap_page(ctx)
-elif page_name == "News Feed":
-    render_news_feed_page(ctx)
-elif page_name == "Options Chain":
-    render_options_chain_page(ctx)
-elif page_name == "Earnings Calendar":
-    render_earnings_calendar_page(ctx)
-elif page_name == "Fundamentals":
-    render_fundamentals_page(ctx)
+elif page_name == "Projections":
+    render_projections_page(ctx)
 elif page_name == "Macro Dashboard":
     render_economic_calendar_page(ctx)
+elif page_name == "Technicals":
+    render_technicals_page(ctx)
+elif page_name == "Fundamentals":
+    render_fundamentals_page(ctx)
+elif page_name == "What-If Simulator":
+    render_whatif_page(ctx)
+elif page_name == "Trade Log":
+    render_trade_log_page(ctx)
+elif page_name == "Custom Alerts":
+    render_alerts_page(ctx)
+elif page_name == "XTB Import":
+    render_xtb_import_page(ctx)
+elif page_name == "Transactions":
+    render_transactions_page(ctx)

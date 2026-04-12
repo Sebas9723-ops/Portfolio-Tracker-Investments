@@ -216,7 +216,9 @@ def render_economic_calendar_page(ctx):
     def _live():
         st.caption(f"Last refreshed: {datetime.datetime.now().strftime('%H:%M:%S')}")
 
-        tab_macro, tab_cal = st.tabs(["Macro Indicators", "Economic Calendar"])
+        tab_macro, tab_cal, tab_yield, tab_sectors = st.tabs(
+            ["Macro Indicators", "Economic Calendar", "Yield Curve", "Sector Heat Map"]
+        )
 
         # ── Tab: Macro Dashboard ─────────────────────────────────────────────────
         with tab_macro:
@@ -356,5 +358,13 @@ def render_economic_calendar_page(ctx):
                 ]
                 if table_events:
                     st.dataframe(pd.DataFrame(table_events), use_container_width=True, hide_index=True)
+
+        with tab_yield:
+            from pages_app.yield_curve import render_yield_curve_page
+            render_yield_curve_page(ctx)
+
+        with tab_sectors:
+            from pages_app.sector_heatmap import render_sector_heatmap_page
+            render_sector_heatmap_page(ctx)
 
     _live()

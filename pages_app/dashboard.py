@@ -9,7 +9,6 @@ from app_core import (
     fetch_day_change_for_tickers,
     info_metric,
     info_section,
-    render_market_clocks,
     render_page_title,
     render_private_dashboard_logo,
     render_status_bar,
@@ -538,8 +537,6 @@ def render_dashboard(ctx):
         if snapshot_banner:
             st.success(snapshot_banner)
 
-        render_market_clocks()
-
         # Re-fetch live prices so metrics stay in sync with Portfolio page
         tickers = list(ctx["updated_portfolio"].keys())
         if ctx["app_scope"] == "private":
@@ -589,6 +586,9 @@ def render_dashboard(ctx):
         summary_df = _build_decision_summary(ctx)
         actions_df, source_label = _build_top_actions_table(ctx)
         alerts_df = _build_alerts_table(ctx)
+        # Critical alerts live in Custom Alerts — show only Warning and Info here
+        if not alerts_df.empty and "Level" in alerts_df.columns:
+            alerts_df = alerts_df[alerts_df["Level"] != "Critical"].reset_index(drop=True)
         quality_df = _build_data_quality_table(ctx)
 
         info_section(
