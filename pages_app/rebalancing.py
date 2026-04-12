@@ -2,8 +2,10 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from streamlit_echarts import st_echarts
 
 from app_core import DEFAULT_RISK_FREE_RATE, info_metric, info_section, render_page_title
+from utils_aggrid import show_aggrid
 
 
 def _annualized_voo_return(ctx):
@@ -367,20 +369,70 @@ def render_rebalancing_page(ctx):
         "Current vs Max Sharpe",
         f"Current allocation compared against recommendation source: {source_label}.",
     )
-    st.plotly_chart(
-        _build_compare_chart(ctx["df"], policy_map, max_sharpe_map),
-        use_container_width=True,
-        key="rebalancing_compare_chart_fixed_v2",
-    )
+    _rebal_df = ctx["df"].copy()
+    _tickers = []
+    _divergences = []
+    _colors = []
+    for _, _row in _rebal_df.iterrows():
+        _t = str(_row["Ticker"])
+        _current = float(_row["Weight %"])
+        _target = float(max_sharpe_map.get(_t, 0.0)) * 100.0
+        _drift = _target - _current
+        _tickers.append(_t)
+        _divergences.append(round(_drift, 4))
+        _colors.append("#00ff88" if _drift > 0 else "#f5a623")
+
+    rebal_option = {
+        "backgroundColor": "#0a0a0a",
+        "tooltip": {
+            "trigger": "axis",
+            "axisPointer": {"type": "shadow"},
+            "backgroundColor": "#1a1a2e",
+            "borderColor": "#2a313c",
+            "textStyle": {"color": "#e6e6e6", "fontFamily": "IBM Plex Mono"},
+            "formatter": "function(params) { var p = params[0]; var sign = p.value >= 0 ? 'UNDERWEIGHT — Buy' : 'OVERWEIGHT'; return p.name + '<br/>' + p.marker + ' Drift: <b>' + p.value.toFixed(2) + '%</b><br/>' + sign; }"
+        },
+        "grid": {"left": "15%", "right": "8%", "top": "6%", "bottom": "8%", "containLabel": False},
+        "xAxis": {
+            "type": "value",
+            "axisLabel": {"color": "#666", "fontFamily": "IBM Plex Mono", "fontSize": 10,
+                          "formatter": "function(v){ return v.toFixed(1)+'%'; }"},
+            "splitLine": {"lineStyle": {"color": "#1a1a2e"}},
+            "axisLine": {"lineStyle": {"color": "#2a313c"}}
+        },
+        "yAxis": {
+            "type": "category", "data": _tickers,
+            "axisLabel": {"color": "#bbb", "fontFamily": "IBM Plex Mono", "fontSize": 11},
+            "axisLine": {"lineStyle": {"color": "#2a313c"}}
+        },
+        "series": [{
+            "type": "bar",
+            "data": [{"value": d, "itemStyle": {"color": c}} for d, c in zip(_divergences, _colors)],
+            "barMaxWidth": 30,
+            "label": {
+                "show": True,
+                "position": "right",
+                "formatter": "function(p){ return p.value.toFixed(2)+'%'; }",
+                "color": "#888", "fontSize": 10, "fontFamily": "IBM Plex Mono"
+            }
+        }],
+        "graphic": [
+            {"type": "text", "left": "16%", "top": "2%",
+             "style": {"text": "◀ OVERWEIGHT", "fill": "#f5a623", "fontSize": 10, "fontFamily": "IBM Plex Mono"}},
+            {"type": "text", "right": "2%", "top": "2%",
+             "style": {"text": "UNDERWEIGHT ▶", "fill": "#00ff88", "fontSize": 10, "fontFamily": "IBM Plex Mono"}}
+        ]
+    }
+    st_echarts(options=rebal_option, height="400px", key="rebalancing_compare_echarts")
 
     info_section(
         "Deviation Monitor",
         "Current weight, policy target, max Sharpe target, and estimated value required to move each position toward max Sharpe.",
     )
-    st.dataframe(
+    show_aggrid(
         _build_monitor_table(ctx["df"], policy_map, max_sharpe_map, ctx["base_currency"]),
-        use_container_width=True,
         height=340,
+        key="aggrid_rebalancing_monitor",
     )
 
     # ── Contribution Engine ────────────────────────────────────────────────────
@@ -457,7 +509,7 @@ def render_rebalancing_page(ctx):
                     "Remaining cash after allocation (all targets already met or rounding).",
                 )
 
-                st.dataframe(plan_df, use_container_width=True, height=280)
+                show_aggrid(plan_df, height=280, key="aggrid_rebalancing_plan")
 
                 fig_contrib = go.Figure()
                 fig_contrib.add_bar(
@@ -535,14 +587,14 @@ def render_rebalancing_page(ctx):
         elif required_contribution > 0:
             st.caption("💡 Set a monthly contribution in **Investment Horizon → Financial Independence** and save as defaults to see how many months until you reach Max Sharpe.")
 
-        st.dataframe(required_df, use_container_width=True, height=300)
+        show_aggrid(required_df, height=300, key="aggrid_rebalancing_required")
 
     info_section(
         "Live Validation Warning",
         "Final validation layer for prices, benchmark, frontier availability, and target consistency.",
     )
-    st.dataframe(
+    show_aggrid(
         _build_live_validation_table(ctx, policy_map, max_sharpe_map),
-        use_container_width=True,
         height=220,
+        key="aggrid_rebalancing_validation",
     )

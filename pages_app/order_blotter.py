@@ -4,6 +4,8 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
+from utils_aggrid import show_aggrid
+
 from app_core import (
     append_order_to_blotter,
     get_manage_password,
@@ -111,7 +113,7 @@ def _render_history(df: pd.DataFrame):
                         "status", "filled_price", "filled_qty", "notes"]].copy()
     if "date" in display.columns:
         display["date"] = pd.to_datetime(display["date"], errors="coerce").dt.strftime("%Y-%m-%d")
-    st.dataframe(display, use_container_width=True, hide_index=True)
+    show_aggrid(display, height=400, key="aggrid_order_blotter_history")
 
 
 def _render_new_order():

@@ -2,6 +2,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from app_core import info_metric, info_section, render_page_title, run_historical_scenarios
+from utils_aggrid import show_aggrid
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -106,4 +107,4 @@ def render_scenarios_page(ctx):
     display["Current Value"] = display["Current Value"].map(lambda v: f"{ccy} {v:,.2f}")
     display["Shocked Value"] = display["Shocked Value"].map(lambda v: f"{ccy} {v:,.2f}")
     display["Scenario Return %"] = display["Scenario Return %"].map(lambda v: f"{v:.2f}%")
-    st.dataframe(display, use_container_width=True, hide_index=True)
+    show_aggrid(display, height=400, key="aggrid_scenarios_detail")

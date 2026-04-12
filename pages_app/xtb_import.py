@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from app_core import append_transaction_to_sheets, info_section, render_page_title
+from utils_aggrid import show_aggrid
 
 # ── Column auto-detection ────────────────────────────────────────────────────
 _COLUMN_CANDIDATES: dict[str, list[str]] = {
@@ -176,7 +177,7 @@ def render_xtb_import_page(ctx):
     c3.metric("Tickers", parsed_df["ticker"].nunique())
     st.caption(f"Tickers: {tickers}")
 
-    st.dataframe(parsed_df, use_container_width=True, height=350)
+    show_aggrid(parsed_df, height=350, key="aggrid_xtb_parsed")
 
     # ── Import ────────────────────────────────────────────────────────────────
     st.divider()

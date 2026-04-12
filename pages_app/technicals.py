@@ -4,6 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
+from streamlit_lightweight_charts import renderLightweightCharts
 
 from app_core import info_section, render_page_title
 
@@ -199,6 +200,64 @@ def _build_chart(df: pd.DataFrame, ticker: str) -> go.Figure:
     return fig
 
 
+def _build_rsi_macd_chart(df: pd.DataFrame, ticker: str) -> go.Figure:
+    """RSI and MACD sub-panels as a separate Plotly figure."""
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.06,
+        row_heights=[0.50, 0.50],
+        subplot_titles=["RSI (14)", "MACD (12/26/9)"],
+    )
+
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df["RSI"],
+        line=dict(color="#f3a712", width=1.5),
+        name="RSI",
+        hovertemplate="%{y:.1f}<extra>RSI</extra>",
+    ), row=1, col=1)
+    fig.add_hline(y=70, line_dash="dot", line_color="#f44336", line_width=1, row=1, col=1)
+    fig.add_hline(y=30, line_dash="dot", line_color="#00e676", line_width=1, row=1, col=1)
+    fig.add_hrect(y0=70, y1=100, fillcolor="rgba(244,67,54,0.05)", line_width=0, row=1, col=1)
+    fig.add_hrect(y0=0,  y1=30,  fillcolor="rgba(0,230,118,0.05)", line_width=0, row=1, col=1)
+
+    hist_colors = ["#00e676" if v >= 0 else "#f44336" for v in df["MACD_Hist"].fillna(0)]
+    fig.add_trace(go.Bar(
+        x=df.index, y=df["MACD_Hist"],
+        marker_color=hist_colors,
+        name="Histogram",
+        hovertemplate="%{y:.4f}<extra>Hist</extra>",
+    ), row=2, col=1)
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df["MACD"],
+        line=dict(color="#00c8ff", width=1.5),
+        name="MACD",
+        hovertemplate="%{y:.4f}<extra>MACD</extra>",
+    ), row=2, col=1)
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df["MACD_Signal"],
+        line=dict(color="#f3a712", width=1.5),
+        name="Signal",
+        hovertemplate="%{y:.4f}<extra>Signal</extra>",
+    ), row=2, col=1)
+
+    fig.update_layout(
+        paper_bgcolor="#0b0f14",
+        plot_bgcolor="#0b0f14",
+        font=dict(color="#e6e6e6", size=12),
+        height=360,
+        margin=dict(t=40, b=20, l=60, r=20),
+        legend=dict(orientation="h", y=1.06, x=0.0, font=dict(size=11)),
+        hovermode="x unified",
+        bargap=0,
+    )
+    for i in range(1, 3):
+        fig.update_xaxes(gridcolor="#1a1f2e", row=i, col=1)
+        fig.update_yaxes(gridcolor="#1a1f2e", row=i, col=1)
+    fig.update_yaxes(range=[0, 100], row=1, col=1)
+    return fig
+
+
 def _signal_badge(label: str, val, is_bullish) -> str:
     if is_bullish is None:
         bg, fg, text = "#1a1f2e", "#888", "NEUTRAL"
@@ -295,7 +354,59 @@ def render_technicals_page(ctx):
             "Chart",
             f"{ticker} · {period} · Candlestick · SMA 20/50/200 · Bollinger Bands · Volume · RSI · MACD",
         )
-        st.plotly_chart(_build_chart(df, ticker), use_container_width=True, key=f"ta_{ticker}_{period}")
+
+        # ── Candlestick + Volume via lightweight-charts ─────────────────────────
+        if _has_ohlc(df) and "Volume" in df.columns:
+            candle_data = []
+            volume_data = []
+            for ts, row in df.iterrows():
+                t_unix = int(pd.Timestamp(ts).timestamp())
+                candle_data.append({
+                    "time": t_unix,
+                    "open": round(float(row["Open"]), 4),
+                    "high": round(float(row["High"]), 4),
+                    "low": round(float(row["Low"]), 4),
+                    "close": round(float(row["Close"]), 4),
+                })
+                vol_color = "rgba(0,255,136,0.5)" if float(row["Close"]) >= float(row["Open"]) else "rgba(255,68,68,0.5)"
+                volume_data.append({
+                    "time": t_unix,
+                    "value": round(float(row["Volume"]), 0),
+                    "color": vol_color,
+                })
+
+            chart_options = {
+                "layout": {"background": {"type": "solid", "color": "#0a0a0a"}, "textColor": "#888"},
+                "grid": {"vertLines": {"color": "#1a1a2e"}, "horzLines": {"color": "#1a1a2e"}},
+                "crosshair": {"mode": 1},
+                "rightPriceScale": {"borderColor": "#2a313c"},
+                "timeScale": {"borderColor": "#2a313c", "timeVisible": True},
+            }
+
+            lwc_series = [
+                {
+                    "type": "Candlestick",
+                    "data": candle_data,
+                    "options": {
+                        "upColor": "#00ff88", "downColor": "#ff4444",
+                        "borderUpColor": "#00ff88", "borderDownColor": "#ff4444",
+                        "wickUpColor": "#00ff88", "wickDownColor": "#ff4444",
+                    }
+                },
+                {
+                    "type": "Histogram",
+                    "data": volume_data,
+                    "options": {"color": "#4a9eff", "priceFormat": {"type": "volume"}, "priceScaleId": "volume"},
+                    "priceScale": {"scaleMargins": {"top": 0.8, "bottom": 0}, "drawTicks": False}
+                }
+            ]
+            renderLightweightCharts([{"chart": chart_options, "series": lwc_series}], key=f"lwc_{ticker}_{period}")
+        else:
+            # Fallback to Plotly for line-only mode (no OHLC)
+            st.plotly_chart(_build_chart(df, ticker), use_container_width=True, key=f"ta_plotly_{ticker}_{period}")
+
+        # ── RSI + MACD as separate Plotly chart ─────────────────────────────────
+        st.plotly_chart(_build_rsi_macd_chart(df, ticker), use_container_width=True, key=f"ta_rsi_macd_{ticker}_{period}")
 
         info_section("Key Levels", "Price vs moving averages and Bollinger Bands.")
         cols = st.columns(6)

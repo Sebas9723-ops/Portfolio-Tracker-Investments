@@ -6,6 +6,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from utils_aggrid import show_aggrid
+
 from app_core import (
     build_blended_benchmark_returns,
     build_multi_benchmark_comparison,
@@ -299,7 +301,7 @@ def _render_brinson(brinson_df):
         "Allocation = effect of over/underweighting. Selection = effect of asset return vs benchmark. "
         "Interaction = combined weight × return divergence.",
     )
-    st.dataframe(brinson_df, use_container_width=True, height=300)
+    show_aggrid(brinson_df, height=300, key="aggrid_analytics_brinson")
 
     fig = go.Figure()
     fig.add_bar(x=brinson_df["Ticker"], y=brinson_df["Allocation Effect"], name="Allocation")
@@ -554,7 +556,7 @@ def _render_multi_benchmark(mb):
     if fig is not None:
         st.plotly_chart(fig, use_container_width=True, key="analytics_multi_benchmark_chart")
     if summary_df is not None and not summary_df.empty:
-        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+        show_aggrid(summary_df, height=400, key="aggrid_analytics_multi_benchmark")
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -594,8 +596,8 @@ def _render_return_attribution(ctx):
     attr_df["ETF Return"] = attr_df["ETF Return"].map(lambda x: f"{x:.2%}")
     attr_df["Avg Weight"] = attr_df["Avg Weight"].map(lambda x: f"{x:.1%}")
     attr_df["Contribution"] = attr_df["Contribution"].map(lambda x: f"{x:+.2%}")
-    st.dataframe(attr_df[["Ticker", "Name", "Avg Weight", "ETF Return", "Contribution"]],
-                 use_container_width=True, hide_index=True)
+    show_aggrid(attr_df[["Ticker", "Name", "Avg Weight", "ETF Return", "Contribution"]],
+               height=400, key="aggrid_analytics_attribution")
 
     raw_attr = compute_return_attribution(
         ctx.get("asset_returns"), ctx.get("historical_base"), ctx.get("df", pd.DataFrame()), period

@@ -144,10 +144,12 @@ ctx = build_app_context_runtime("private")
 # ── Sidebar mini KPI (always visible) ─────────────────────────────────────────
 import datetime as _dt
 _total_val = float(ctx.get("total_portfolio_value", 0.0))
-_ret = float(ctx.get("total_return", 0.0))
+_invested = float(ctx.get("invested_capital", 0.0))
+_unrealized = float(ctx.get("unrealized_pnl", 0.0))
+_simple_ret = (_unrealized / _invested) if _invested > 0 else 0.0
 _ccy = ctx.get("base_currency", "USD")
-_ret_color = "#00ff88" if _ret >= 0 else "#ff4444"
-_ret_arrow = "▲" if _ret >= 0 else "▼"
+_ret_color = "#00ff88" if _simple_ret >= 0 else "#ff4444"
+_ret_arrow = "▲" if _simple_ret >= 0 else "▼"
 _mkt_open = False
 try:
     import pytz as _pytz
@@ -173,7 +175,7 @@ st.sidebar.markdown(
         {_ccy} {_total_val:,.0f}
       </div>
       <div style='font-size:0.78rem;font-weight:700;color:{_ret_color};margin-top:2px'>
-        {_ret_arrow} {abs(_ret):.2%} total return
+        {_ret_arrow} {abs(_simple_ret):.2%} simple return
       </div>
     </div>
     """,

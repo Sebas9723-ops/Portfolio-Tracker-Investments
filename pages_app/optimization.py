@@ -6,6 +6,8 @@ import streamlit as st
 
 import json
 
+from utils_aggrid import show_aggrid
+
 from app_core import (
     build_recommended_shares_table,
     compute_black_litterman,
@@ -92,7 +94,7 @@ def _render_risk_parity(ctx, rp):
         }
         for t in tickers
     ]
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    show_aggrid(pd.DataFrame(rows), height=400, key="aggrid_optimization_rp_summary")
     st.caption(
         f"ERC Portfolio Volatility: **{port_vol:.2%}** annualized. "
         "Each asset contributes ~equal risk share."
@@ -103,7 +105,7 @@ def _render_risk_parity(ctx, rp):
     erc_rec = build_recommended_shares_table(erc_weights_arr, tickers, df_ctx)
     if erc_rec is not None and not erc_rec.empty:
         with st.expander("ERC Recommended Shares", expanded=False):
-            st.dataframe(erc_rec, use_container_width=True, hide_index=True)
+            show_aggrid(erc_rec, height=400, key="aggrid_optimization_erc_rec")
 
 
 def _render_black_litterman(ctx, usable):
@@ -154,7 +156,7 @@ def _render_black_litterman(ctx, usable):
 
         if st.session_state["bl_views"]:
             views_df = pd.DataFrame(st.session_state["bl_views"])
-            st.dataframe(views_df, use_container_width=True, hide_index=True)
+            show_aggrid(views_df, height=200, key="aggrid_optimization_bl_views")
             if st.button("Clear All Views", key="bl_clear_views"):
                 st.session_state["bl_views"] = []
                 st.rerun()
@@ -208,7 +210,7 @@ def _render_black_litterman(ctx, usable):
         }
         for t in usable
     ]
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    show_aggrid(pd.DataFrame(rows), height=400, key="aggrid_optimization_bl_summary")
 
     if st.session_state.get("bl_views"):
         st.caption(
@@ -434,17 +436,17 @@ def render_optimization_page(ctx):
 
     with left:
         info_section("Max Sharpe Weights", "Recommended weights from the maximum Sharpe portfolio.")
-        st.dataframe(ms_table, use_container_width=True, height=260)
+        show_aggrid(ms_table, height=260, key="aggrid_optimization_ms_weights")
 
         info_section("Max Sharpe Shares", "Recommended shares to move the current portfolio toward the maximum Sharpe allocation.")
-        st.dataframe(ms_rec, use_container_width=True, height=300)
+        show_aggrid(ms_rec, height=300, key="aggrid_optimization_ms_shares")
 
     with right:
         info_section("Min Volatility Weights", "Recommended weights from the minimum volatility portfolio.")
-        st.dataframe(mv_table, use_container_width=True, height=260)
+        show_aggrid(mv_table, height=260, key="aggrid_optimization_mv_weights")
 
         info_section("Min Volatility Shares", "Recommended shares to move the current portfolio toward the minimum volatility allocation.")
-        st.dataframe(mv_rec, use_container_width=True, height=300)
+        show_aggrid(mv_rec, height=300, key="aggrid_optimization_mv_shares")
 
     rp = _cached_risk_parity(asset_returns)
     _render_risk_parity(ctx, rp)

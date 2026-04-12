@@ -11,6 +11,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from app_core import info_section, render_page_title
+from utils_aggrid import show_aggrid
 
 _BLOOMBERG_BG = "#0b0f14"
 _GOLD = "#f3a712"
@@ -357,7 +358,7 @@ def render_economic_calendar_page(ctx):
                     if today <= datetime.date.fromisoformat(ev["date"]) <= cutoff
                 ]
                 if table_events:
-                    st.dataframe(pd.DataFrame(table_events), use_container_width=True, hide_index=True)
+                    show_aggrid(pd.DataFrame(table_events), height=400, key="aggrid_econ_cal_events")
 
         with tab_yield:
             from pages_app.yield_curve import render_yield_curve_page

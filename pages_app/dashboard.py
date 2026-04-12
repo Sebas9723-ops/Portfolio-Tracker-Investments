@@ -3,6 +3,9 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from streamlit_echarts import st_echarts
+
+from utils_aggrid import show_aggrid
 
 from app_core import (
     build_portfolio_df,
@@ -625,7 +628,7 @@ def render_dashboard(ctx):
             "Decision Summary",
             "Clean executive summary of what matters most right now.",
         )
-        st.dataframe(summary_df, use_container_width=True, height=240)
+        show_aggrid(summary_df, height=240, key="aggrid_dashboard_summary")
 
         left, right = st.columns(2)
 
@@ -637,7 +640,7 @@ def render_dashboard(ctx):
             if actions_df.empty:
                 st.success("No material drifts detected versus the current recommendation.")
             else:
-                st.dataframe(actions_df, use_container_width=True, height=260)
+                show_aggrid(actions_df, height=260, key="aggrid_dashboard_actions")
 
         with right:
             info_section(
@@ -647,11 +650,11 @@ def render_dashboard(ctx):
             if alerts_df.empty:
                 st.success("No active alerts.")
             else:
-                st.dataframe(alerts_df, use_container_width=True, height=260)
+                show_aggrid(alerts_df, height=260, key="aggrid_dashboard_alerts")
 
         with st.expander("Data Quality Checks", expanded=False):
             st.caption("Validation checks for prices, shares, benchmark, and cash balances.")
-            st.dataframe(quality_df, use_container_width=True, height=240)
+            show_aggrid(quality_df, height=240, key="aggrid_dashboard_quality")
 
         if ctx["mode"] == "Private" and ctx["authenticated"]:
             with st.expander("Recent Audit Trail", expanded=False):
@@ -660,19 +663,91 @@ def render_dashboard(ctx):
                 if audit_df.empty:
                     st.info("No Private Manager audit entries found.")
                 else:
-                    st.dataframe(audit_df, use_container_width=True, height=260)
+                    show_aggrid(audit_df, height=260, key="aggrid_dashboard_audit")
 
-        perf_fig = _build_performance_vs_benchmark_pct_chart(ctx)
-        if perf_fig is not None:
+        portfolio_returns = ctx.get("portfolio_returns")
+        benchmark_returns = ctx.get("benchmark_returns")
+        if portfolio_returns is not None and not portfolio_returns.empty:
             info_section(
                 "Performance vs Benchmark",
                 "Portfolio cumulative return versus VOO, displayed in percentage terms.",
             )
-            st.plotly_chart(
-                perf_fig,
-                use_container_width=True,
-                key="dashboard_performance_pct_chart_phase5a",
-            )
+            portfolio_ret = (1 + portfolio_returns).cumprod() - 1
+            bench_ret = None
+            if benchmark_returns is not None and not benchmark_returns.empty:
+                aligned = pd.concat(
+                    [portfolio_returns.rename("Portfolio"), benchmark_returns.rename("VOO")],
+                    axis=1,
+                ).dropna()
+                if not aligned.empty:
+                    bench_ret = (1 + aligned["VOO"]).cumprod() - 1
+                    portfolio_ret = (1 + aligned["Portfolio"]).cumprod() - 1
+
+            dates = [str(d)[:10] for d in portfolio_ret.index.tolist()]
+            port_vals = [round(float(v), 4) for v in portfolio_ret.tolist()]
+            bench_vals = [round(float(v), 4) for v in bench_ret.tolist()] if bench_ret is not None else []
+
+            perf_option = {
+                "backgroundColor": "#0a0a0a",
+                "tooltip": {
+                    "trigger": "axis",
+                    "axisPointer": {"type": "cross", "crossStyle": {"color": "#555"}},
+                    "backgroundColor": "#1a1a2e",
+                    "borderColor": "#2a313c",
+                    "textStyle": {"color": "#e6e6e6", "fontFamily": "IBM Plex Mono"},
+                    "formatter": "function(params) { var s = params[0].axisValueLabel + '<br/>'; params.forEach(function(p){ var sign = p.value >= 0 ? '+' : ''; s += p.marker + ' ' + p.seriesName + ': <b>' + sign + (p.value*100).toFixed(2) + '%</b><br/>'; }); return s; }"
+                },
+                "legend": {
+                    "data": ["Portfolio", "VOO Benchmark"],
+                    "textStyle": {"color": "#888", "fontFamily": "IBM Plex Mono"},
+                    "top": 4
+                },
+                "grid": {"left": "3%", "right": "3%", "bottom": "8%", "top": "12%", "containLabel": True},
+                "dataZoom": [
+                    {"type": "inside", "start": 0, "end": 100},
+                    {"type": "slider", "start": 0, "end": 100, "height": 18, "bottom": 0,
+                     "borderColor": "#2a313c", "fillerColor": "rgba(245,166,35,0.1)",
+                     "handleStyle": {"color": "#f5a623"}}
+                ],
+                "xAxis": {
+                    "type": "category", "data": dates, "boundaryGap": False,
+                    "axisLine": {"lineStyle": {"color": "#2a313c"}},
+                    "axisLabel": {"color": "#666", "fontFamily": "IBM Plex Mono", "fontSize": 10},
+                    "splitLine": {"show": False}
+                },
+                "yAxis": {
+                    "type": "value",
+                    "axisLabel": {"color": "#666", "fontFamily": "IBM Plex Mono", "fontSize": 10,
+                                  "formatter": "function(v){ return (v*100).toFixed(1)+'%'; }"},
+                    "splitLine": {"lineStyle": {"color": "#1a1a2e"}},
+                    "axisLine": {"show": False}
+                },
+                "series": [
+                    {
+                        "name": "Portfolio",
+                        "type": "line", "data": port_vals, "smooth": True,
+                        "symbol": "none", "lineStyle": {"color": "#f5a623", "width": 2},
+                        "itemStyle": {"color": "#f5a623"},
+                        "areaStyle": {
+                            "color": {
+                                "type": "linear", "x": 0, "y": 0, "x2": 0, "y2": 1,
+                                "colorStops": [
+                                    {"offset": 0, "color": "rgba(245,166,35,0.25)"},
+                                    {"offset": 1, "color": "rgba(245,166,35,0.01)"}
+                                ]
+                            }
+                        }
+                    },
+                    {
+                        "name": "VOO Benchmark",
+                        "type": "line", "data": bench_vals, "smooth": True,
+                        "symbol": "none",
+                        "lineStyle": {"color": "#4a9eff", "width": 1.5, "type": "dashed"},
+                        "itemStyle": {"color": "#4a9eff"}
+                    }
+                ]
+            }
+            st_echarts(options=perf_option, height="340px", key="dashboard_perf_echarts")
 
         if ctx["mode"] == "Private" and ctx["authenticated"]:
             try:
@@ -725,11 +800,11 @@ def render_dashboard(ctx):
                 if report_df.empty:
                     st.info("No snapshot report available yet.")
                 else:
-                    st.dataframe(report_df, use_container_width=True, height=380)
+                    show_aggrid(report_df, height=380, key="aggrid_dashboard_report")
 
             with tab_monthly:
                 if monthly_df.empty:
                     st.info("No monthly summary available yet.")
                 else:
-                    st.dataframe(monthly_df, use_container_width=True, height=320)
+                    show_aggrid(monthly_df, height=320, key="aggrid_dashboard_monthly")
     _live()

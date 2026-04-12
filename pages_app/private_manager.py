@@ -3,6 +3,8 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
+from utils_aggrid import show_aggrid
+
 from app_core import (
     NON_PORTFOLIO_CASH_HEADERS,
     SUPPORTED_BASE_CCY,
@@ -137,7 +139,7 @@ def render_private_manager_page(ctx):
     snapshot_df = ctx["df"][
         ["Ticker", "Name", "Shares", "Native Price", "Price", "Value", "Weight %"]
     ].copy()
-    st.dataframe(snapshot_df, use_container_width=True, height=260)
+    show_aggrid(snapshot_df, height=260, key="aggrid_pm_snapshot")
 
     with st.form("private_manager_form"):
         edited_positions = {}
@@ -214,7 +216,7 @@ def render_private_manager_page(ctx):
         )
 
         if preview_rows:
-            st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, height=240)
+            show_aggrid(pd.DataFrame(preview_rows), height=240, key="aggrid_pm_preview")
         else:
             st.info("No share changes detected.")
 
@@ -293,7 +295,7 @@ def render_private_manager_page(ctx):
     if audit_df.empty:
         st.info("No Private Manager audit entries found.")
     else:
-        st.dataframe(audit_df, use_container_width=True, height=320)
+        show_aggrid(audit_df, height=320, key="aggrid_pm_audit")
 
     info_section(
         "Cash Balances",
@@ -303,12 +305,12 @@ def render_private_manager_page(ctx):
     cash_df = ctx.get("cash_balances_df", pd.DataFrame()).copy()
     cash_display_df = ctx.get("cash_display_df", pd.DataFrame()).copy()
     if not cash_display_df.empty:
-        st.dataframe(cash_display_df, use_container_width=True, height=220)
+        show_aggrid(cash_display_df, height=220, key="aggrid_pm_cash_display")
     elif not cash_df.empty:
         display_cash = cash_df[["currency", "amount"]].rename(
             columns={"currency": "Currency", "amount": "Amount"}
         )
-        st.dataframe(display_cash, use_container_width=True, height=220)
+        show_aggrid(display_cash, height=220, key="aggrid_pm_cash_raw")
     else:
         st.info("No cash balances on record.")
 
@@ -374,7 +376,7 @@ def render_private_manager_page(ctx):
             columns={"label": "Label", "currency": "Currency", "amount": "Amount",
                      "institution": "Institution", "notes": "Notes"}
         )
-        st.dataframe(display_npc, use_container_width=True, height=200)
+        show_aggrid(display_npc, height=200, key="aggrid_pm_npc")
     else:
         st.info("No non-portfolio cash entries recorded yet.")
 

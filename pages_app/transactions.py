@@ -7,6 +7,7 @@ from app_core import (
     info_section,
     render_page_title,
 )
+from utils_aggrid import show_aggrid
 
 
 def _render_control_buttons(ctx):
@@ -79,10 +80,10 @@ def render_transactions_page(ctx):
     display["Date"] = pd.to_datetime(display["Date"], errors="coerce").dt.date
     display = display.sort_values("Date", ascending=False).reset_index(drop=True)
 
-    st.dataframe(
+    show_aggrid(
         display[["Date", "Ticker", "Type", "Shares", "Price", "Gross Value", "Fees", "Notes"]],
-        use_container_width=True,
         height=440,
+        key="aggrid_transactions_ledger",
     )
 
     # ── DCA Tracker ───────────────────────────────────────────────────────────

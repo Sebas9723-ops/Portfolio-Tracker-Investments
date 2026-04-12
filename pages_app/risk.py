@@ -4,6 +4,8 @@ import plotly.graph_objects as go
 import pandas as pd
 import streamlit as st
 
+from utils_aggrid import show_aggrid
+
 from app_core import (
     build_correlation_heatmap,
     build_fx_exposure_summary,
@@ -107,7 +109,7 @@ def _render_risk_budget_data(risk_budget_df):
         return
     info_section("Risk Budgeting — Component VaR",
                  "How much each asset contributes to total portfolio VaR.")
-    st.dataframe(risk_budget_df, use_container_width=True, hide_index=True)
+    show_aggrid(risk_budget_df, height=400, key="aggrid_risk_budget")
     fig = go.Figure()
     fig.add_bar(x=risk_budget_df["Ticker"], y=risk_budget_df["Risk Contribution %"],
                 marker_color="#f3a712",
@@ -124,7 +126,7 @@ def _render_fixed_income_data(fi_df):
         return
     info_section("Fixed Income Analytics",
                  "Duration and rate sensitivity for bond ETFs. DV01 = value change per 1bp.")
-    st.dataframe(fi_df, use_container_width=True, hide_index=True)
+    show_aggrid(fi_df, height=400, key="aggrid_risk_fixed_income")
 
 
 def _render_compliance_data(rules):
@@ -195,7 +197,7 @@ def _render_fx_exposure_data(fx_df, base_ccy="USD"):
         display["1% FX Move Impact"] = display["1% FX Move Impact"].map(
             lambda v: f"{v:,.2f} {base_ccy}" if v != 0 else f"Base ({base_ccy})"
         )
-        st.dataframe(display, use_container_width=True, hide_index=True)
+        show_aggrid(display, height=400, key="aggrid_risk_fx_exposure")
 
 
 def _render_alert_summary(ctx):
@@ -300,7 +302,7 @@ def render_risk_page(ctx):
 
         info_section("Stress Test", "Per-position stressed values under configured shocks.")
         st.plotly_chart(fig_stress, use_container_width=True, key="risk_stress_chart")
-        st.dataframe(stress_df, use_container_width=True, height=300)
+        show_aggrid(stress_df, height=300, key="aggrid_risk_stress")
 
         if not rolling_df.empty and "Rolling Drawdown" in rolling_df.columns:
             info_section("Rolling Drawdown", "Rolling drawdown over time.")

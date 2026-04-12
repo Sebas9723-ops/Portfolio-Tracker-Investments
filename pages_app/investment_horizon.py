@@ -5,6 +5,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from utils_aggrid import show_aggrid
+
 from app_core import (
     compute_milestone_eta,
     info_section,
@@ -145,10 +147,10 @@ def render_investment_horizon_page(ctx):
                 final_value = float(final["PortfolioValue"].iloc[0]) if not final.empty else 0.0
                 st.caption(f"Projected portfolio value after {horizon_yrs} years: **{ccy} {final_value:,.0f}**")
                 final["Weight"] = final["Weight"].map(lambda x: f"{x:.1%}")
-                st.dataframe(
+                show_aggrid(
                     final[["Ticker", "Weight"]].reset_index(drop=True),
-                    use_container_width=True,
-                    hide_index=True,
+                    height=400,
+                    key="aggrid_horizon_dilution_final",
                 )
 
     # ── Tab 4: Contribution Settings ──────────────────────────────────────────

@@ -6,6 +6,7 @@ import pytz
 import streamlit as st
 
 from app_core import build_portfolio_df, get_fx_rate_current, info_metric, info_section, render_page_title
+from utils_aggrid import show_aggrid
 
 
 def _market_status(ticker: str) -> str:
@@ -276,7 +277,7 @@ def render_portfolio_page(ctx):
                     msg += f" Error: {alpaca_err}"
                 st.warning(msg)
 
-        st.dataframe(df_fresh[display_cols], use_container_width=True, height=360)
+        show_aggrid(df_fresh[display_cols], height=360, key="aggrid_portfolio_snapshot")
         st.caption(f"Prices refreshed at {datetime.now().strftime('%H:%M:%S')} · Market prices may be delayed")
 
         # Fix 4 — warn when positions have no cost basis (PnL shown as $0)
@@ -299,32 +300,14 @@ def render_portfolio_page(ctx):
         "Day change vs previous close in native currency, recent 10-day trend, and market status.",
     )
     intraday_df = _build_intraday_table(ctx["df"], hist)
-    st.dataframe(
-        intraday_df,
-        use_container_width=True,
-        height=250,
-        column_config={
-            "Trend (10d)": st.column_config.LineChartColumn(
-                "Trend (10d)", width="medium", y_min=None, y_max=None
-            ),
-            "Day Δ%": st.column_config.NumberColumn("Day Δ%", format="%.2f%%"),
-            "Market": st.column_config.TextColumn("Market", width="small"),
-        },
-    )
+    show_aggrid(intraday_df, height=250, key="aggrid_portfolio_intraday")
 
     info_section(
         "Monthly Variation",
         "Price change vs approximately 30 calendar days ago in native currency.",
     )
     monthly_df = _build_monthly_table(ctx["df"], hist)
-    st.dataframe(
-        monthly_df,
-        use_container_width=True,
-        height=250,
-        column_config={
-            "Month Δ%": st.column_config.NumberColumn("Month Δ%", format="%.2f%%"),
-        },
-    )
+    show_aggrid(monthly_df, height=250, key="aggrid_portfolio_monthly")
 
     left, right = st.columns(2)
 
@@ -356,7 +339,7 @@ def render_portfolio_page(ctx):
         )
 
     info_section("Cash Balances", "Cash balances by currency converted to the base currency.")
-    st.dataframe(ctx["cash_display_df"], use_container_width=True, height=240)
+    show_aggrid(ctx["cash_display_df"], height=240, key="aggrid_portfolio_cash")
 
     # ── Currency Exposure ─────────────────────────────────────────────────────
     info_section(
@@ -417,4 +400,4 @@ def render_portfolio_page(ctx):
             )
             st.plotly_chart(pie, use_container_width=True, key="currency_exposure_pie")
         with right:
-            st.dataframe(exp_df, use_container_width=True, height=260)
+            show_aggrid(exp_df, height=260, key="aggrid_portfolio_exposure")

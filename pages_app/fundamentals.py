@@ -11,6 +11,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from app_core import info_section, render_page_title
+from utils_aggrid import show_aggrid
 
 _BLOOMBERG_BG = "#0b0f14"
 _GOLD = "#f3a712"
@@ -320,10 +321,10 @@ def render_fundamentals_page(ctx):
                 co4.metric("Net Income", _fmt_large(ni))
 
                 st.markdown("")
-                st.dataframe(
+                show_aggrid(
                     inc.apply(lambda r: r.map(_fmt_large), axis=1),
-                    use_container_width=True,
                     height=min(500, max(200, 35 * len(inc) + 48)),
+                    key="aggrid_fundamentals_income",
                 )
             else:
                 st.info("Income statement data not available.")
@@ -343,10 +344,10 @@ def render_fundamentals_page(ctx):
                 b4.metric("Equity", _fmt_large(equity))
 
                 st.markdown("")
-                st.dataframe(
+                show_aggrid(
                     bal.apply(lambda r: r.map(_fmt_large), axis=1),
-                    use_container_width=True,
                     height=min(500, max(200, 35 * len(bal) + 48)),
+                    key="aggrid_fundamentals_balance_sheet",
                 )
             else:
                 st.info("Balance sheet data not available.")
@@ -366,10 +367,10 @@ def render_fundamentals_page(ctx):
                 f3.metric("Free Cash Flow", _fmt_large(fcf_val))
 
                 st.markdown("")
-                st.dataframe(
+                show_aggrid(
                     cf.apply(lambda r: r.map(_fmt_large), axis=1),
-                    use_container_width=True,
                     height=min(500, max(200, 35 * len(cf) + 48)),
+                    key="aggrid_fundamentals_cashflow",
                 )
             else:
                 st.info("Cash flow data not available.")
@@ -389,7 +390,7 @@ def render_fundamentals_page(ctx):
         if len(all_compare) > 1:
             with st.spinner("Loading peer data..."):
                 comp_df = _build_comparison_table(all_compare)
-            st.dataframe(comp_df, use_container_width=True, hide_index=True)
+            show_aggrid(comp_df, height=400, key="aggrid_fundamentals_peer_comparison")
         else:
             st.caption("Add peer tickers above to enable comparison.")
 

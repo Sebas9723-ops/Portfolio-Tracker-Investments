@@ -4,6 +4,8 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
+from utils_aggrid import show_aggrid
+
 from app_core import (
     append_trade_journal_entry,
     get_manage_password,
@@ -173,7 +175,7 @@ def _render_journal_table(ctx, journal_df: pd.DataFrame):
                  "stop_loss", "status", "P&L", "thesis", "notes"]
     display = display[[c for c in cols_show if c in display.columns]].rename(columns=rename)
 
-    st.dataframe(display, use_container_width=True, hide_index=True)
+    show_aggrid(display, height=400, key="aggrid_trade_journal_display")
 
 
 def _render_journal_stats(journal_df: pd.DataFrame, ctx):

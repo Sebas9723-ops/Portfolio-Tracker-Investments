@@ -5,6 +5,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+from utils_aggrid import show_aggrid
+
 from app_core import (
     ALERTS_HEADERS,
     append_alert_to_sheets,
@@ -358,7 +360,7 @@ def _render_alerts_table(alerts_df: pd.DataFrame):
         lambda v: str(v)[:10] if v else ""
     )
 
-    st.dataframe(
+    show_aggrid(
         display[["id", "ticker", "alert_type", "threshold", "active", "last_triggered", "notes"]].rename(
             columns={
                 "id": "ID", "ticker": "Ticker", "alert_type": "Alert Type",
@@ -366,8 +368,8 @@ def _render_alerts_table(alerts_df: pd.DataFrame):
                 "last_triggered": "Last Triggered", "notes": "Notes",
             }
         ),
-        use_container_width=True,
         height=280,
+        key="aggrid_alerts_list",
     )
 
     # Management actions
