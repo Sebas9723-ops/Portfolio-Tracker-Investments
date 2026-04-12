@@ -684,8 +684,8 @@ def render_dashboard(ctx):
                     portfolio_ret = (1 + aligned["Portfolio"]).cumprod() - 1
 
             dates = [str(d)[:10] for d in portfolio_ret.index.tolist()]
-            port_vals = [round(float(v), 4) for v in portfolio_ret.tolist()]
-            bench_vals = [round(float(v), 4) for v in bench_ret.tolist()] if bench_ret is not None else []
+            port_vals = [round(float(v) * 100, 2) for v in portfolio_ret.tolist()]
+            bench_vals = [round(float(v) * 100, 2) for v in bench_ret.tolist()] if bench_ret is not None else []
 
             perf_option = {
                 "backgroundColor": "#0a0a0a",
@@ -695,7 +695,7 @@ def render_dashboard(ctx):
                     "backgroundColor": "#1a1a2e",
                     "borderColor": "#2a313c",
                     "textStyle": {"color": "#e6e6e6", "fontFamily": "IBM Plex Mono"},
-                    "formatter": "function(params) { var s = params[0].axisValueLabel + '<br/>'; params.forEach(function(p){ var sign = p.value >= 0 ? '+' : ''; s += p.marker + ' ' + p.seriesName + ': <b>' + sign + (p.value*100).toFixed(2) + '%</b><br/>'; }); return s; }"
+                    "valueFormatter": "{value}%"
                 },
                 "legend": {
                     "data": ["Portfolio", "VOO Benchmark"],
@@ -718,7 +718,7 @@ def render_dashboard(ctx):
                 "yAxis": {
                     "type": "value",
                     "axisLabel": {"color": "#666", "fontFamily": "IBM Plex Mono", "fontSize": 10,
-                                  "formatter": "function(v){ return (v*100).toFixed(1)+'%'; }"},
+                                  "formatter": "{value}%"},
                     "splitLine": {"lineStyle": {"color": "#1a1a2e"}},
                     "axisLine": {"show": False}
                 },
@@ -757,6 +757,26 @@ def render_dashboard(ctx):
                     mode=ctx["mode"],
                     base_currency=ctx["base_currency"],
                 )
+                # Auto-save one snapshot per day if none exists for today
+                import datetime as _dt_snap
+                today_str = str(_dt_snap.date.today())
+                has_today = (
+                    not snapshots_df.empty
+                    and "snapshot_date" in snapshots_df.columns
+                    and snapshots_df["snapshot_date"].astype(str).str[:10].eq(today_str).any()
+                )
+                if not has_today:
+                    try:
+                        save_portfolio_snapshot(ctx, notes="auto-daily")
+                        # Reload after auto-save
+                        all_snapshots = load_portfolio_snapshots()
+                        snapshots_df = filter_snapshots_for_context(
+                            all_snapshots,
+                            mode=ctx["mode"],
+                            base_currency=ctx["base_currency"],
+                        )
+                    except Exception:
+                        pass
             except Exception as e:
                 snapshots_df = pd.DataFrame()
                 st.warning(f"Snapshot history could not be loaded: {e}")

@@ -1,3 +1,4 @@
+import streamlit as st
 from st_aggrid import AgGrid, GridOptionsBuilder, JsCode
 
 _PNL_KEYWORDS = ("return", "pnl", "p&l", "gain", "loss", "performance")
@@ -27,28 +28,35 @@ function(params) {
 
 
 def show_aggrid(df, height=400, key=None):
-    """Render a DataFrame using AgGrid with Bloomberg dark theme and conditional formatting."""
-    gb = GridOptionsBuilder.from_dataframe(df)
-    gb.configure_pagination(enabled=False)
-    gb.configure_default_column(resizable=True, sortable=True, filter=True)
+    """Render a DataFrame using AgGrid with Bloomberg dark theme and conditional formatting.
+    Falls back to st.dataframe if AgGrid fails."""
+    try:
+        import pandas as pd
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+            st.dataframe(df, use_container_width=True, height=height)
+            return
 
-    for col in df.columns:
-        col_lower = col.lower()
-        if col_lower == _DRIFT_KEYWORD or _DRIFT_KEYWORD in col_lower:
-            gb.configure_column(col, cellStyle=_DRIFT_CELL_STYLE)
-        elif any(kw in col_lower for kw in _PNL_KEYWORDS):
-            gb.configure_column(col, cellStyle=_PNL_CELL_STYLE)
+        gb = GridOptionsBuilder.from_dataframe(df)
+        gb.configure_pagination(enabled=False)
+        gb.configure_default_column(resizable=True, sortable=True, filter=True)
 
-    grid_options = gb.build()
-    grid_options["domLayout"] = "normal"
+        for col in df.columns:
+            col_lower = col.lower()
+            if col_lower == _DRIFT_KEYWORD or _DRIFT_KEYWORD in col_lower:
+                gb.configure_column(col, cellStyle=_DRIFT_CELL_STYLE)
+            elif any(kw in col_lower for kw in _PNL_KEYWORDS):
+                gb.configure_column(col, cellStyle=_PNL_CELL_STYLE)
 
-    AgGrid(
-        df,
-        gridOptions=grid_options,
-        theme="balham-dark",
-        height=height,
-        allow_unsafe_jscode=True,
-        use_container_width=True,
-        fit_columns_on_grid_load=True,
-        key=key,
-    )
+        grid_options = gb.build()
+        grid_options["domLayout"] = "normal"
+
+        AgGrid(
+            df,
+            gridOptions=grid_options,
+            theme="dark",
+            height=height,
+            allow_unsafe_jscode=True,
+            key=key,
+        )
+    except Exception:
+        st.dataframe(df, use_container_width=True, height=height)

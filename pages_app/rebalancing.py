@@ -390,13 +390,13 @@ def render_rebalancing_page(ctx):
             "backgroundColor": "#1a1a2e",
             "borderColor": "#2a313c",
             "textStyle": {"color": "#e6e6e6", "fontFamily": "IBM Plex Mono"},
-            "formatter": "function(params) { var p = params[0]; var sign = p.value >= 0 ? 'UNDERWEIGHT — Buy' : 'OVERWEIGHT'; return p.name + '<br/>' + p.marker + ' Drift: <b>' + p.value.toFixed(2) + '%</b><br/>' + sign; }"
+            "valueFormatter": "{value}%"
         },
         "grid": {"left": "15%", "right": "8%", "top": "6%", "bottom": "8%", "containLabel": False},
         "xAxis": {
             "type": "value",
             "axisLabel": {"color": "#666", "fontFamily": "IBM Plex Mono", "fontSize": 10,
-                          "formatter": "function(v){ return v.toFixed(1)+'%'; }"},
+                          "formatter": "{value}%"},
             "splitLine": {"lineStyle": {"color": "#1a1a2e"}},
             "axisLine": {"lineStyle": {"color": "#2a313c"}}
         },
@@ -412,7 +412,7 @@ def render_rebalancing_page(ctx):
             "label": {
                 "show": True,
                 "position": "right",
-                "formatter": "function(p){ return p.value.toFixed(2)+'%'; }",
+                "formatter": "{c}%",
                 "color": "#888", "fontSize": 10, "fontFamily": "IBM Plex Mono"
             }
         }],
