@@ -470,11 +470,15 @@ def _build_performance_vs_benchmark_pct_chart(ctx):
     portfolio_last = float(portfolio_cum.iloc[-1]) if not portfolio_cum.empty else 0.0
     portfolio_name = f"Portfolio ({portfolio_last:.2%})"
 
+    # Portfolio — solid bright line with gradient fill
     fig.add_scatter(
         x=portfolio_cum.index,
         y=portfolio_cum,
         mode="lines",
         name=portfolio_name,
+        line=dict(color="#00ff88", width=2),
+        fill="tozeroy",
+        fillcolor="rgba(0,255,136,0.12)",
         hovertemplate="%{x|%Y-%m-%d}<br>Portfolio: %{y:.2%}<extra></extra>",
     )
 
@@ -489,23 +493,37 @@ def _build_performance_vs_benchmark_pct_chart(ctx):
             voo_last = float(voo_cum.iloc[-1]) if not voo_cum.empty else 0.0
             voo_name = f"VOO ({voo_last:.2%})"
 
+            # VOO — dashed grey line
             fig.add_scatter(
                 x=voo_cum.index,
                 y=voo_cum,
                 mode="lines",
                 name=voo_name,
+                line=dict(color="#888888", width=1.5, dash="dash"),
                 hovertemplate="%{x|%Y-%m-%d}<br>VOO: %{y:.2%}<extra></extra>",
             )
 
     fig.update_layout(
-        paper_bgcolor="#0b0f14",
-        plot_bgcolor="#0b0f14",
-        font=dict(color="#e6e6e6"),
+        paper_bgcolor="#0a0a0a",
+        plot_bgcolor="#0a0a0a",
+        font=dict(color="#e6e6e6", family="IBM Plex Mono"),
         height=420,
         margin=dict(t=20, b=20, l=20, r=20),
-        xaxis_title="Date",
-        yaxis_title="Return",
-        yaxis=dict(tickformat=".0%"),
+        xaxis=dict(
+            title="Date",
+            gridcolor="rgba(255,255,255,0.06)",
+            showspikes=True,
+            spikemode="across",
+            spikesnap="cursor",
+            spikecolor="#444",
+            spikethickness=1,
+        ),
+        yaxis=dict(
+            title="Return",
+            tickformat=".0%",
+            gridcolor="rgba(255,255,255,0.06)",
+        ),
+        hovermode="x unified",
         legend=dict(orientation="h", y=1.08, x=0.0),
     )
     return fig
@@ -566,20 +584,32 @@ def render_dashboard(ctx):
 
         ccy = ctx.get("base_currency", "")
         c1, c2, c3, c4 = st.columns(4)
-        info_metric(c1, "Total Portfolio", f"{ccy} {total_portfolio:,.2f}", "Holdings plus cash.")
-        info_metric(c2, "Invested Assets", f"{ccy} {holdings_value:,.2f}", "Market value of invested holdings.")
-        info_metric(c3, "Cash", f"{ccy} {cash_value:,.2f}", "Cash balances converted to base currency.")
-        info_metric(c4, "Unrealized PnL", f"{ccy} {unrealized_pnl:,.2f}", "Open profit and loss.")
+        info_metric(c1, "Total Portfolio", f"{ccy} {total_portfolio:,.2f}", "Holdings plus cash.",
+                    accent_color="#f5a623")
+        info_metric(c2, "Invested Assets", f"{ccy} {holdings_value:,.2f}", "Market value of invested holdings.",
+                    accent_color="#f5a623")
+        info_metric(c3, "Cash", f"{ccy} {cash_value:,.2f}", "Cash balances converted to base currency.",
+                    accent_color="#f5a623")
+        info_metric(c4, "Unrealized PnL", f"{ccy} {unrealized_pnl:,.2f}", "Open profit and loss.",
+                    accent_color="#00ff88" if unrealized_pnl >= 0 else "#ff4444")
 
         simple_return = total_pnl / invested_cap if invested_cap > 0 else None
         sr_str = f"{simple_return:.2%}" if simple_return is not None else "—"
         pnl_str = f"{ccy} {total_pnl:+,.2f}" if invested_cap > 0 else "—"
         c5, c6, c7, c8, c9 = st.columns(5)
-        info_metric(c5, "Return", f"{ctx['total_return']:.2%}", "Cumulative return over the available history.")
-        info_metric(c6, "Volatility", f"{ctx['volatility']:.2%}", "Annualized portfolio volatility.")
-        info_metric(c7, "Sharpe Ratio", f"{ctx['sharpe']:.2f}", "Portfolio Sharpe ratio.")
-        info_metric(c8, "Simple Return", sr_str, "Total gain vs cost basis (unrealized + realized). Not annualized.")
-        info_metric(c9, "Total P&L", pnl_str, "Unrealized + realized gain/loss in base currency.")
+        _ret_pos = ctx['total_return'] >= 0
+        info_metric(c5, "Return", f"{ctx['total_return']:.2%}", "Cumulative return over the available history.",
+                    accent_color="#00ff88" if _ret_pos else "#ff4444")
+        info_metric(c6, "Volatility", f"{ctx['volatility']:.2%}", "Annualized portfolio volatility.",
+                    accent_color="#ff4444" if ctx['volatility'] > 0.20 else "#00ff88")
+        _sharpe = float(ctx['sharpe'])
+        info_metric(c7, "Sharpe Ratio", f"{_sharpe:.2f}", "Portfolio Sharpe ratio.",
+                    accent_color="#00ff88" if _sharpe >= 1.0 else "#ff4444",
+                    sharpe_value=_sharpe, sharpe_target=3.0)
+        info_metric(c8, "Simple Return", sr_str, "Total gain vs cost basis (unrealized + realized). Not annualized.",
+                    accent_color="#00ff88" if simple_return and simple_return >= 0 else "#ff4444")
+        info_metric(c9, "Total P&L", pnl_str, "Unrealized + realized gain/loss in base currency.",
+                    accent_color="#00ff88" if total_pnl >= 0 else "#ff4444")
 
         _render_drop_alerts(ctx)
 

@@ -141,6 +141,45 @@ st.sidebar.markdown("---")
 
 ctx = build_app_context_runtime("private")
 
+# ── Sidebar mini KPI (always visible) ─────────────────────────────────────────
+import datetime as _dt
+_total_val = float(ctx.get("total_portfolio_value", 0.0))
+_ret = float(ctx.get("total_return", 0.0))
+_ccy = ctx.get("base_currency", "USD")
+_ret_color = "#00ff88" if _ret >= 0 else "#ff4444"
+_ret_arrow = "▲" if _ret >= 0 else "▼"
+_mkt_open = False
+try:
+    import pytz as _pytz
+    _now_et = _dt.datetime.now(_pytz.timezone("America/New_York"))
+    _mkt_open = (
+        _now_et.weekday() < 5
+        and _dt.time(9, 30) <= _now_et.time() <= _dt.time(16, 0)
+    )
+except Exception:
+    pass
+_dot_cls = "open" if _mkt_open else "closed"
+_mkt_label = "Market Open" if _mkt_open else "Market Closed"
+
+st.sidebar.markdown(
+    f"""
+    <div style='background:#111;border:1px solid #1e2535;border-radius:6px;
+        padding:10px 12px;margin-bottom:8px;'>
+      <div style='font-size:0.62rem;color:#555;text-transform:uppercase;letter-spacing:0.8px;
+          margin-bottom:4px;'>
+        <span class='live-dot {_dot_cls}'></span>{_mkt_label}
+      </div>
+      <div style='font-size:1.1rem;font-weight:800;color:#f2f2f2;font-family:IBM Plex Mono,monospace'>
+        {_ccy} {_total_val:,.0f}
+      </div>
+      <div style='font-size:0.78rem;font-weight:700;color:{_ret_color};margin-top:2px'>
+        {_ret_arrow} {abs(_ret):.2%} total return
+      </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
 # ── Route ──────────────────────────────────────────────────────────────────────
 
 if page_name == "Dashboard":

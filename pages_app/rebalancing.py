@@ -37,28 +37,58 @@ def _get_max_sharpe_target_map(ctx, df):
 
 
 def _build_compare_chart(df, policy_map, max_sharpe_map):
-    fig = go.Figure()
-    fig.add_bar(
-        x=df["Ticker"],
-        y=df["Weight %"],
-        name="Current Weight %",
-    )
-    fig.add_bar(
-        x=df["Ticker"],
-        y=[float(max_sharpe_map.get(t, 0.0)) * 100.0 for t in df["Ticker"]],
-        name="Max Sharpe Weight %",
-    )
+    """Horizontal divergence chart — right = underweight (buy, green), left = overweight (amber)."""
+    tickers, drifts, colors, tooltips = [], [], [], []
+
+    for _, row in df.iterrows():
+        t = str(row["Ticker"])
+        current = float(row["Weight %"])
+        target = float(max_sharpe_map.get(t, 0.0)) * 100.0
+        drift = target - current  # positive = underweight → buy
+
+        tickers.append(t)
+        drifts.append(drift)
+        colors.append("#00ff88" if drift > 0 else "#f5a623")
+
+        tooltips.append(
+            f"<b>{t}</b><br>"
+            f"Current weight: {current:.2f}%<br>"
+            f"Target weight: {target:.2f}%<br>"
+            f"Drift: {drift:+.2f}%<br>"
+            f"Action: {'Buy ↑' if drift > 0 else 'Reduce ↓'}"
+        )
+
+    fig = go.Figure(go.Bar(
+        x=drifts,
+        y=tickers,
+        orientation="h",
+        marker_color=colors,
+        text=[f"{d:+.1f}%" for d in drifts],
+        textposition="outside",
+        hovertext=tooltips,
+        hoverinfo="text",
+    ))
+
+    fig.add_vline(x=0, line_color="#333", line_width=1.5)
 
     fig.update_layout(
-        barmode="group",
-        paper_bgcolor="#0b0f14",
-        plot_bgcolor="#0b0f14",
-        font=dict(color="#e6e6e6"),
-        height=390,
-        margin=dict(t=20, b=20, l=20, r=20),
-        xaxis_title="Ticker",
-        yaxis_title="Weight %",
-        legend=dict(orientation="h", y=1.08, x=0.0),
+        paper_bgcolor="#0a0a0a",
+        plot_bgcolor="#0a0a0a",
+        font=dict(color="#e6e6e6", family="IBM Plex Mono"),
+        height=max(300, len(tickers) * 52),
+        margin=dict(t=50, b=20, l=10, r=70),
+        xaxis=dict(
+            title="Drift vs Target (%)",
+            gridcolor="rgba(255,255,255,0.06)",
+            zeroline=False,
+        ),
+        yaxis=dict(autorange="reversed"),
+        annotations=[
+            dict(x=0.18, y=1.09, xref="paper", yref="paper", showarrow=False,
+                 text="◀ OVERWEIGHT", font=dict(color="#f5a623", size=11, family="IBM Plex Mono")),
+            dict(x=0.82, y=1.09, xref="paper", yref="paper", showarrow=False,
+                 text="UNDERWEIGHT ▶", font=dict(color="#00ff88", size=11, family="IBM Plex Mono")),
+        ],
     )
     return fig
 

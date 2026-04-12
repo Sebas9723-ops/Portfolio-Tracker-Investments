@@ -140,28 +140,34 @@ def apply_bloomberg_style():
     )
     st.markdown(
         """
+        <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;800&display=swap" rel="stylesheet">
         <style>
-        html, body, [class*="css"] {
-            font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace !important;
+        /* ── Semantic color tokens ─────────────────────────────────────────── */
+        :root {
+            --clr-pos:   #00ff88;
+            --clr-neg:   #ff4444;
+            --clr-amber: #f5a623;
+            --clr-bg:    #0a0a0a;
+            --clr-card:  #111111;
+            --clr-border:#2a313c;
         }
 
-        .stApp {
-            background-color: #0b0f14;
+        /* ── Base ──────────────────────────────────────────────────────────── */
+        html, body, [class*="css"] {
+            font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, Monaco, Consolas, monospace !important;
+        }
+
+        .stApp, [data-testid="stAppViewContainer"] {
+            background-color: var(--clr-bg);
             color: #e6e6e6;
         }
 
-        [data-testid="stAppViewContainer"] {
-            background-color: #0b0f14;
-        }
-
         [data-testid="stSidebar"] {
-            background: #0f141b;
-            border-right: 1px solid #2a313c;
+            background: #0d0d0d;
+            border-right: 1px solid var(--clr-border);
         }
 
-        [data-testid="stHeader"] {
-            background: #0b0f14;
-        }
+        [data-testid="stHeader"] { background: var(--clr-bg); }
 
         .block-container {
             padding-top: 1.8rem !important;
@@ -171,25 +177,27 @@ def apply_bloomberg_style():
             max-width: 1500px;
         }
 
+        /* ── Page title ────────────────────────────────────────────────────── */
         .bb-title {
             font-size: 2rem;
             font-weight: 800;
             line-height: 1.15;
-            color: #f3a712;
+            color: var(--clr-amber);
             letter-spacing: 1px;
             padding-top: 0.2rem;
             padding-bottom: 0.8rem;
             margin-top: 0.35rem;
             margin-bottom: 1rem;
-            border-bottom: 2px solid #f3a712;
+            border-bottom: 2px solid var(--clr-amber);
             text-transform: uppercase;
             display: block;
         }
 
+        /* ── Section header ────────────────────────────────────────────────── */
         .bb-section {
-            background: linear-gradient(180deg, #111821 0%, #0d131a 100%);
-            border: 1px solid #2b3340;
-            border-left: 4px solid #f3a712;
+            background: linear-gradient(180deg, #111111 0%, #0d0d0d 100%);
+            border: 1px solid #1e2535;
+            border-left: 4px solid var(--clr-amber);
             border-radius: 6px;
             padding: 0.85rem 1rem 0.9rem 1rem;
             margin: 0.65rem 0 1rem 0;
@@ -198,7 +206,7 @@ def apply_bloomberg_style():
         .bb-section-title {
             font-size: 1rem;
             font-weight: 800;
-            color: #f3a712;
+            color: var(--clr-amber);
             text-transform: uppercase;
             margin-bottom: 0.4rem;
             letter-spacing: 0.5px;
@@ -211,106 +219,173 @@ def apply_bloomberg_style():
             margin-left: 0.2rem;
         }
 
+        /* ── Metric cards (custom .bb-metric) ──────────────────────────────── */
+        .bb-metric {
+            background: var(--clr-card);
+            border: 1px solid #1e2535;
+            border-radius: 6px;
+            padding: 0.75rem 0.9rem 0;
+            position: relative;
+            overflow: hidden;
+            margin-bottom: 0.5rem;
+        }
+        .bb-metric::after {
+            content: '';
+            display: block;
+            height: 3px;
+            border-radius: 0 0 6px 6px;
+            margin-top: 0.6rem;
+            background: var(--accent, var(--clr-amber));
+        }
+        .bb-metric-label {
+            font-size: 0.68rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: #6b7f96;
+            margin-bottom: 0.25rem;
+        }
+        .bb-metric-value {
+            font-size: 1.45rem;
+            font-weight: 800;
+            color: #f2f2f2;
+            line-height: 1.1;
+            letter-spacing: -0.5px;
+        }
+        .bb-metric-delta {
+            font-size: 0.72rem;
+            font-weight: 600;
+            margin-top: 0.2rem;
+            margin-bottom: 0.1rem;
+        }
+        .bb-metric-bar-wrap {
+            background: #1a1a2e;
+            border-radius: 3px;
+            height: 5px;
+            margin-top: 0.4rem;
+            margin-bottom: 0.1rem;
+            overflow: hidden;
+        }
+        .bb-metric-bar-fill {
+            height: 100%;
+            border-radius: 3px;
+            background: var(--clr-pos);
+            transition: width 0.4s ease;
+        }
+
+        /* ── Native st.metric override (fallback) ──────────────────────────── */
         [data-testid="stMetric"] {
-            background: #121922;
-            border: 1px solid #2e3744;
-            border-top: 2px solid #f3a712;
+            background: var(--clr-card);
+            border: 1px solid #1e2535;
+            border-bottom: 3px solid var(--clr-amber);
             border-radius: 6px;
             padding: 0.7rem 0.8rem 0.5rem 0.8rem;
         }
-
         [data-testid="stMetricLabel"] {
-            color: #9fb0c3 !important;
+            color: #6b7f96 !important;
             text-transform: uppercase;
-            font-size: 0.75rem !important;
-            letter-spacing: 0.6px;
+            font-size: 0.68rem !important;
+            letter-spacing: 0.8px;
         }
-
         [data-testid="stMetricValue"] {
-            color: #f8f8f8 !important;
-            font-size: 1.35rem !important;
+            color: #f2f2f2 !important;
+            font-size: 1.45rem !important;
             font-weight: 800 !important;
         }
 
+        /* ── Buttons ───────────────────────────────────────────────────────── */
         .stButton > button {
-            background: #151d27;
-            color: #f3a712;
-            border: 1px solid #f3a712;
+            background: #111111;
+            color: var(--clr-amber);
+            border: 1px solid var(--clr-amber);
             border-radius: 4px;
             font-weight: 700;
             text-transform: uppercase;
             letter-spacing: 0.4px;
             min-height: 42px;
         }
-
         .stButton > button:hover {
-            background: #f3a712;
-            color: #0b0f14;
-            border-color: #f3a712;
+            background: var(--clr-amber);
+            color: #0a0a0a;
+            border-color: var(--clr-amber);
         }
 
+        /* ── Inputs ────────────────────────────────────────────────────────── */
         .stTextInput > div > div > input,
         .stNumberInput input,
         .stSelectbox div[data-baseweb="select"] > div,
         .stDateInput input {
-            background-color: #0f141b !important;
+            background-color: #111111 !important;
             color: #f2f2f2 !important;
             border: 1px solid #394250 !important;
             border-radius: 4px !important;
             min-height: 42px !important;
         }
 
+        /* ── Tables ────────────────────────────────────────────────────────── */
         div[data-testid="stDataFrame"] {
-            border: 1px solid #2d3642;
+            border: 1px solid #1e2535;
             border-radius: 6px;
             overflow: hidden;
         }
-
         div[data-testid="stDataFrame"] * {
             color: #e5e7eb !important;
+            font-family: "IBM Plex Mono", monospace !important;
         }
-
         div[data-testid="stDataFrame"] [role="columnheader"] {
-            background-color: #18212c !important;
-            color: #f3a712 !important;
+            background-color: #111111 !important;
+            color: var(--clr-amber) !important;
             font-weight: 800 !important;
             text-transform: uppercase;
+            position: sticky !important;
+            top: 0 !important;
+            z-index: 10 !important;
         }
-
         div[data-testid="stDataFrame"] [role="gridcell"] {
-            background-color: #0f141b !important;
+            background-color: #0d0d0d !important;
+        }
+        div[data-testid="stDataFrame"] [role="row"]:hover [role="gridcell"] {
+            background-color: #1a1a2e !important;
         }
 
+        /* ── Pulsing live dot ──────────────────────────────────────────────── */
+        @keyframes pulse-green {
+            0%   { box-shadow: 0 0 0 0 rgba(0,255,136,0.7); }
+            70%  { box-shadow: 0 0 0 7px rgba(0,255,136,0); }
+            100% { box-shadow: 0 0 0 0 rgba(0,255,136,0); }
+        }
+        @keyframes pulse-grey {
+            0%   { box-shadow: 0 0 0 0 rgba(120,120,120,0.5); }
+            70%  { box-shadow: 0 0 0 6px rgba(120,120,120,0); }
+            100% { box-shadow: 0 0 0 0 rgba(120,120,120,0); }
+        }
+        .live-dot {
+            display: inline-block;
+            width: 9px; height: 9px;
+            border-radius: 50%;
+            margin-right: 6px;
+            vertical-align: middle;
+        }
+        .live-dot.open  { background: var(--clr-pos);  animation: pulse-green 1.4s infinite; }
+        .live-dot.closed{ background: #666;             animation: pulse-grey  2s   infinite; }
+
+        /* ── Alerts ────────────────────────────────────────────────────────── */
         .stAlert {
             border-radius: 6px !important;
-            border: 1px solid #2b3340 !important;
+            border: 1px solid #1e2535 !important;
         }
 
+        /* ── Responsive ────────────────────────────────────────────────────── */
         @media (max-width: 900px) {
             .block-container {
                 padding-top: 3.2rem !important;
                 padding-left: 0.7rem !important;
                 padding-right: 0.7rem !important;
             }
-
-            .bb-title {
-                font-size: 1.55rem;
-            }
-
-            [data-testid="stMetricValue"] {
-                font-size: 1.1rem !important;
-            }
-
-            [data-testid="stHorizontalBlock"] {
-                flex-wrap: wrap !important;
-                gap: 0.6rem !important;
-            }
-
-            [data-testid="column"] {
-                min-width: 100% !important;
-                flex: 1 1 100% !important;
-                width: 100% !important;
-            }
+            .bb-title { font-size: 1.55rem; }
+            .bb-metric-value { font-size: 1.15rem !important; }
+            [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; gap: 0.6rem !important; }
+            [data-testid="column"] { min-width: 100% !important; flex: 1 1 100% !important; }
         }
         </style>
         """,
@@ -389,12 +464,59 @@ def info_section(title: str, help_text: str):
     )
 
 
-def info_metric(container, label: str, value: str, help_text: str):
-    container.markdown(
-        info_html(label, help_text, size="0.84rem", weight="800"),
-        unsafe_allow_html=True,
+def info_metric(
+    container,
+    label: str,
+    value: str,
+    help_text: str,
+    delta: str | None = None,
+    delta_positive: bool | None = None,
+    accent_color: str | None = None,
+    sharpe_value: float | None = None,
+    sharpe_target: float = 3.0,
+):
+    """Bloomberg-style metric card with semantic accent line and optional delta / Sharpe bar."""
+    import html as _html
+
+    # Determine accent color
+    if accent_color is None:
+        accent_color = "#f5a623"  # amber default
+
+    # Delta row
+    delta_html = ""
+    if delta is not None:
+        if delta_positive is True:
+            d_color, d_arrow = "#00ff88", "↑"
+        elif delta_positive is False:
+            d_color, d_arrow = "#ff4444", "↓"
+        else:
+            d_color, d_arrow = "#9fb0c3", "·"
+        delta_html = (
+            f"<div class='bb-metric-delta' style='color:{d_color}'>"
+            f"{d_arrow} {_html.escape(str(delta))}</div>"
+        )
+
+    # Sharpe progress bar
+    bar_html = ""
+    if sharpe_value is not None:
+        pct = min(float(sharpe_value) / sharpe_target, 1.0) * 100.0
+        bar_color = "#00ff88" if float(sharpe_value) >= 1.0 else "#ff4444"
+        bar_html = (
+            f"<div class='bb-metric-bar-wrap'>"
+            f"<div class='bb-metric-bar-fill' style='width:{pct:.1f}%;background:{bar_color}'></div>"
+            f"</div>"
+            f"<div style='font-size:0.62rem;color:#555;margin-bottom:0.1rem'>"
+            f"Sharpe {float(sharpe_value):.2f} / target {sharpe_target:.1f}</div>"
+        )
+
+    card = (
+        f"<div class='bb-metric' style='--accent:{accent_color}' title='{_html.escape(help_text)}'>"
+        f"<div class='bb-metric-label'>{_html.escape(label)}</div>"
+        f"<div class='bb-metric-value'>{_html.escape(value)}</div>"
+        f"{delta_html}{bar_html}"
+        f"</div>"
     )
-    container.metric(" ", value)
+    container.markdown(card, unsafe_allow_html=True)
 
 
 def render_status_bar(mode: str, base_currency: str, profile: str, tc_model: str, sheets_ok: bool):
