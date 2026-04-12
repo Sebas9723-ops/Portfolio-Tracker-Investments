@@ -1,4 +1,7 @@
 streamlit>=1.31.0
+streamlit-aggrid
+streamlit-echarts
+streamlit-lightweight-charts
 groq
 matplotlib
 plotly>=5.18
