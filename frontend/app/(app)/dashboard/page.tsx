@@ -58,7 +58,7 @@ export default function DashboardPage() {
           </p>
         </div>
         <button
-          onClick={() => saveSnap()}
+          onClick={() => saveSnap(undefined)}
           disabled={saving}
           className="flex items-center gap-1.5 text-[10px] text-bloomberg-muted border border-bloomberg-border px-3 py-1.5 hover:text-bloomberg-gold hover:border-bloomberg-gold"
         >
