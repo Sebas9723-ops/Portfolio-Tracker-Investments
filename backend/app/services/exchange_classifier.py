@@ -4,13 +4,12 @@ Mirrors the logic from data_providers.py and app_core.py.
 """
 
 # Tickers where yfinance symbol differs from display symbol
-PROXY_TICKER_MAP: dict[str, str] = {
-    "EIMI.UK": "EIMI.L",
-}
+PROXY_TICKER_MAP: dict[str, str] = {}
 
 # Tickers where currency is not derivable from the suffix
 TICKER_CURRENCY_OVERRIDE: dict[str, str] = {
     "IGLN.L": "USD",   # physically-backed gold, priced in USD on LSE
+    "EIMI.UK": "USD",  # USD share class of iShares MSCI EM IMI on LSE
 }
 
 # Suffixes that identify non-US exchanges
