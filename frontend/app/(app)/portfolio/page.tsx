@@ -3,36 +3,104 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchPositions, upsertPosition, deletePosition } from "@/lib/api/portfolio";
 import { fetchCash } from "@/lib/api/transactions";
-import { fmtCurrency } from "@/lib/formatters";
+import { fetchAnalytics, fetchRebalancing, fetchFxExposure } from "@/lib/api/analytics";
+import { usePortfolio } from "@/lib/hooks/usePortfolio";
+import { fetchHistorical } from "@/lib/api/market";
+import { fmtCurrency, fmtPct, colorClass } from "@/lib/formatters";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { Plus, Trash2 } from "lucide-react";
 import type { Position } from "@/lib/types";
+import {
+  PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid,
+  LineChart, Line,
+} from "recharts";
+
+const COLORS = ["#f3a712", "#4dff4d", "#ff4d4d", "#38b2ff", "#c084fc", "#fb923c", "#34d399"];
 
 export default function PortfolioPage() {
   const { data: positions, isLoading } = useQuery({ queryKey: ["positions"], queryFn: fetchPositions });
   const { data: cash } = useQuery({ queryKey: ["cash"], queryFn: fetchCash });
+  const { data: portfolio } = usePortfolio();
+  const { data: rebalancing } = useQuery({ queryKey: ["rebalancing", 0, "broker"], queryFn: () => fetchRebalancing({}) });
+  const { data: analytics } = useQuery({ queryKey: ["analytics", "1y"], queryFn: () => fetchAnalytics("1y") });
+  const { data: fx } = useQuery({ queryKey: ["fxexposure"], queryFn: fetchFxExposure });
+
   const qc = useQueryClient();
   const base_currency = useSettingsStore((s) => s.base_currency);
+  const ccy = portfolio?.base_currency || base_currency;
 
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ ticker: "", name: "", shares: "", avg_cost_native: "", currency: "USD" });
 
+  // Fetch 1-month historical for all tickers to compute monthly change
+  const tickers = (positions ?? []).map((p: Position) => p.ticker);
+  const monthlyQueries = tickers.map((ticker: string) =>
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    useQuery({
+      queryKey: ["hist-1m", ticker],
+      queryFn: () => fetchHistorical(ticker, "1m"),
+      enabled: tickers.length > 0,
+    })
+  );
+  const monthlyChange: Record<string, number | null> = {};
+  tickers.forEach((ticker: string, i: number) => {
+    const bars = monthlyQueries[i].data?.bars;
+    if (bars && bars.length >= 2) {
+      const first = bars[0].close;
+      const last = bars[bars.length - 1].close;
+      monthlyChange[ticker] = ((last - first) / first) * 100;
+    } else {
+      monthlyChange[ticker] = null;
+    }
+  });
+
   const addMutation = useMutation({
     mutationFn: upsertPosition,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["positions"] }); qc.invalidateQueries({ queryKey: ["portfolio"] }); setShowForm(false); setForm({ ticker: "", name: "", shares: "", avg_cost_native: "", currency: "USD" }); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["positions"] });
+      qc.invalidateQueries({ queryKey: ["portfolio"] });
+      setShowForm(false);
+      setForm({ ticker: "", name: "", shares: "", avg_cost_native: "", currency: "USD" });
+    },
   });
 
   const delMutation = useMutation({
     mutationFn: deletePosition,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["positions"] }); qc.invalidateQueries({ queryKey: ["portfolio"] }); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["positions"] });
+      qc.invalidateQueries({ queryKey: ["portfolio"] });
+    },
   });
 
   if (isLoading) return <div className="text-bloomberg-muted text-xs p-4">Loading…</div>;
 
+  // Allocation pie data from portfolio
+  const pieData = (portfolio?.rows ?? []).map((r) => ({ name: r.ticker, value: r.value_base }));
+
+  // Weight vs Target from rebalancing
+  const weightData = (rebalancing ?? []).map((r) => ({
+    ticker: r.ticker,
+    current: parseFloat(r.current_weight.toFixed(2)),
+    target: parseFloat(r.target_weight.toFixed(2)),
+  }));
+
+  // Performance vs benchmark from analytics
+  const perfMap: Record<string, { portfolio?: number; benchmark?: number }> = {};
+  (analytics?.portfolio_series ?? []).forEach((p) => { perfMap[p.date] = { portfolio: p.value }; });
+  (analytics?.benchmark_series ?? []).forEach((b) => {
+    if (!perfMap[b.date]) perfMap[b.date] = {};
+    perfMap[b.date].benchmark = b.value;
+  });
+  const perfData = Object.entries(perfMap)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, v]) => ({ date, portfolio: v.portfolio, benchmark: v.benchmark }))
+    .filter((_, i, arr) => i % Math.max(1, Math.floor(arr.length / 60)) === 0); // downsample
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-bloomberg-gold text-xs font-bold uppercase tracking-widest">Positions</h1>
+        <h1 className="text-bloomberg-gold text-xs font-bold uppercase tracking-widest">Portfolio</h1>
         <button
           onClick={() => setShowForm(true)}
           className="flex items-center gap-1.5 text-[10px] text-bloomberg-muted border border-bloomberg-border px-3 py-1.5 hover:text-bloomberg-gold hover:border-bloomberg-gold"
@@ -77,19 +145,153 @@ export default function PortfolioPage() {
         </div>
       )}
 
-      {/* Positions table */}
+      {/* Intraday + Monthly table */}
+      {portfolio && (
+        <div className="bbg-card">
+          <p className="bbg-header">Holdings · Intraday & Monthly</p>
+          <div className="overflow-x-auto">
+            <table className="bbg-table">
+              <thead>
+                <tr>
+                  <th>Ticker</th>
+                  <th>Name</th>
+                  <th className="text-right">Price</th>
+                  <th className="text-right">1D%</th>
+                  <th className="text-right">1M%</th>
+                  <th className="text-right">Shares</th>
+                  <th className="text-right">Value</th>
+                  <th className="text-right">P&L</th>
+                  <th className="text-right">P&L%</th>
+                  <th className="text-right">Weight%</th>
+                  <th>Src</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {portfolio.rows.map((row) => (
+                  <tr key={row.ticker}>
+                    <td className="text-bloomberg-gold font-medium">{row.ticker}</td>
+                    <td className="text-bloomberg-muted">{row.name}</td>
+                    <td className="text-right">{fmtCurrency(row.price_native, row.currency)}</td>
+                    <td className={`text-right ${colorClass(row.change_pct_1d)}`}>{fmtPct(row.change_pct_1d)}</td>
+                    <td className={`text-right ${colorClass(monthlyChange[row.ticker])}`}>
+                      {monthlyChange[row.ticker] != null ? fmtPct(monthlyChange[row.ticker]) : "—"}
+                    </td>
+                    <td className="text-right text-bloomberg-muted">{row.shares.toFixed(4)}</td>
+                    <td className="text-right">{fmtCurrency(row.value_base, ccy)}</td>
+                    <td className={`text-right ${colorClass(row.unrealized_pnl)}`}>
+                      {row.unrealized_pnl != null ? fmtCurrency(row.unrealized_pnl, ccy) : "—"}
+                    </td>
+                    <td className={`text-right ${colorClass(row.unrealized_pnl_pct)}`}>{fmtPct(row.unrealized_pnl_pct)}</td>
+                    <td className="text-right text-bloomberg-muted">{row.weight.toFixed(1)}%</td>
+                    <td className="text-bloomberg-muted text-[10px]">{row.data_source}</td>
+                    <td>
+                      <button onClick={() => { if (confirm(`Delete ${row.ticker}?`)) delMutation.mutate(row.ticker); }}
+                        className="text-bloomberg-muted hover:text-bloomberg-red">
+                        <Trash2 size={11} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Charts row */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Allocation donut */}
+        {pieData.length > 0 && (
+          <div className="bbg-card">
+            <p className="bbg-header">Allocation</p>
+            <ResponsiveContainer width="100%" height={220}>
+              <PieChart>
+                <Pie data={pieData} cx="50%" cy="50%" innerRadius={55} outerRadius={85}
+                  paddingAngle={2} dataKey="value">
+                  {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                </Pie>
+                <Tooltip contentStyle={{ background: "#111820", border: "1px solid #1e2535", fontSize: 11 }}
+                  formatter={(v: number) => fmtCurrency(v, ccy)} />
+                <Legend iconSize={8} wrapperStyle={{ fontSize: 10 }} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+
+        {/* Weight vs Target */}
+        {weightData.length > 0 && (
+          <div className="bbg-card">
+            <p className="bbg-header">Weight vs Target</p>
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={weightData} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e2535" />
+                <XAxis dataKey="ticker" tick={{ fontSize: 9, fill: "#f3a712" }} tickLine={false} />
+                <YAxis tick={{ fontSize: 9, fill: "#8a9bb5" }} tickLine={false} axisLine={false}
+                  tickFormatter={(v) => `${v}%`} width={30} />
+                <Tooltip contentStyle={{ background: "#111820", border: "1px solid #1e2535", fontSize: 11 }}
+                  formatter={(v: number) => `${v.toFixed(2)}%`} />
+                <Legend iconSize={8} wrapperStyle={{ fontSize: 10 }} />
+                <Bar dataKey="current" fill="#f3a712" barSize={10} name="Current%" />
+                <Bar dataKey="target" fill="#38b2ff" barSize={10} name="Target%" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </div>
+
+      {/* Performance vs Benchmark */}
+      {perfData.length > 1 && (
+        <div className="bbg-card">
+          <p className="bbg-header">Performance vs {analytics?.metrics.benchmark_ticker ?? "VOO"} (1Y)</p>
+          <ResponsiveContainer width="100%" height={200}>
+            <LineChart data={perfData} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e2535" />
+              <XAxis dataKey="date" tick={{ fontSize: 9, fill: "#8a9bb5" }} tickLine={false} interval="preserveStartEnd" />
+              <YAxis tick={{ fontSize: 9, fill: "#8a9bb5" }} tickLine={false} axisLine={false}
+                tickFormatter={(v) => `${v?.toFixed(0)}%`} width={40} />
+              <Tooltip contentStyle={{ background: "#111820", border: "1px solid #1e2535", fontSize: 11 }}
+                formatter={(v: number) => `${v?.toFixed(2)}%`} />
+              <Legend wrapperStyle={{ fontSize: 10 }} />
+              <Line type="monotone" dataKey="portfolio" stroke="#f3a712" strokeWidth={1.5} dot={false} name="Portfolio" />
+              <Line type="monotone" dataKey="benchmark" stroke="#8a9bb5" strokeWidth={1} dot={false}
+                name={analytics?.metrics.benchmark_ticker ?? "VOO"} strokeDasharray="4 4" />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Currency Exposure */}
+      {fx && Object.keys(fx).length > 0 && (
+        <div className="bbg-card">
+          <p className="bbg-header">Currency Exposure</p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {Object.entries(fx as Record<string, number>)
+              .sort(([, a], [, b]) => b - a)
+              .map(([currency, pct]) => (
+                <div key={currency} className="text-center">
+                  <p className="text-bloomberg-gold text-sm font-bold">{currency}</p>
+                  <p className="text-bloomberg-text text-xs">{fmtPct(pct)}</p>
+                  <div className="mt-1 h-1 bg-bloomberg-border rounded">
+                    <div className="h-1 rounded" style={{ width: `${Math.min(pct, 100)}%`, background: "#f3a712" }} />
+                  </div>
+                </div>
+              ))}
+          </div>
+        </div>
+      )}
+
+      {/* Positions management table */}
       <div className="bbg-card">
+        <p className="bbg-header">Position Records</p>
         <div className="overflow-x-auto">
           <table className="bbg-table">
             <thead>
               <tr>
-                <th>Ticker</th>
-                <th>Name</th>
+                <th>Ticker</th><th>Name</th>
                 <th className="text-right">Shares</th>
                 <th className="text-right">Avg Cost</th>
-                <th>Currency</th>
-                <th>Market</th>
-                <th></th>
+                <th>Currency</th><th>Market</th><th></th>
               </tr>
             </thead>
             <tbody>
