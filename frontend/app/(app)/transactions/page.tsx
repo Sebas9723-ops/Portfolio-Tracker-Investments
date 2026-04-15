@@ -51,15 +51,13 @@ export default function TransactionsPage() {
             {(["ticker", "date", "quantity", "price_native", "fee_native", "currency", "comment"] as const).map((field) => (
               <div key={field}>
                 <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">{field}</label>
-                {field === "action" ? null : (
-                  <input
-                    type={["date"].includes(field) ? "date" : ["quantity", "price_native", "fee_native"].includes(field) ? "number" : "text"}
-                    className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
-                    value={(form as Record<string, string>)[field]}
-                    onChange={(e) => setForm((f) => ({ ...f, [field]: e.target.value }))}
-                    step="any"
-                  />
-                )}
+                <input
+                  type={["date"].includes(field) ? "date" : ["quantity", "price_native", "fee_native"].includes(field) ? "number" : "text"}
+                  className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
+                  value={(form as Record<string, string>)[field]}
+                  onChange={(e) => setForm((f) => ({ ...f, [field]: e.target.value }))}
+                  step="any"
+                />
               </div>
             ))}
             <div>

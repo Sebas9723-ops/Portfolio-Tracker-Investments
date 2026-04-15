@@ -15,7 +15,7 @@ export default function IncomePage() {
   const monthlyData = Object.entries(byMonth).sort(([a], [b]) => a.localeCompare(b))
     .map(([month, amount]) => ({ month, amount }));
 
-  const totalIncome = Object.values(byMonth).reduce((s, v) => s + v, 0);
+  const totalIncome = (Object.values(byMonth) as number[]).reduce((s, v) => s + v, 0);
 
   return (
     <div className="space-y-4">

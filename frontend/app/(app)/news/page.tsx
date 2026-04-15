@@ -37,7 +37,7 @@ export default function NewsPage() {
                   </span>
                 </div>
                 <p className="text-bloomberg-text text-xs font-medium leading-snug">{a.headline as string}</p>
-                {a.summary && (
+                {!!a.summary && (
                   <p className="text-bloomberg-muted text-[10px] mt-1 line-clamp-2">{a.summary as string}</p>
                 )}
               </div>
