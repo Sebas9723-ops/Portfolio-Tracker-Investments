@@ -203,6 +203,206 @@ def compute_risk_budget(
     return {t: round(float(rc[i]) * 100, 2) for i, t in enumerate(tickers)}
 
 
+def compute_extended_ratios_full(
+    portfolio_returns: pd.Series,
+    benchmark_returns: pd.Series,
+    risk_free_rate: float = 0.045,
+) -> dict:
+    """Extended set of performance ratios beyond compute_extended_ratios."""
+    from scipy import stats as sp_stats
+
+    if portfolio_returns.empty:
+        return {}
+    p = portfolio_returns.dropna()
+    b = benchmark_returns.dropna().reindex(p.index).dropna()
+    p = p.reindex(b.index)
+    if len(p) < 20:
+        return {}
+
+    rfr_daily = risk_free_rate / 252
+    mu_p = p.mean() * 252
+    sigma_p = p.std() * np.sqrt(252)
+
+    cov = np.cov(p.values, b.values)
+    beta = cov[0, 1] / cov[1, 1] if cov[1, 1] > 0 else 0
+    mu_b = b.mean() * 252
+
+    # Treynor ratio
+    treynor = (mu_p - risk_free_rate) / beta if beta != 0 else None
+
+    # Omega ratio
+    gains = (p[p > rfr_daily] - rfr_daily).sum()
+    losses = (rfr_daily - p[p <= rfr_daily]).sum()
+    omega = gains / losses if losses > 0 else None
+
+    # Tail ratio: 95th / |5th| percentile
+    p95 = float(np.percentile(p.values, 95))
+    p05 = float(np.percentile(p.values, 5))
+    tail_ratio = p95 / abs(p05) if p05 != 0 else None
+
+    # Higher moments
+    skewness = float(sp_stats.skew(p.values))
+    kurtosis_excess = float(sp_stats.kurtosis(p.values))
+
+    # Win-rate vs benchmark
+    win_rate = float((p > b).mean() * 100)
+
+    # Tracking error + IR
+    active = p - b
+    te = float(active.std() * np.sqrt(252) * 100)
+    ir = (active.mean() * 252) / (active.std() * np.sqrt(252)) if active.std() > 0 else 0
+
+    # Ulcer index
+    cum = (1 + p).cumprod()
+    dd_pct = (cum / cum.cummax() - 1) * 100
+    ulcer = float(np.sqrt((dd_pct ** 2).mean()))
+
+    # Martin ratio
+    martin = (mu_p - risk_free_rate) / (ulcer / 100) if ulcer > 0 else None
+
+    # % positive days
+    pct_positive_days = float((p > 0).mean() * 100)
+
+    return {
+        "treynor": round(float(treynor), 4) if treynor is not None else None,
+        "omega": round(float(omega), 4) if omega is not None else None,
+        "tail_ratio": round(float(tail_ratio), 4) if tail_ratio is not None else None,
+        "skewness": round(skewness, 4),
+        "kurtosis": round(kurtosis_excess, 4),
+        "pct_positive_days": round(pct_positive_days, 2),
+        "tracking_error": round(te, 3),
+        "information_ratio": round(float(ir), 3),
+        "ulcer_index": round(ulcer, 4),
+        "martin_ratio": round(float(martin), 4) if martin is not None else None,
+        "win_rate_vs_benchmark": round(win_rate, 2),
+        "beta": round(float(beta), 3),
+        "ann_return": round(float(mu_p * 100), 2),
+        "ann_vol": round(float(sigma_p * 100), 2),
+    }
+
+
+def compute_fama_french(
+    portfolio_returns: pd.Series,
+    hist: dict[str, pd.DataFrame],
+    risk_free_rate: float = 0.045,
+) -> dict:
+    """
+    Fama-French 3-factor regression using ETF proxies:
+      Market factor (Mkt-RF): SPY excess return
+      Size factor (SMB):      IWM - SPY (small-cap minus large-cap)
+      Value factor (HML):     IVE - IVW (value minus growth)
+    """
+    def _get_ret(ticker: str) -> pd.Series:
+        df = hist.get(ticker, pd.DataFrame())
+        if df.empty:
+            return pd.Series(dtype=float)
+        col = "Close" if "Close" in df.columns else df.columns[0]
+        return df[col].pct_change().dropna()
+
+    spy = _get_ret("SPY")
+    iwm = _get_ret("IWM")
+    ive = _get_ret("IVE")
+    ivw = _get_ret("IVW")
+
+    rfr_daily = risk_free_rate / 252
+    p = portfolio_returns.dropna()
+
+    # Intersect all indices
+    common_idx = p.index
+    for s in [spy, iwm, ive, ivw]:
+        if not s.empty:
+            common_idx = common_idx.intersection(s.index)
+
+    if len(common_idx) < 50:
+        return {}
+
+    p_exc = p.reindex(common_idx) - rfr_daily
+    mkt_rf = spy.reindex(common_idx) - rfr_daily
+    smb = iwm.reindex(common_idx) - spy.reindex(common_idx)
+    hml = ive.reindex(common_idx) - ivw.reindex(common_idx)
+
+    X = np.column_stack([np.ones(len(common_idx)), mkt_rf.values, smb.values, hml.values])
+    y = p_exc.values
+
+    try:
+        coeffs, residuals, rank, _ = np.linalg.lstsq(X, y, rcond=None)
+        y_pred = X @ coeffs
+        ss_res = np.sum((y - y_pred) ** 2)
+        ss_tot = np.sum((y - y.mean()) ** 2)
+        r_sq = 1 - ss_res / ss_tot if ss_tot > 0 else 0
+
+        n, k = len(y), 4
+        mse = ss_res / max(n - k, 1)
+        cov_mat = mse * np.linalg.pinv(X.T @ X)
+        se = np.sqrt(np.diag(cov_mat))
+        t_stats = coeffs / (se + 1e-12)
+
+        return {
+            "alpha_annual": round(float(coeffs[0] * 252 * 100), 3),
+            "beta_mkt": round(float(coeffs[1]), 3),
+            "beta_smb": round(float(coeffs[2]), 3),
+            "beta_hml": round(float(coeffs[3]), 3),
+            "r_squared": round(float(r_sq), 4),
+            "t_alpha": round(float(t_stats[0]), 3),
+            "t_mkt": round(float(t_stats[1]), 3),
+            "t_smb": round(float(t_stats[2]), 3),
+            "t_hml": round(float(t_stats[3]), 3),
+            "n_obs": int(len(common_idx)),
+        }
+    except Exception:
+        return {}
+
+
+def compute_per_ticker_sharpe(
+    hist: dict[str, pd.DataFrame],
+    tickers: list[str],
+    risk_free_rate: float = 0.045,
+) -> dict[str, dict]:
+    """Individual Sharpe ratio, annualized return, and vol for each ticker."""
+    result = {}
+    for ticker in tickers:
+        df = hist.get(ticker, pd.DataFrame())
+        if df.empty:
+            continue
+        col = "Close" if "Close" in df.columns else df.columns[0]
+        prices = df[col].dropna()
+        if len(prices) < 20:
+            continue
+        r = prices.pct_change().dropna()
+        ann_ret = float(r.mean() * 252)
+        ann_vol = float(r.std() * np.sqrt(252))
+        sharpe = (ann_ret - risk_free_rate) / ann_vol if ann_vol > 0 else 0
+        result[ticker] = {
+            "ann_return": round(ann_ret * 100, 2),
+            "ann_vol": round(ann_vol * 100, 2),
+            "sharpe": round(sharpe, 3),
+        }
+    return result
+
+
+def compute_vol_regime(
+    portfolio_returns: pd.Series,
+    window: int = 21,
+) -> dict:
+    """Rolling volatility with Low / Medium / High regime classification."""
+    if portfolio_returns.empty or len(portfolio_returns) < window + 5:
+        return {"series": [], "low_threshold": 0, "high_threshold": 0}
+
+    roll_vol = portfolio_returns.rolling(window).std() * np.sqrt(252) * 100
+    roll_vol = roll_vol.dropna()
+
+    p33 = float(roll_vol.quantile(0.33))
+    p67 = float(roll_vol.quantile(0.67))
+
+    series = []
+    for dt, vol in roll_vol.items():
+        v = float(vol)
+        regime = "low" if v < p33 else ("medium" if v < p67 else "high")
+        series.append({"date": str(dt.date()), "vol": round(v, 3), "regime": regime})
+
+    return {"series": series, "low_threshold": round(p33, 3), "high_threshold": round(p67, 3)}
+
+
 def compute_fx_exposure(
     portfolio_rows: list[dict],
     base_currency: str = "USD",

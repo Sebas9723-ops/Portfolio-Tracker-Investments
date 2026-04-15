@@ -6,7 +6,11 @@ from app.compute.returns import (
     build_portfolio_returns, compute_twr, compute_monthly_returns,
     compute_drawdown_episodes, cum_return_series
 )
-from app.compute.risk import compute_extended_ratios, compute_rolling_metrics
+from app.compute.risk import (
+    compute_extended_ratios, compute_rolling_metrics,
+    compute_extended_ratios_full, compute_fama_french,
+    compute_per_ticker_sharpe, compute_vol_regime,
+)
 from app.models.analytics import AnalyticsResponse, PerformanceMetrics
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
@@ -86,3 +90,66 @@ def performance(
         portfolio_series=portfolio_series,
         benchmark_series=benchmark_series,
     )
+
+
+@router.get("/extended")
+def extended_analytics(
+    period: str = Query(default="2y"),
+    user_id: str = Depends(get_user_id),
+):
+    """Extended ratios, Fama-French 3-factor, and per-ticker Sharpe."""
+    import pandas as pd
+
+    db = get_admin_client()
+    settings_res = db.table("user_settings").select("*").eq("user_id", user_id).maybe_single().execute()
+    settings = settings_res.data or {}
+    rfr = float(settings.get("risk_free_rate", get_risk_free_rate()))
+    bm_ticker = settings.get("preferred_benchmark", "VOO")
+
+    tickers, weights = _get_positions_and_weights(user_id)
+    ff_proxies = ["SPY", "IWM", "IVE", "IVW"]
+    all_tickers = list(set(tickers + [bm_ticker] + ff_proxies))
+
+    hist = get_historical_multi(all_tickers, period=period)
+
+    from app.compute.returns import build_portfolio_returns
+    portfolio_returns = build_portfolio_returns(
+        {t: hist[t] for t in tickers if t in hist},
+        {t: weights.get(t, 0) for t in tickers},
+    )
+
+    bm_hist = hist.get(bm_ticker)
+    if bm_hist is not None and not bm_hist.empty:
+        col = "Close" if "Close" in bm_hist.columns else bm_hist.columns[0]
+        bm_returns = bm_hist[col].pct_change().dropna()
+    else:
+        bm_returns = pd.Series(dtype=float)
+
+    extended = compute_extended_ratios_full(portfolio_returns, bm_returns, rfr)
+    ff = compute_fama_french(portfolio_returns, hist, rfr)
+    per_ticker = compute_per_ticker_sharpe(hist, tickers, rfr)
+
+    return {
+        "extended_ratios": extended,
+        "fama_french": ff,
+        "per_ticker_sharpe": per_ticker,
+        "benchmark_ticker": bm_ticker,
+    }
+
+
+@router.get("/vol-regime")
+def vol_regime_endpoint(
+    period: str = Query(default="2y"),
+    window: int = Query(default=21),
+    user_id: str = Depends(get_user_id),
+):
+    """Rolling volatility with Low/Medium/High regime classification."""
+    from app.compute.returns import build_portfolio_returns
+
+    tickers, weights = _get_positions_and_weights(user_id)
+    hist = get_historical_multi(tickers, period=period)
+    portfolio_returns = build_portfolio_returns(
+        {t: hist[t] for t in tickers if t in hist},
+        {t: weights.get(t, 0) for t in tickers},
+    )
+    return compute_vol_regime(portfolio_returns, window=window)

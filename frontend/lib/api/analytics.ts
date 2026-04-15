@@ -33,6 +33,25 @@ export const fetchFxExposure = () =>
 export const fetchRollingMetrics = (window = 63, period = "2y") =>
   apiClient.get("/api/risk/rolling", { params: { window, period } }).then((r) => r.data);
 
+export const fetchExtendedAnalytics = (period = "2y") =>
+  apiClient
+    .get<{
+      extended_ratios: Record<string, number | null>;
+      fama_french: Record<string, number>;
+      per_ticker_sharpe: Record<string, { ann_return: number; ann_vol: number; sharpe: number }>;
+      benchmark_ticker: string;
+    }>("/api/analytics/extended", { params: { period } })
+    .then((r) => r.data);
+
+export const fetchVolRegime = (period = "2y", window = 21) =>
+  apiClient
+    .get<{
+      series: { date: string; vol: number; regime: "low" | "medium" | "high" }[];
+      low_threshold: number;
+      high_threshold: number;
+    }>("/api/analytics/vol-regime", { params: { period, window } })
+    .then((r) => r.data);
+
 export const fetchRequiredForMaxSharpe = (params?: { period?: string; max_single_asset?: number }) =>
   apiClient
     .get<{
