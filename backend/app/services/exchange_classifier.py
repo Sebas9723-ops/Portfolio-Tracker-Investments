@@ -4,12 +4,17 @@ Mirrors the logic from data_providers.py and app_core.py.
 """
 
 # Tickers where yfinance symbol differs from display symbol
-PROXY_TICKER_MAP: dict[str, str] = {}
+PROXY_TICKER_MAP: dict[str, str] = {
+    # EIMI.UK is the USD share class of iShares MSCI EM IMI on LSE.
+    # yfinance doesn't support .UK tickers directly; EIMI.L (GBP class)
+    # tracks the same index and gives the closest available price.
+    "EIMI.UK": "EIMI.L",
+}
 
 # Tickers where currency is not derivable from the suffix
 TICKER_CURRENCY_OVERRIDE: dict[str, str] = {
     "IGLN.L": "USD",   # physically-backed gold, priced in USD on LSE
-    "EIMI.UK": "USD",  # USD share class of iShares MSCI EM IMI on LSE
+    "EIMI.UK": "USD",  # USD share class — price from EIMI.L proxy, treated as USD
 }
 
 # Suffixes that identify non-US exchanges
