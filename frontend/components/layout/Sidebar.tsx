@@ -38,13 +38,13 @@ export function Sidebar() {
   const logout = useAuthStore((s) => s.logout);
 
   return (
-    <aside className="w-44 shrink-0 h-screen sticky top-0 flex flex-col"
-           style={{ background: "#0a0d12", borderRight: "1px solid #1e2535" }}>
+    <aside className="w-44 shrink-0 h-screen sticky top-0 flex flex-col bg-white"
+           style={{ borderRight: "1px solid #e2e8f0" }}>
       {/* Logo */}
-      <div className="px-4 py-4 border-b border-bloomberg-border">
-        <span className="text-bloomberg-gold font-bold text-sm tracking-widest">PORTFOLIO</span>
+      <div className="px-4 py-5 border-b border-bloomberg-border">
+        <span className="text-bloomberg-text font-bold text-sm tracking-tight">Portfolio</span>
         <br />
-        <span className="text-bloomberg-muted text-xs">TRACKER</span>
+        <span className="text-bloomberg-muted text-[11px]">Tracker</span>
       </div>
 
       {/* Nav */}
@@ -57,10 +57,10 @@ export function Sidebar() {
               key={item.href}
               href={item.href}
               className={cn(
-                "flex items-center gap-2 px-3 py-1.5 text-xs transition-colors",
+                "flex items-center gap-2 px-3 py-1.5 text-xs transition-colors rounded-lg mx-1",
                 pathname === item.href
-                  ? "text-bloomberg-gold bg-bloomberg-card border-l-2 border-bloomberg-gold"
-                  : "text-bloomberg-muted hover:text-bloomberg-text hover:bg-bloomberg-card"
+                  ? "text-bloomberg-text bg-bloomberg-bg font-semibold"
+                  : "text-bloomberg-muted hover:text-bloomberg-text hover:bg-bloomberg-bg"
               )}
             >
               <item.icon size={13} />
@@ -73,7 +73,7 @@ export function Sidebar() {
       {/* Logout */}
       <button
         onClick={logout}
-        className="flex items-center gap-2 px-3 py-3 text-xs text-bloomberg-muted hover:text-bloomberg-red border-t border-bloomberg-border"
+        className="flex items-center gap-2 px-4 py-3 text-xs text-bloomberg-muted hover:text-red-500 border-t border-bloomberg-border transition-colors"
       >
         <LogOut size={13} />
         Logout

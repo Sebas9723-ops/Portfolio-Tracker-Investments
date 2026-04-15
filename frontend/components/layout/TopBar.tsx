@@ -13,8 +13,8 @@ export function TopBar() {
 
   return (
     <header
-      className="h-8 flex items-center justify-between px-4 shrink-0 text-xs"
-      style={{ background: "#0a0d12", borderBottom: "1px solid #1e2535" }}
+      className="h-9 flex items-center justify-between px-4 shrink-0 text-xs bg-white"
+      style={{ borderBottom: "1px solid #e2e8f0" }}
     >
       {/* Market watch strip */}
       <div className="flex items-center gap-6">
@@ -38,7 +38,7 @@ export function TopBar() {
 
       {/* Status */}
       <div className="flex items-center gap-2 text-bloomberg-muted">
-        {isFetching && <RefreshCw size={11} className="animate-spin text-bloomberg-gold" />}
+        {isFetching && <RefreshCw size={11} className="animate-spin text-bloomberg-muted" />}
         <span className="text-bloomberg-text-dim">
           {new Date().toLocaleTimeString("en-US", { hour12: false })}
         </span>

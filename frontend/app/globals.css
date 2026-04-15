@@ -1,86 +1,128 @@
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300;0,14..32,400;0,14..32,500;0,14..32,600;0,14..32,700;1,14..32,400&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* ── CSS Variables ─────────────────────────────────────────────────────────── */
 :root {
-  --bg: #0b0f14;
-  --card: #111820;
-  --border: #1e2535;
-  --gold: #f3a712;
-  --green: #4dff4d;
-  --red: #ff4d4d;
-  --muted: #8a9bb5;
-  --text: #d4dde8;
+  --bg:      #f1f5f9;
+  --card:    #ffffff;
+  --border:  #e2e8f0;
+  --accent:  #0f172a;
+  --green:   #16a34a;
+  --red:     #dc2626;
+  --muted:   #64748b;
+  --text:    #0f172a;
+  --text-dim:#94a3b8;
+  --shadow:  0 1px 3px 0 rgba(0,0,0,0.07), 0 1px 2px -1px rgba(0,0,0,0.05);
 }
 
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
+/* ── Reset ─────────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-html,
-body {
+html, body {
   background-color: var(--bg);
   color: var(--text);
-  font-family: "IBM Plex Mono", "Courier New", monospace;
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 13px;
   line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 6px; height: 6px; }
+/* ── Scrollbar ─────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 
-/* Bloomberg table style */
+/* ── Card ──────────────────────────────────────────────────────────────────── */
+.bbg-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: var(--shadow);
+}
+
+/* ── Section header ────────────────────────────────────────────────────────── */
+.bbg-header {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 10px;
+  margin-bottom: 14px;
+  letter-spacing: -0.01em;
+}
+
+/* ── Table ─────────────────────────────────────────────────────────────────── */
 .bbg-table { width: 100%; border-collapse: collapse; }
+
 .bbg-table th {
-  background: #0d1219;
-  color: var(--gold);
+  background: #f8fafc;
+  color: #475569;
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
-  padding: 6px 10px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border);
   text-align: left;
   white-space: nowrap;
 }
 .bbg-table td {
-  padding: 5px 10px;
-  border-bottom: 1px solid #151d27;
-  font-size: 12px;
+  padding: 9px 12px;
+  border-bottom: 1px solid #f1f5f9;
+  font-size: 12.5px;
   white-space: nowrap;
+  color: var(--text);
 }
-.bbg-table tr:hover td { background: #151d27; }
-.bbg-table tr:nth-child(even) td { background: #0d1219; }
-.bbg-table tr:nth-child(even):hover td { background: #151d27; }
+.bbg-table tr:last-child td { border-bottom: none; }
+.bbg-table tr:hover td { background: #f8fafc; }
 
-/* Card */
-.bbg-card {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 2px;
-  padding: 16px;
-}
-
-/* Section header */
-.bbg-header {
-  color: var(--gold);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 6px;
-  margin-bottom: 12px;
-}
-
+/* ── Helpers ───────────────────────────────────────────────────────────────── */
 .positive { color: var(--green); }
 .negative { color: var(--red); }
 .muted    { color: var(--muted); }
-.gold     { color: var(--gold); }
+.gold     { color: var(--accent); }
+
+/* ── Recharts overrides (light theme) ─────────────────────────────────────── */
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+  stroke: #e2e8f0 !important;
+}
+.recharts-text.recharts-cartesian-axis-tick-value tspan {
+  fill: #94a3b8 !important;
+  font-family: "Inter", sans-serif !important;
+  font-size: 10px !important;
+}
+.recharts-reference-line-line { stroke: #cbd5e1 !important; }
+
+/* Tooltip — !important overrides inline contentStyle */
+.recharts-default-tooltip {
+  background-color: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1) !important;
+  font-family: "Inter", sans-serif !important;
+}
+.recharts-tooltip-label {
+  color: #0f172a !important;
+  font-weight: 600 !important;
+  font-size: 12px !important;
+  margin-bottom: 4px !important;
+}
+.recharts-tooltip-item {
+  color: #374151 !important;
+  font-size: 12px !important;
+}
+.recharts-tooltip-item-name { color: #64748b !important; }
+.recharts-legend-item-text {
+  color: #64748b !important;
+  font-size: 11px !important;
+  font-family: "Inter", sans-serif !important;
+}
+.recharts-polar-grid-concentric path,
+.recharts-polar-grid-angle line { stroke: #e2e8f0 !important; }
