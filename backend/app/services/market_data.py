@@ -123,27 +123,29 @@ def _fetch_quotes_yfinance(tickers: list[str]) -> dict[str, QuoteResponse]:
     results: dict[str, QuoteResponse] = {}
     try:
         yf_map = {yf_ticker(t): t for t in tickers}
-        data = yf.download(list(yf_map.keys()), period="5d", interval="1d",
+        # Use 1h interval to get the most recent price within the last hour
+        data = yf.download(list(yf_map.keys()), period="5d", interval="1h",
                            auto_adjust=True, progress=False, threads=True)
         closes = data["Close"] if "Close" in data.columns else data
+        # Also fetch daily data to get accurate prev_close for 1d change calculation
+        daily = yf.download(list(yf_map.keys()), period="5d", interval="1d",
+                            auto_adjust=True, progress=False, threads=True)
+        daily_closes = daily["Close"] if "Close" in daily.columns else daily
         for yft, orig in yf_map.items():
             try:
                 series = closes[yft].dropna() if yft in closes.columns else pd.Series()
-                if len(series) >= 2:
+                daily_series = daily_closes[yft].dropna() if yft in daily_closes.columns else pd.Series()
+                if len(series) >= 1:
                     price = float(series.iloc[-1])
-                    prev = float(series.iloc[-2])
-                    change = price - prev
-                    change_pct = change / prev * 100
+                    # Use yesterday's daily close as prev_close for accurate 1d change
+                    prev = float(daily_series.iloc[-2]) if len(daily_series) >= 2 else None
+                    change = (price - prev) if prev else None
+                    change_pct = (change / prev * 100) if (prev and change is not None) else None
                     results[orig] = QuoteResponse(
                         ticker=orig, price=price, change=change, change_pct=change_pct,
                         prev_close=prev, currency=get_native_currency(orig),
-                        source="yfinance", delay_minutes=15,
+                        source="yfinance", delay_minutes=60,
                         as_of=datetime.now(tz=timezone.utc),
-                    )
-                elif len(series) == 1:
-                    results[orig] = QuoteResponse(
-                        ticker=orig, price=float(series.iloc[-1]),
-                        currency=get_native_currency(orig), source="yfinance", delay_minutes=15,
                     )
             except Exception:
                 results[orig] = _fetch_quote_yfinance(orig)
