@@ -1,60 +1,169 @@
 "use client";
-import { usePortfolio, useSaveSnapshot } from "@/lib/hooks/usePortfolio";
-import { MetricCard } from "@/components/shared/MetricCard";
-import { fmtCurrency, fmtPct, colorClass, fmtDate } from "@/lib/formatters";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { usePortfolio, useSnapshots, useSaveSnapshot } from "@/lib/hooks/usePortfolio";
+import { fetchTransactions } from "@/lib/api/transactions";
+import { fmtCurrency, fmtPct, fmtDate } from "@/lib/formatters";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import {
-  PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend,
+  PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
+  BarChart, Bar,
 } from "recharts";
-import { useSnapshots } from "@/lib/hooks/usePortfolio";
-import { Save, RefreshCw } from "lucide-react";
+import { Save, RefreshCw, TrendingUp, TrendingDown } from "lucide-react";
+import type { Snapshot } from "@/lib/types";
+import Link from "next/link";
 
-const COLORS = ["#f3a712", "#4dff4d", "#ff4d4d", "#38b2ff", "#c084fc", "#fb923c", "#34d399"];
+// ── Colors ────────────────────────────────────────────────────────────────────
+const PIE_COLORS = ["#f3a712", "#38b2ff", "#4dff4d", "#c084fc", "#fb923c", "#34d399", "#ff6b6b", "#60a5fa"];
 
+function tickerBadgeColor(ticker: string): string {
+  let h = 0;
+  for (let i = 0; i < ticker.length; i++) h = ticker.charCodeAt(i) + ((h << 5) - h);
+  return PIE_COLORS[Math.abs(h) % PIE_COLORS.length];
+}
+
+// ── Period filter ─────────────────────────────────────────────────────────────
+const PERIODS = ["1W", "1M", "YTD", "1Y", "Max"] as const;
+type Period = typeof PERIODS[number];
+
+function filterSnaps(snaps: Snapshot[], period: Period): Snapshot[] {
+  const ms = (d: number) => d * 864e5;
+  const now = new Date();
+  const cutoffs: Record<Period, Date | null> = {
+    "1W":  new Date(Date.now() - ms(7)),
+    "1M":  new Date(Date.now() - ms(30)),
+    "YTD": new Date(now.getFullYear(), 0, 1),
+    "1Y":  new Date(Date.now() - ms(365)),
+    "Max": null,
+  };
+  const c = cutoffs[period];
+  if (!c) return snaps;
+  return snaps.filter((s) => new Date(s.snapshot_date) >= c!);
+}
+
+// ── Center label for donut ────────────────────────────────────────────────────
+function DonutCenter({ cx, cy, value, ccy }: { cx: number; cy: number; value: number; ccy: string }) {
+  return (
+    <g>
+      <text x={cx} y={cy - 10} textAnchor="middle" fill="#8a9bb5" fontSize={9} fontFamily="IBM Plex Mono, monospace">
+        Total Net Worth
+      </text>
+      <text x={cx} y={cy + 12} textAnchor="middle" fill="#f3f4f6" fontSize={15} fontWeight="bold" fontFamily="IBM Plex Mono, monospace">
+        {fmtCurrency(value, ccy, true)}
+      </text>
+    </g>
+  );
+}
+
+// ── Badge ─────────────────────────────────────────────────────────────────────
+function TickerBadge({ ticker }: { ticker: string }) {
+  const color = tickerBadgeColor(ticker);
+  const initials = ticker.replace(/[^A-Z]/g, "").slice(0, 2) || ticker.slice(0, 2).toUpperCase();
+  return (
+    <span
+      className="inline-flex items-center justify-center w-8 h-8 rounded-full text-[10px] font-bold text-bloomberg-bg shrink-0"
+      style={{ backgroundColor: color }}
+    >
+      {initials}
+    </span>
+  );
+}
+
+// ── Positive/negative ─────────────────────────────────────────────────────────
+function Chg({ v, pct = false, className = "" }: { v: number | null | undefined; pct?: boolean; className?: string }) {
+  if (v == null) return <span className="text-bloomberg-muted">—</span>;
+  const pos = v >= 0;
+  return (
+    <span className={`flex items-center gap-0.5 ${pos ? "text-green-400" : "text-red-400"} ${className}`}>
+      {pos ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
+      {pct ? fmtPct(v) : `${pos ? "+" : ""}${v.toFixed(2)}`}
+    </span>
+  );
+}
+
+// ── Page ──────────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
+  const [chartPeriod, setChartPeriod] = useState<Period>("Max");
+
   const { data: portfolio, isLoading, isFetching } = usePortfolio();
   const { data: snapshots } = useSnapshots();
   const { mutate: saveSnap, isPending: saving } = useSaveSnapshot();
+  const { data: transactions } = useQuery({ queryKey: ["transactions"], queryFn: fetchTransactions });
   const base_currency = useSettingsStore((s) => s.base_currency);
 
   if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-64 text-bloomberg-muted text-xs">
-        Loading portfolio…
-      </div>
-    );
+    return <div className="flex items-center justify-center h-64 text-bloomberg-muted text-xs">Loading portfolio…</div>;
   }
-
   if (!portfolio || portfolio.rows.length === 0) {
     return (
-      <div className="flex items-center justify-center h-64 text-bloomberg-muted text-xs">
-        No positions found. Add positions in the Portfolio page.
+      <div className="flex flex-col items-center justify-center h-64 gap-3 text-bloomberg-muted text-xs">
+        <p>No positions found.</p>
+        <Link href="/manage" className="text-bloomberg-gold border border-bloomberg-gold px-4 py-1.5 text-[10px] hover:opacity-80">
+          + Add Positions
+        </Link>
       </div>
     );
   }
 
   const ccy = portfolio.base_currency || base_currency;
+  const totalValue = portfolio.total_value_base;
+  const dayChange = portfolio.total_day_change_base ?? 0;
+  const dayChangePct = totalValue > 0 ? (dayChange / (totalValue - dayChange)) * 100 : 0;
+
+  // Chart data — filtered snapshots sorted by date
+  const allSnaps = (snapshots ?? [])
+    .slice()
+    .sort((a, b) => a.snapshot_date.localeCompare(b.snapshot_date));
+  const filteredSnaps = filterSnaps(allSnaps, chartPeriod);
+  const chartData = filteredSnaps.map((s) => ({ date: s.snapshot_date, value: s.total_value_base ?? 0 }));
+
+  // Period P&L from chart range
+  const periodStart = chartData[0]?.value ?? totalValue;
+  const periodChange = totalValue - periodStart;
+  const periodChangePct = periodStart > 0 ? (periodChange / periodStart) * 100 : 0;
+
+  // Allocation donut
   const pieData = portfolio.rows.map((r) => ({ name: r.ticker, value: r.value_base }));
 
-  // Snapshot chart data
-  const chartData = snapshots
-    ?.slice()
-    .sort((a, b) => a.snapshot_date.localeCompare(b.snapshot_date))
-    .map((s) => ({
-      date: s.snapshot_date,
-      value: s.total_value_base ?? 0,
-    })) ?? [];
+  // Dividend transactions
+  const divTxs = (transactions ?? []).filter((t) => t.action === "DIVIDEND");
+  const totalDivReceived = divTxs.reduce((s, t) => s + t.quantity * t.price_native, 0);
+  const ttmCutoff = new Date(); ttmCutoff.setFullYear(ttmCutoff.getFullYear() - 1);
+  const ttmDivs = divTxs
+    .filter((t) => new Date(t.date) >= ttmCutoff)
+    .reduce((s, t) => s + t.quantity * t.price_native, 0);
+  const divYieldTTM = totalValue > 0 ? (ttmDivs / totalValue) * 100 : 0;
+  const divYoC = (portfolio.total_invested_base ?? 0) > 0
+    ? (ttmDivs / portfolio.total_invested_base!) * 100
+    : 0;
+
+  // Dividends by year for bar chart
+  const divByYear: Record<number, number> = {};
+  divTxs.forEach((t) => {
+    const yr = new Date(t.date).getFullYear();
+    divByYear[yr] = (divByYear[yr] ?? 0) + t.quantity * t.price_native;
+  });
+  const divBarData = Object.entries(divByYear)
+    .map(([yr, amt]) => ({ year: yr, amount: amt }))
+    .sort((a, b) => Number(a.year) - Number(b.year));
+
+  // Performance breakdown
+  const invested = portfolio.total_invested_base ?? 0;
+  const priceGain = portfolio.total_unrealized_pnl ?? 0;
+  const priceGainPct = portfolio.total_unrealized_pnl_pct ?? 0;
+  const totalReturn = priceGain + totalDivReceived;
+  const winners = portfolio.rows.filter((r) => (r.unrealized_pnl ?? 0) >= 0).length;
+  const losers = portfolio.rows.length - winners;
 
   return (
     <div className="space-y-4">
-      {/* Header */}
+      {/* Top bar */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-bloomberg-gold text-xs font-bold uppercase tracking-widest">Dashboard</h1>
           <p className="text-bloomberg-muted text-[10px]">
-            As of {fmtDate(portfolio.as_of)} · {ccy}
-            {isFetching && " · refreshing…"}
+            {fmtDate(portfolio.as_of)}{isFetching && " · refreshing…"}
           </p>
         </div>
         <button
@@ -67,146 +176,377 @@ export default function DashboardPage() {
         </button>
       </div>
 
-      {/* KPI row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <MetricCard
-          label="Total Value"
-          value={fmtCurrency(portfolio.total_value_base, ccy)}
-          delta={portfolio.total_day_change_base != null
-            ? `${fmtCurrency(portfolio.total_day_change_base, ccy)} today`
-            : undefined}
-          deltaPositive={(portfolio.total_day_change_base ?? 0) >= 0}
-        />
-        <MetricCard
-          label="Invested"
-          value={portfolio.total_invested_base != null
-            ? fmtCurrency(portfolio.total_invested_base, ccy)
-            : "—"}
-        />
-        <MetricCard
-          label="Unrealized P&L"
-          value={portfolio.total_unrealized_pnl != null
-            ? fmtCurrency(portfolio.total_unrealized_pnl, ccy)
-            : "—"}
-          delta={portfolio.total_unrealized_pnl_pct != null
-            ? fmtPct(portfolio.total_unrealized_pnl_pct)
-            : undefined}
-          deltaPositive={(portfolio.total_unrealized_pnl ?? 0) >= 0}
-        />
-        <MetricCard
-          label="Positions"
-          value={String(portfolio.rows.length)}
-          sub={`${portfolio.rows.filter((r) => (r.unrealized_pnl ?? 0) >= 0).length} winning`}
-        />
-      </div>
+      {/* Two-column layout */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
 
-      {/* Charts row */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Allocation pie */}
-        <div className="bbg-card">
-          <p className="bbg-header">Allocation</p>
-          <ResponsiveContainer width="100%" height={220}>
-            <PieChart>
-              <Pie
-                data={pieData}
-                cx="50%"
-                cy="50%"
-                innerRadius={60}
-                outerRadius={90}
-                paddingAngle={2}
-                dataKey="value"
-              >
-                {pieData.map((_, i) => (
-                  <Cell key={i} fill={COLORS[i % COLORS.length]} />
+        {/* ── LEFT COLUMN ── */}
+        <div className="lg:col-span-2 space-y-4">
+
+          {/* Hero: Value + Chart */}
+          <div className="bbg-card">
+            <div className="flex items-start justify-between mb-1">
+              <div>
+                <p className="text-bloomberg-muted text-[10px] uppercase tracking-widest mb-1">Portfolio</p>
+                <div className="flex items-baseline gap-3">
+                  <span className="text-bloomberg-text text-4xl font-bold tracking-tight">
+                    {fmtCurrency(totalValue, ccy)}
+                  </span>
+                  {dayChange !== 0 && (
+                    <Chg v={dayChangePct} pct className="text-xs" />
+                  )}
+                </div>
+                <div className="flex items-center gap-2 mt-1">
+                  <Chg v={periodChangePct} pct className="text-[10px]" />
+                  <span className="text-bloomberg-muted text-[10px]">
+                    ({periodChange >= 0 ? "+" : ""}{fmtCurrency(periodChange, ccy)}) · {chartPeriod}
+                  </span>
+                </div>
+              </div>
+              {/* Period selector */}
+              <div className="flex gap-1 shrink-0">
+                {PERIODS.map((p) => (
+                  <button
+                    key={p}
+                    onClick={() => setChartPeriod(p)}
+                    className={`text-[10px] px-2 py-0.5 border transition-colors ${
+                      chartPeriod === p
+                        ? "border-bloomberg-gold text-bloomberg-gold bg-bloomberg-gold/10"
+                        : "border-bloomberg-border text-bloomberg-muted hover:border-bloomberg-muted"
+                    }`}
+                  >
+                    {p}
+                  </button>
                 ))}
-              </Pie>
-              <Tooltip
-                contentStyle={{ background: "#111820", border: "1px solid #1e2535", fontSize: 11 }}
-                formatter={(v: number) => fmtCurrency(v, ccy)}
-              />
-              <Legend
-                iconSize={8}
-                wrapperStyle={{ fontSize: 11 }}
-              />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Portfolio value history */}
-        <div className="bbg-card">
-          <p className="bbg-header">Portfolio Value History</p>
-          {chartData.length > 1 ? (
-            <ResponsiveContainer width="100%" height={220}>
-              <AreaChart data={chartData} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
-                <defs>
-                  <linearGradient id="goldGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#f3a712" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#f3a712" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e2535" />
-                <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#8a9bb5" }} tickLine={false}
-                  interval="preserveStartEnd" />
-                <YAxis tick={{ fontSize: 10, fill: "#8a9bb5" }} tickLine={false} axisLine={false}
-                  tickFormatter={(v) => fmtCurrency(v, ccy, true)} width={60} />
-                <Tooltip
-                  contentStyle={{ background: "#111820", border: "1px solid #1e2535", fontSize: 11 }}
-                  formatter={(v: number) => [fmtCurrency(v, ccy), "Value"]}
-                />
-                <Area type="monotone" dataKey="value" stroke="#f3a712" strokeWidth={1.5}
-                  fill="url(#goldGrad)" dot={false} />
-              </AreaChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="flex items-center justify-center h-52 text-bloomberg-muted text-xs">
-              Save snapshots daily to build history
+              </div>
             </div>
-          )}
-        </div>
-      </div>
 
-      {/* Holdings table */}
-      <div className="bbg-card">
-        <p className="bbg-header">Holdings</p>
-        <div className="overflow-x-auto">
-          <table className="bbg-table">
-            <thead>
-              <tr>
-                <th>Ticker</th>
-                <th>Name</th>
-                <th className="text-right">Price</th>
-                <th className="text-right">1D%</th>
-                <th className="text-right">Shares</th>
-                <th className="text-right">Value</th>
-                <th className="text-right">P&L</th>
-                <th className="text-right">P&L%</th>
-                <th className="text-right">Weight%</th>
-                <th>Source</th>
-              </tr>
-            </thead>
-            <tbody>
-              {portfolio.rows.map((row) => (
-                <tr key={row.ticker}>
-                  <td className="text-bloomberg-gold font-medium">{row.ticker}</td>
-                  <td className="text-bloomberg-muted">{row.name}</td>
-                  <td className="text-right">{fmtCurrency(row.price_native, row.currency)}</td>
-                  <td className={`text-right ${colorClass(row.change_pct_1d)}`}>
-                    {fmtPct(row.change_pct_1d)}
-                  </td>
-                  <td className="text-right text-bloomberg-muted">{row.shares.toFixed(4)}</td>
-                  <td className="text-right">{fmtCurrency(row.value_base, ccy)}</td>
-                  <td className={`text-right ${colorClass(row.unrealized_pnl)}`}>
-                    {row.unrealized_pnl != null ? fmtCurrency(row.unrealized_pnl, ccy) : "—"}
-                  </td>
-                  <td className={`text-right ${colorClass(row.unrealized_pnl_pct)}`}>
-                    {fmtPct(row.unrealized_pnl_pct)}
-                  </td>
-                  <td className="text-right text-bloomberg-muted">{row.weight.toFixed(1)}%</td>
-                  <td className="text-bloomberg-muted text-[10px]">{row.data_source}</td>
-                </tr>
+            {chartData.length > 1 ? (
+              <ResponsiveContainer width="100%" height={200}>
+                <AreaChart data={chartData} margin={{ top: 10, right: 0, bottom: 0, left: 0 }}>
+                  <defs>
+                    <linearGradient id="heroGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#f3a712" stopOpacity={0.25} />
+                      <stop offset="95%" stopColor="#f3a712" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e2535" />
+                  <XAxis dataKey="date" tick={{ fontSize: 9, fill: "#8a9bb5" }} tickLine={false} interval="preserveStartEnd" />
+                  <YAxis
+                    tick={{ fontSize: 9, fill: "#8a9bb5" }}
+                    tickLine={false}
+                    axisLine={false}
+                    width={64}
+                    tickFormatter={(v) => fmtCurrency(v, ccy, true)}
+                    domain={["auto", "auto"]}
+                  />
+                  <Tooltip
+                    contentStyle={{ background: "#111820", border: "1px solid #1e2535", fontSize: 11 }}
+                    formatter={(v: number) => [fmtCurrency(v, ccy), "Value"]}
+                  />
+                  <Area type="monotone" dataKey="value" stroke="#f3a712" strokeWidth={2} fill="url(#heroGrad)" dot={false} />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex items-center justify-center h-40 text-bloomberg-muted text-xs border border-dashed border-bloomberg-border mt-3">
+                Save snapshots daily to build history chart
+              </div>
+            )}
+          </div>
+
+          {/* Positions table */}
+          <div className="bbg-card">
+            <div className="flex items-center justify-between mb-3">
+              <p className="bbg-header mb-0">Positions</p>
+              <div className="flex items-center gap-3 text-[10px] text-bloomberg-muted">
+                <span className="text-green-400">{winners} ↑</span>
+                <span className="text-red-400">{losers} ↓</span>
+                <Link href="/manage" className="border border-bloomberg-border px-2 py-0.5 hover:text-bloomberg-gold hover:border-bloomberg-gold">
+                  + Add
+                </Link>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-bloomberg-border">
+                    <th className="text-left pb-2 text-bloomberg-muted text-[10px] font-normal">Title</th>
+                    <th className="text-right pb-2 text-bloomberg-muted text-[10px] font-normal">Buy In</th>
+                    <th className="text-right pb-2 text-bloomberg-muted text-[10px] font-normal">Position</th>
+                    <th className="text-right pb-2 text-bloomberg-muted text-[10px] font-normal">P/L</th>
+                    <th className="text-right pb-2 text-bloomberg-muted text-[10px] font-normal">Weight</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {portfolio.rows
+                    .slice()
+                    .sort((a, b) => b.value_base - a.value_base)
+                    .map((row) => {
+                      const totalBuyIn = row.avg_cost_native != null ? row.avg_cost_native * row.shares : null;
+                      return (
+                        <tr key={row.ticker} className="border-b border-bloomberg-border/40 hover:bg-bloomberg-card transition-colors">
+                          {/* Badge + name */}
+                          <td className="py-3 pr-4">
+                            <div className="flex items-center gap-2.5">
+                              <TickerBadge ticker={row.ticker} />
+                              <div className="min-w-0">
+                                <p className="text-bloomberg-text font-medium truncate max-w-[180px]">{row.name}</p>
+                                <p className="text-bloomberg-muted text-[10px]">
+                                  {row.ticker} · {row.shares.toFixed(3)} shares
+                                </p>
+                              </div>
+                            </div>
+                          </td>
+                          {/* Buy in */}
+                          <td className="py-3 text-right">
+                            {totalBuyIn != null ? (
+                              <>
+                                <p className="text-bloomberg-text">{fmtCurrency(totalBuyIn, row.currency)}</p>
+                                <p className="text-bloomberg-muted text-[10px]">
+                                  {fmtCurrency(row.avg_cost_native!, row.currency)} avg
+                                </p>
+                              </>
+                            ) : (
+                              <span className="text-bloomberg-muted">—</span>
+                            )}
+                          </td>
+                          {/* Position */}
+                          <td className="py-3 text-right">
+                            <p className="text-bloomberg-text font-medium">{fmtCurrency(row.value_base, ccy)}</p>
+                            <p className="text-bloomberg-muted text-[10px]">
+                              {fmtCurrency(row.price_native, row.currency)}
+                              {row.change_pct_1d != null && (
+                                <span className={row.change_pct_1d >= 0 ? " text-green-400" : " text-red-400"}>
+                                  {" "}{fmtPct(row.change_pct_1d)}
+                                </span>
+                              )}
+                            </p>
+                          </td>
+                          {/* P/L */}
+                          <td className="py-3 text-right">
+                            {row.unrealized_pnl != null ? (
+                              <>
+                                <p className={row.unrealized_pnl >= 0 ? "text-green-400 font-medium" : "text-red-400 font-medium"}>
+                                  {row.unrealized_pnl >= 0 ? "+" : ""}{fmtCurrency(row.unrealized_pnl, ccy)}
+                                </p>
+                                <p className={`text-[10px] ${row.unrealized_pnl_pct != null && row.unrealized_pnl_pct >= 0 ? "text-green-400" : "text-red-400"}`}>
+                                  {fmtPct(row.unrealized_pnl_pct)}
+                                </p>
+                              </>
+                            ) : (
+                              <span className="text-bloomberg-muted">—</span>
+                            )}
+                          </td>
+                          {/* Weight */}
+                          <td className="py-3 text-right">
+                            <p className="text-bloomberg-muted">{row.weight.toFixed(1)}%</p>
+                            <div className="w-12 h-0.5 bg-bloomberg-border ml-auto mt-1 rounded">
+                              <div
+                                className="h-0.5 rounded"
+                                style={{ width: `${Math.min(row.weight, 100)}%`, backgroundColor: tickerBadgeColor(row.ticker) }}
+                              />
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Dividends */}
+          <div className="bbg-card">
+            <div className="flex items-center justify-between mb-3">
+              <p className="bbg-header mb-0">Dividends</p>
+              <Link href="/income" className="text-bloomberg-muted text-[10px] hover:text-bloomberg-gold">
+                Show more →
+              </Link>
+            </div>
+
+            <div className="grid grid-cols-4 gap-2 mb-4">
+              {[
+                { label: "Total Received", value: fmtCurrency(totalDivReceived, ccy) },
+                { label: "Yield TTM", value: divYieldTTM > 0 ? fmtPct(divYieldTTM) : "—" },
+                { label: "YoC TTM", value: divYoC > 0 ? fmtPct(divYoC) : "—" },
+                { label: "Payments", value: String(divTxs.length) },
+              ].map(({ label, value }) => (
+                <div key={label} className="border border-bloomberg-border p-2">
+                  <p className="text-bloomberg-muted text-[9px] uppercase mb-1">{label}</p>
+                  <p className="text-bloomberg-text text-xs font-bold">{value}</p>
+                </div>
               ))}
-            </tbody>
-          </table>
+            </div>
+
+            {divBarData.length > 0 ? (
+              <ResponsiveContainer width="100%" height={120}>
+                <BarChart data={divBarData} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e2535" vertical={false} />
+                  <XAxis dataKey="year" tick={{ fontSize: 9, fill: "#8a9bb5" }} tickLine={false} />
+                  <YAxis tick={{ fontSize: 9, fill: "#8a9bb5" }} tickLine={false} axisLine={false} width={50}
+                    tickFormatter={(v) => fmtCurrency(v, ccy, true)} />
+                  <Tooltip
+                    contentStyle={{ background: "#111820", border: "1px solid #1e2535", fontSize: 11 }}
+                    formatter={(v: number) => [fmtCurrency(v, ccy), "Dividends"]}
+                  />
+                  <Bar dataKey="amount" fill="#4dff4d" fillOpacity={0.8} radius={[2, 2, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="text-center text-bloomberg-muted text-[10px] py-4 border border-dashed border-bloomberg-border">
+                No dividend transactions recorded
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ── RIGHT COLUMN ── */}
+        <div className="space-y-4 lg:sticky lg:top-4">
+
+          {/* Allocation donut */}
+          <div className="bbg-card">
+            <p className="bbg-header">Allocation</p>
+            <div className="relative">
+              <ResponsiveContainer width="100%" height={260}>
+                <PieChart>
+                  <Pie
+                    data={pieData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={82}
+                    outerRadius={115}
+                    paddingAngle={2}
+                    dataKey="value"
+                    labelLine={false}
+                    label={({ cx, cy }) => <DonutCenter cx={cx} cy={cy} value={totalValue} ccy={ccy} />}
+                  >
+                    {pieData.map((_, i) => (
+                      <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{ background: "#111820", border: "1px solid #1e2535", fontSize: 11 }}
+                    formatter={(v: number, name: string) => [`${fmtCurrency(v, ccy)} (${((v / totalValue) * 100).toFixed(1)}%)`, name]}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            {/* Legend */}
+            <div className="space-y-1 mt-1">
+              {portfolio.rows
+                .slice()
+                .sort((a, b) => b.weight - a.weight)
+                .map((r, i) => (
+                  <div key={r.ticker} className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }} />
+                      <span className="text-bloomberg-muted text-[10px]">{r.ticker}</span>
+                    </div>
+                    <span className="text-bloomberg-muted text-[10px]">{r.weight.toFixed(1)}%</span>
+                  </div>
+                ))}
+            </div>
+          </div>
+
+          {/* Capital & Performance */}
+          <div className="bbg-card space-y-3">
+            {/* Capital */}
+            <div>
+              <p className="bbg-header">Capital</p>
+              <div className="flex justify-between text-xs border-b border-bloomberg-border/40 py-1.5">
+                <span className="text-bloomberg-muted">Invested capital</span>
+                <span className="text-bloomberg-text font-medium">{fmtCurrency(invested, ccy)}</span>
+              </div>
+            </div>
+
+            {/* Performance breakdown */}
+            <div>
+              <p className="text-bloomberg-muted text-[10px] uppercase tracking-widest mb-2">Performance</p>
+              <div className="space-y-1.5">
+                {[
+                  {
+                    label: "Price gain",
+                    pct: priceGainPct,
+                    val: priceGain,
+                  },
+                  {
+                    label: "Dividends",
+                    pct: invested > 0 ? (totalDivReceived / invested) * 100 : 0,
+                    val: totalDivReceived,
+                  },
+                ].map(({ label, pct, val }) => (
+                  <div key={label} className="flex justify-between items-center text-xs">
+                    <span className="text-bloomberg-muted">{label}</span>
+                    <div className="text-right">
+                      <span className={`font-medium ${val >= 0 ? "text-green-400" : "text-red-400"}`}>
+                        {val >= 0 ? "↑" : "↓"}{fmtPct(Math.abs(pct))}
+                      </span>
+                      <span className={`ml-2 ${val >= 0 ? "text-green-400" : "text-red-400"}`}>
+                        {val >= 0 ? "+" : ""}{fmtCurrency(val, ccy)}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Total return */}
+            <div className="border-t border-bloomberg-border pt-2">
+              <div className="flex justify-between items-center text-xs">
+                <span className="text-bloomberg-muted font-medium">Total return</span>
+                <span className={`font-bold ${totalReturn >= 0 ? "text-green-400" : "text-red-400"}`}>
+                  {totalReturn >= 0 ? "↑" : "↓"}{fmtCurrency(Math.abs(totalReturn), ccy)}
+                </span>
+              </div>
+              {portfolio.total_unrealized_pnl_pct != null && (
+                <div className="flex justify-between items-center text-xs mt-1">
+                  <span className="text-bloomberg-muted">P&L %</span>
+                  <span className={priceGainPct >= 0 ? "text-green-400" : "text-red-400"}>
+                    {priceGainPct >= 0 ? "↑" : "↓"}{fmtPct(Math.abs(priceGainPct))}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Day change */}
+            <div className="border-t border-bloomberg-border pt-2">
+              <p className="text-bloomberg-muted text-[10px] uppercase tracking-widest mb-1.5">Today</p>
+              <div className="flex justify-between items-center text-xs">
+                <span className="text-bloomberg-muted">Day change</span>
+                <span className={`font-medium ${dayChange >= 0 ? "text-green-400" : "text-red-400"}`}>
+                  {dayChange >= 0 ? "+" : ""}{fmtCurrency(dayChange, ccy)}
+                  <span className="ml-1 text-[10px]">({fmtPct(dayChangePct)})</span>
+                </span>
+              </div>
+              <div className="flex justify-between items-center text-xs mt-1">
+                <span className="text-bloomberg-muted">Positions</span>
+                <span className="text-bloomberg-muted">
+                  <span className="text-green-400">{winners}↑</span>
+                  {" / "}
+                  <span className="text-red-400">{losers}↓</span>
+                  {" of "}{portfolio.rows.length}
+                </span>
+              </div>
+            </div>
+
+            {/* Quick links */}
+            <div className="border-t border-bloomberg-border pt-2 grid grid-cols-2 gap-1">
+              {[
+                { label: "Analytics", href: "/analytics" },
+                { label: "Optimize", href: "/optimization" },
+                { label: "Rebalance", href: "/rebalancing" },
+                { label: "Risk", href: "/risk" },
+              ].map(({ label, href }) => (
+                <Link
+                  key={href}
+                  href={href}
+                  className="text-center text-[10px] text-bloomberg-muted border border-bloomberg-border py-1 hover:text-bloomberg-gold hover:border-bloomberg-gold transition-colors"
+                >
+                  {label}
+                </Link>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
     </div>
