@@ -173,6 +173,7 @@ export interface OptimizationResult {
   frontier: FrontierPoint[];
   max_sharpe: FrontierPoint;
   min_vol: FrontierPoint;
+  max_return: FrontierPoint;
   risk_parity: Record<string, number>;
   current_weights: Record<string, number>;
   current_metrics: Record<string, number>;
@@ -210,6 +211,11 @@ export interface RebalancingRow {
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 
+export interface TickerWeightRule {
+  mode: "free" | "fixed";
+  weight?: number;
+}
+
 export interface UserSettings {
   base_currency: string;
   rebalancing_threshold: number;
@@ -221,6 +227,7 @@ export interface UserSettings {
   rolling_window: number;
   tc_model: string;
   investor_profile: string;
+  ticker_weight_rules: Record<string, TickerWeightRule>;
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────

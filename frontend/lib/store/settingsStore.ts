@@ -18,6 +18,7 @@ const defaults: UserSettings = {
   rolling_window: 63,
   tc_model: "broker",
   investor_profile: "balanced",
+  ticker_weight_rules: {},
 };
 
 export const useSettingsStore = create<SettingsState>()(

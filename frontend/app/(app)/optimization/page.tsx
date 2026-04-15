@@ -24,7 +24,7 @@ const PROFILE_LABELS: Record<string, string> = {
   aggressive: "Agresivo",
 };
 
-const COLORS = { maxSharpe: "#f3a712", minVol: "#38b2ff", riskParity: "#4dff4d", bl: "#c084fc", current: "#8a9bb5" }
+const COLORS = { maxSharpe: "#f3a712", minVol: "#38b2ff", maxReturn: "#ff4b6e", riskParity: "#4dff4d", bl: "#c084fc", current: "#8a9bb5" }
 
 function sharpeToColor(sharpe: number, min: number, max: number): string {
   const t = max === min ? 0.5 : Math.max(0, Math.min(1, (sharpe - min) / (max - min)));
@@ -175,7 +175,7 @@ export default function OptimizationPage() {
             <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">Period</label>
             <select value={period} onChange={(e) => setPeriod(e.target.value)}
               className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs">
-              {["1y", "2y", "3y", "5y"].map((p) => <option key={p}>{p}</option>)}
+              {["1y", "2y", "3y", "5y", "10y"].map((p) => <option key={p}>{p}</option>)}
             </select>
           </div>
         </div>
@@ -194,7 +194,7 @@ export default function OptimizationPage() {
           {/* Efficient Frontier */}
           <div className="bbg-card">
             <p className="bbg-header">Efficient Frontier ({result.frontier.length.toLocaleString()} portfolios)</p>
-            <div className="grid grid-cols-3 gap-3 mb-3">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
               <div>
                 <p className="text-bloomberg-muted text-[10px]">Max Sharpe</p>
                 <p className="text-bloomberg-gold text-xs font-bold">
@@ -205,6 +205,12 @@ export default function OptimizationPage() {
                 <p className="text-bloomberg-muted text-[10px]">Min Volatility</p>
                 <p className="text-[#38b2ff] text-xs font-bold">
                   Sharpe {result.min_vol.sharpe.toFixed(3)} · Ret {fmtPct(result.min_vol.ret)} · Vol {fmtPct(result.min_vol.vol)}
+                </p>
+              </div>
+              <div>
+                <p className="text-bloomberg-muted text-[10px]">Max Return</p>
+                <p className="text-[#ff4b6e] text-xs font-bold">
+                  Sharpe {result.max_return.sharpe.toFixed(3)} · Ret {fmtPct(result.max_return.ret)} · Vol {fmtPct(result.max_return.vol)}
                 </p>
               </div>
               <div>
@@ -235,6 +241,9 @@ export default function OptimizationPage() {
                 <ReferenceDot x={result.min_vol.vol} y={result.min_vol.ret} r={7}
                   fill={COLORS.minVol} stroke="#fff"
                   label={{ value: "★ Min Vol", position: "top", fontSize: 9, fill: COLORS.minVol }} />
+                <ReferenceDot x={result.max_return.vol} y={result.max_return.ret} r={7}
+                  fill={COLORS.maxReturn} stroke="#fff"
+                  label={{ value: "★ Max Return", position: "top", fontSize: 9, fill: COLORS.maxReturn }} />
                 {result.current_metrics.volatility != null && (
                   <ReferenceDot x={result.current_metrics.volatility} y={result.current_metrics.return} r={7}
                     fill={COLORS.current} stroke="#fff"
@@ -266,7 +275,7 @@ export default function OptimizationPage() {
           </div>
 
           {/* Weights + Shares tables */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <WeightsSharesTable
               label="Max Sharpe"
               color={COLORS.maxSharpe}
@@ -279,6 +288,13 @@ export default function OptimizationPage() {
               color={COLORS.minVol}
               weights={result.min_vol.weights}
               shares={computeShares(result.min_vol.weights, rows, totalValue)}
+              currency={ccy}
+            />
+            <WeightsSharesTable
+              label="Max Return"
+              color={COLORS.maxReturn}
+              weights={result.max_return.weights}
+              shares={computeShares(result.max_return.weights, rows, totalValue)}
               currency={ccy}
             />
             <WeightsSharesTable

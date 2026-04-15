@@ -18,13 +18,14 @@ def simulate_efficient_frontier(
     min_bonds: float = 0.0,
     min_gold: float = 0.0,
     current_weights: Optional[dict[str, float]] = None,
+    per_ticker_bounds: Optional[dict[str, tuple[float, float]]] = None,
 ) -> OptimizationResult:
     """Monte Carlo efficient frontier simulation."""
     if returns_df.empty or returns_df.shape[1] < 2:
         return OptimizationResult(
             frontier=[], max_sharpe=_empty_point(),
-            min_vol=_empty_point(), risk_parity={},
-            current_weights=current_weights or {},
+            min_vol=_empty_point(), max_return=_empty_point(),
+            risk_parity={}, current_weights=current_weights or {},
             current_metrics={},
         )
 
@@ -33,15 +34,23 @@ def simulate_efficient_frontier(
     mu = returns_df.mean() * 252
     cov = returns_df.cov() * 252
 
+    # Build per-ticker upper bounds for simulation
+    upper_bounds = np.array([
+        per_ticker_bounds[t][1] if per_ticker_bounds and t in per_ticker_bounds else max_single_asset
+        for t in tickers
+    ])
+
     frontier_points: list[FrontierPoint] = []
     best_sharpe = FrontierPoint(ret=0, vol=1e9, sharpe=-999, weights={})
     best_minvol = FrontierPoint(ret=0, vol=1e9, sharpe=0, weights={})
+    best_maxret = FrontierPoint(ret=-1e9, vol=0, sharpe=0, weights={})
 
     rng = np.random.default_rng(42)
     for _ in range(n_simulations):
         w = rng.dirichlet(np.ones(n))
-        # Apply constraints
-        w = np.clip(w, 0, max_single_asset)
+        w = np.clip(w, 0, upper_bounds)
+        if w.sum() == 0:
+            continue
         w /= w.sum()
 
         port_ret = float(mu.values @ w)
@@ -60,6 +69,8 @@ def simulate_efficient_frontier(
             best_sharpe = point
         if port_vol < best_minvol.vol:
             best_minvol = point
+        if port_ret > best_maxret.ret:
+            best_maxret = point
 
     # Compute current portfolio metrics
     current_metrics = {}
@@ -78,10 +89,23 @@ def simulate_efficient_frontier(
 
     rp_weights = _risk_parity(cov.values, tickers)
 
+    # Exact Max Return via scipy (overrides Monte Carlo best)
+    mr_row = optimize_max_return(returns_df, risk_free_rate, max_single_asset, per_ticker_bounds)
+    if mr_row:
+        w_arr = np.array([mr_row.get(t, 0.0) for t in tickers])
+        mr_ret = float(mu.values @ w_arr) * 100
+        mr_vol = float(np.sqrt(w_arr @ cov.values @ w_arr)) * 100
+        mr_shr = (mr_ret - risk_free_rate * 100) / mr_vol if mr_vol > 0 else 0
+        best_maxret = FrontierPoint(
+            ret=round(mr_ret, 3), vol=round(mr_vol, 3),
+            sharpe=round(mr_shr, 4), weights={t: round(float(mr_row.get(t, 0)), 4) for t in tickers},
+        )
+
     return OptimizationResult(
         frontier=frontier_points,
         max_sharpe=best_sharpe,
         min_vol=best_minvol,
+        max_return=best_maxret,
         risk_parity=rp_weights,
         current_weights={t: round(float(current_weights.get(t, 0)), 4) for t in tickers} if current_weights else {},
         current_metrics=current_metrics,
@@ -190,6 +214,7 @@ def optimize_max_sharpe(
     returns_df: pd.DataFrame,
     risk_free_rate: float = 0.045,
     max_single_asset: float = 0.40,
+    per_ticker_bounds: Optional[dict[str, tuple[float, float]]] = None,
 ) -> dict[str, float]:
     """Scipy-optimized Max Sharpe weights."""
     if returns_df.empty:
@@ -204,8 +229,8 @@ def optimize_max_sharpe(
         v = np.sqrt(w @ cov @ w)
         return -(r - risk_free_rate) / v if v > 0 else 0
 
-    w0 = np.ones(n) / n
-    bounds = [(0, max_single_asset)] * n
+    bounds = _build_bounds(tickers, max_single_asset, per_ticker_bounds)
+    w0 = _make_w0(n, bounds)
     constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
     try:
         res = minimize(neg_sharpe, w0, method="SLSQP", bounds=bounds, constraints=constraints)
@@ -214,3 +239,53 @@ def optimize_max_sharpe(
         return {t: round(float(w[i]), 4) for i, t in enumerate(tickers)}
     except Exception:
         return {t: round(1 / n, 4) for t in tickers}
+
+
+def optimize_max_return(
+    returns_df: pd.DataFrame,
+    risk_free_rate: float = 0.045,
+    max_single_asset: float = 0.40,
+    per_ticker_bounds: Optional[dict[str, tuple[float, float]]] = None,
+) -> dict[str, float]:
+    """Scipy-optimized maximum-return portfolio."""
+    if returns_df.empty:
+        return {}
+    tickers = list(returns_df.columns)
+    n = len(tickers)
+    mu = returns_df.mean().values * 252
+
+    def neg_return(w):
+        return -float(w @ mu)
+
+    bounds = _build_bounds(tickers, max_single_asset, per_ticker_bounds)
+    w0 = _make_w0(n, bounds)
+    constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
+    try:
+        res = minimize(neg_return, w0, method="SLSQP", bounds=bounds, constraints=constraints,
+                       options={"ftol": 1e-12, "maxiter": 1000})
+        w = np.clip(res.x, 0, None)
+        w /= w.sum()
+        return {t: round(float(w[i]), 4) for i, t in enumerate(tickers)}
+    except Exception:
+        return {t: round(1 / n, 4) for t in tickers}
+
+
+def _build_bounds(
+    tickers: list[str],
+    max_single_asset: float,
+    per_ticker_bounds: Optional[dict[str, tuple[float, float]]],
+) -> list[tuple[float, float]]:
+    bounds = []
+    for t in tickers:
+        if per_ticker_bounds and t in per_ticker_bounds:
+            bounds.append(per_ticker_bounds[t])
+        else:
+            bounds.append((0.0, max_single_asset))
+    return bounds
+
+
+def _make_w0(n: int, bounds: list[tuple[float, float]]) -> np.ndarray:
+    lo = np.array([b[0] for b in bounds])
+    hi = np.array([b[1] for b in bounds])
+    w0 = np.clip(np.ones(n) / n, lo, hi)
+    return w0 / w0.sum() if w0.sum() > 0 else np.ones(n) / n

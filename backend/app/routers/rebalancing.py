@@ -124,7 +124,16 @@ def required_for_max_sharpe(
 
     returns_df = pd.DataFrame(closes).dropna(how="all").ffill().pct_change().dropna()
     rfr = get_risk_free_rate()
-    ms_weights = optimize_max_sharpe(returns_df, rfr, max_single_asset)
+
+    # Apply per-ticker fixed-weight rules from user settings
+    rules = settings.get("ticker_weight_rules") or {}
+    per_ticker_bounds = {}
+    for ticker, rule in rules.items():
+        if isinstance(rule, dict) and rule.get("mode") == "fixed":
+            w = float(rule.get("weight", 0.0))
+            per_ticker_bounds[ticker] = (w, w)
+
+    ms_weights = optimize_max_sharpe(returns_df, rfr, max_single_asset, per_ticker_bounds or None)
 
     if not ms_weights:
         return {"required_contribution": 0, "max_sharpe_weights": {}, "buy_plan": {}}

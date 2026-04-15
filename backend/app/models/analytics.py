@@ -62,6 +62,7 @@ class OptimizationResult(BaseModel):
     frontier: list[FrontierPoint]
     max_sharpe: FrontierPoint
     min_vol: FrontierPoint
+    max_return: FrontierPoint
     risk_parity: dict[str, float]
     current_weights: dict[str, float]
     current_metrics: dict

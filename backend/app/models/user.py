@@ -14,6 +14,7 @@ class UserSettings(BaseModel):
     tc_model: str = "broker"
     investor_profile: str = "balanced"
     target_return: float = 0.08
+    ticker_weight_rules: dict = {}  # {ticker: {"mode": "fixed"|"free", "weight": float}}
 
 
 class LoginRequest(BaseModel):

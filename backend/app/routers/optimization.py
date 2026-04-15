@@ -4,7 +4,7 @@ from typing import Optional
 from app.auth.dependencies import get_user_id
 from app.db.supabase_client import get_admin_client
 from app.services.market_data import get_historical_multi, get_risk_free_rate
-from app.compute.optimization import simulate_efficient_frontier, optimize_max_sharpe, black_litterman
+from app.compute.optimization import simulate_efficient_frontier, optimize_max_sharpe, optimize_max_return, black_litterman
 from app.models.analytics import OptimizationResult
 import pandas as pd
 
@@ -19,6 +19,28 @@ class OptimizationRequest(BaseModel):
     min_gold: float = 0.0
 
 
+def _load_per_ticker_bounds(user_id: str, db) -> dict[str, tuple[float, float]]:
+    """Load fixed-weight rules from user_settings and convert to per_ticker_bounds dict."""
+    settings_res = db.table("user_settings").select("ticker_weight_rules").eq("user_id", user_id).maybe_single().execute()
+    rules = (settings_res.data or {}).get("ticker_weight_rules") or {}
+    bounds = {}
+    for ticker, rule in rules.items():
+        if isinstance(rule, dict) and rule.get("mode") == "fixed":
+            w = float(rule.get("weight", 0.0))
+            bounds[ticker] = (w, w)
+    return bounds
+
+
+def _build_returns_df(tickers: list[str], period: str) -> pd.DataFrame:
+    hist = get_historical_multi(tickers, period=period)
+    closes: dict[str, pd.Series] = {}
+    for t, df in hist.items():
+        if not df.empty:
+            col = "Close" if "Close" in df.columns else df.columns[0]
+            closes[t] = df[col].dropna()
+    return pd.DataFrame(closes).dropna(how="all").ffill().pct_change().dropna()
+
+
 @router.post("/frontier", response_model=OptimizationResult)
 def frontier(body: OptimizationRequest, user_id: str = Depends(get_user_id)):
     db = get_admin_client()
@@ -29,16 +51,9 @@ def frontier(body: OptimizationRequest, user_id: str = Depends(get_user_id)):
     total = sum(shares.values())
     current_weights = {t: shares[t] / total for t in tickers} if total > 0 else {}
 
-    hist = get_historical_multi(tickers, period=body.period)
+    returns_df = _build_returns_df(tickers, body.period)
     rfr = get_risk_free_rate()
-
-    closes: dict[str, pd.Series] = {}
-    for t, df in hist.items():
-        if not df.empty:
-            col = "Close" if "Close" in df.columns else df.columns[0]
-            closes[t] = df[col].dropna()
-
-    returns_df = pd.DataFrame(closes).dropna(how="all").ffill().pct_change().dropna()
+    per_ticker_bounds = _load_per_ticker_bounds(user_id, db)
 
     return simulate_efficient_frontier(
         returns_df=returns_df,
@@ -46,6 +61,7 @@ def frontier(body: OptimizationRequest, user_id: str = Depends(get_user_id)):
         n_simulations=body.n_simulations,
         max_single_asset=body.max_single_asset,
         current_weights=current_weights,
+        per_ticker_bounds=per_ticker_bounds or None,
     )
 
 
@@ -87,10 +103,21 @@ def max_sharpe(body: OptimizationRequest, user_id: str = Depends(get_user_id)):
     pos_res = db.table("positions").select("ticker,shares").eq("user_id", user_id).execute()
     tickers = [p["ticker"] for p in (pos_res.data or []) if float(p.get("shares", 0)) > 0]
 
-    hist = get_historical_multi(tickers, period=body.period)
+    returns_df = _build_returns_df(tickers, body.period)
     rfr = get_risk_free_rate()
-    closes = {t: hist[t]["Close"].dropna() for t in tickers if not hist.get(t, pd.DataFrame()).empty
-              and "Close" in hist[t].columns}
-    returns_df = pd.DataFrame(closes).dropna(how="all").ffill().pct_change().dropna()
-    weights = optimize_max_sharpe(returns_df, rfr, body.max_single_asset)
+    per_ticker_bounds = _load_per_ticker_bounds(user_id, db)
+    weights = optimize_max_sharpe(returns_df, rfr, body.max_single_asset, per_ticker_bounds or None)
+    return {"weights": weights}
+
+
+@router.post("/max-return")
+def max_return_endpoint(body: OptimizationRequest, user_id: str = Depends(get_user_id)):
+    db = get_admin_client()
+    pos_res = db.table("positions").select("ticker,shares").eq("user_id", user_id).execute()
+    tickers = [p["ticker"] for p in (pos_res.data or []) if float(p.get("shares", 0)) > 0]
+
+    returns_df = _build_returns_df(tickers, body.period)
+    rfr = get_risk_free_rate()
+    per_ticker_bounds = _load_per_ticker_bounds(user_id, db)
+    weights = optimize_max_return(returns_df, rfr, body.max_single_asset, per_ticker_bounds or None)
     return {"weights": weights}

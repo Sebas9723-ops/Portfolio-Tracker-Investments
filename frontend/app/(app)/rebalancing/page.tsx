@@ -1,7 +1,8 @@
 "use client";
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchRebalancing, fetchRequiredForMaxSharpe } from "@/lib/api/analytics";
+import { fetchSettings, updateSettings } from "@/lib/api/settings";
 import { usePortfolio } from "@/lib/hooks/usePortfolio";
 import { useProfileStore } from "@/lib/store/profileStore";
 import { fmtCurrency, fmtPct } from "@/lib/formatters";
@@ -9,6 +10,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell, ReferenceLine,
 } from "recharts";
+import type { TickerWeightRule } from "@/lib/types";
 
 const PROFILE_LABELS: Record<string, { label: string; color: string; bg: string }> = {
   conservative: { label: "Conservador", color: "#2563eb", bg: "#eff6ff" },
@@ -53,16 +55,35 @@ function DriftBadge({ drift, threshold }: { drift: number; threshold: number }) 
 }
 
 export default function RebalancingPage() {
+  const qc = useQueryClient();
   const [contributionStr, setContributionStr] = useState("0");
   const contribution = parseFloat(contributionStr) || 0;
   const [tcModel, setTcModel] = useState("broker");
   const [msPeriod, setMsPeriod] = useState("2y");
   const [msMaxSingle, setMsMaxSingle] = useState(0.40);
+  const [showWeightRules, setShowWeightRules] = useState(false);
 
   const { data: portfolio } = usePortfolio();
   const rows = portfolio?.rows ?? [];
   const totalValue = portfolio?.total_value_base ?? 0;
   const ccy = portfolio?.base_currency ?? "USD";
+
+  // Weight rules (per-ticker pinning)
+  const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: fetchSettings });
+  const savedRules: Record<string, TickerWeightRule> = settings?.ticker_weight_rules ?? {};
+  const [localRules, setLocalRules] = useState<Record<string, TickerWeightRule>>(savedRules);
+
+  const saveRulesMut = useMutation({
+    mutationFn: (rules: Record<string, TickerWeightRule>) =>
+      updateSettings({ ticker_weight_rules: rules }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
+  });
+
+  const tickers = rows.map((r) => r.ticker);
+  const fixedSum = tickers.reduce((s, t) => {
+    const rule = localRules[t];
+    return s + (rule?.mode === "fixed" ? (rule.weight ?? 0) : 0);
+  }, 0);
 
   const { data, isLoading } = useQuery({
     queryKey: ["rebalancing", contribution, tcModel],
@@ -140,6 +161,86 @@ export default function RebalancingPage() {
             Est. total TC: <span className="text-bloomberg-gold">{fmtCurrency(totalTC)}</span>
           </div>
         </div>
+      </div>
+
+      {/* Weight Rules per Ticker */}
+      <div className="bbg-card">
+        <div className="flex items-center justify-between mb-2">
+          <p className="bbg-header mb-0">Weight Rules per Ticker</p>
+          <button
+            onClick={() => setShowWeightRules((v) => !v)}
+            className="text-[10px] text-bloomberg-muted border border-bloomberg-border px-2 py-1 hover:text-bloomberg-gold hover:border-bloomberg-gold"
+          >
+            {showWeightRules ? "HIDE" : "SHOW"}
+          </button>
+        </div>
+        <p className="text-bloomberg-muted text-[10px] mb-2">
+          Fix a ticker&apos;s weight — the rest optimise freely. Applied across the whole app (frontier, rebalancing, required contribution).
+        </p>
+        {showWeightRules && (
+          <div className="space-y-2">
+            {tickers.map((t) => {
+              const rule = localRules[t] ?? { mode: "free" as const };
+              return (
+                <div key={t} className="flex items-center gap-3 text-xs">
+                  <span className="text-bloomberg-gold w-24 font-medium">{t}</span>
+                  <select
+                    value={rule.mode}
+                    onChange={(e) =>
+                      setLocalRules((r) => ({ ...r, [t]: { ...r[t], mode: e.target.value as "free" | "fixed" } }))
+                    }
+                    className="bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs"
+                  >
+                    <option value="free">Free (Max Sharpe)</option>
+                    <option value="fixed">Fixed weight</option>
+                  </select>
+                  {rule.mode === "fixed" && (
+                    <input
+                      type="number"
+                      min={0} max={1} step={0.01}
+                      value={rule.weight ?? 0}
+                      onChange={(e) =>
+                        setLocalRules((r) => ({ ...r, [t]: { ...r[t], weight: parseFloat(e.target.value) || 0 } }))
+                      }
+                      className="bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs w-24 focus:outline-none focus:border-bloomberg-gold"
+                      placeholder="0.00"
+                    />
+                  )}
+                  {rule.mode === "fixed" && (
+                    <span className="text-bloomberg-muted text-[10px]">{fmtPct((rule.weight ?? 0) * 100)}</span>
+                  )}
+                </div>
+              );
+            })}
+            {fixedSum > 1.0 && (
+              <p className="text-red-400 text-[10px]">Fixed weights sum to {fmtPct(fixedSum * 100)} — must be ≤ 100%.</p>
+            )}
+            {fixedSum > 0 && fixedSum <= 1.0 && (
+              <p className="text-bloomberg-muted text-[10px]">
+                Fixed: {fmtPct(fixedSum * 100)} · Free to optimise: {fmtPct((1 - fixedSum) * 100)}
+              </p>
+            )}
+            <div className="flex gap-2 mt-2">
+              <button
+                onClick={() => saveRulesMut.mutate(localRules)}
+                disabled={fixedSum > 1.0 || saveRulesMut.isPending}
+                className="bg-bloomberg-gold text-bloomberg-bg text-xs font-bold px-4 py-1 disabled:opacity-50"
+              >
+                {saveRulesMut.isPending ? "SAVING…" : "SAVE RULES"}
+              </button>
+              <button
+                onClick={() => {
+                  const cleared = Object.fromEntries(tickers.map((t) => [t, { mode: "free" as const }]));
+                  setLocalRules(cleared);
+                  saveRulesMut.mutate(cleared);
+                }}
+                className="text-bloomberg-muted text-xs px-3 py-1 border border-bloomberg-border hover:text-bloomberg-gold hover:border-bloomberg-gold"
+              >
+                CLEAR ALL
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Deviation Monitor */}
@@ -332,7 +433,7 @@ export default function RebalancingPage() {
               onChange={(e) => setMsPeriod(e.target.value)}
               className="bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs"
             >
-              {["1y", "2y", "3y", "5y"].map((p) => <option key={p}>{p}</option>)}
+              {["1y", "2y", "3y", "5y", "10y"].map((p) => <option key={p}>{p}</option>)}
             </select>
           </div>
           <div>
