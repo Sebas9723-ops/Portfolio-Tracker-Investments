@@ -1,0 +1,86 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #0b0f14;
+  --card: #111820;
+  --border: #1e2535;
+  --gold: #f3a712;
+  --green: #4dff4d;
+  --red: #ff4d4d;
+  --muted: #8a9bb5;
+  --text: #d4dde8;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: "IBM Plex Mono", "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+/* Bloomberg table style */
+.bbg-table { width: 100%; border-collapse: collapse; }
+.bbg-table th {
+  background: #0d1219;
+  color: var(--gold);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+.bbg-table td {
+  padding: 5px 10px;
+  border-bottom: 1px solid #151d27;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.bbg-table tr:hover td { background: #151d27; }
+.bbg-table tr:nth-child(even) td { background: #0d1219; }
+.bbg-table tr:nth-child(even):hover td { background: #151d27; }
+
+/* Card */
+.bbg-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 16px;
+}
+
+/* Section header */
+.bbg-header {
+  color: var(--gold);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
+  margin-bottom: 12px;
+}
+
+.positive { color: var(--green); }
+.negative { color: var(--red); }
+.muted    { color: var(--muted); }
+.gold     { color: var(--gold); }
