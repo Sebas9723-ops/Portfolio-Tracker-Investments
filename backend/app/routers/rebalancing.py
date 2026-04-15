@@ -6,6 +6,7 @@ from app.services.fx_service import get_fx_rates
 from app.compute.portfolio_builder import build_portfolio
 from app.compute.rebalancing import build_rebalancing_table, compute_target_weights_from_drift
 from app.compute.optimization import optimize_max_sharpe
+from app.compute.profile import compute_profile_weights
 from app.services.exchange_classifier import get_native_currency
 from app.models.analytics import RebalancingRow
 import pandas as pd
@@ -24,6 +25,10 @@ def suggestions(
     settings = settings_res.data or {}
     base_currency = settings.get("base_currency", "USD")
     threshold = float(settings.get("rebalancing_threshold", 0.05))
+    investor_profile = settings.get("investor_profile", "balanced")
+    target_return = float(settings.get("target_return", 0.08))
+    rfr = float(settings.get("risk_free_rate", 0.045))
+    max_single = float(settings.get("max_single_asset", 0.40))
 
     pos_res = db.table("positions").select("*").eq("user_id", user_id).execute()
     positions = pos_res.data or []
@@ -39,7 +44,32 @@ def suggestions(
     summary = build_portfolio(positions, quotes, fx_rates, base_currency, tx_res.data or [])
 
     rows_dicts = [r.model_dump() for r in summary.rows]
-    target_weights = compute_target_weights_from_drift(rows_dicts, threshold)
+
+    # Use profile-driven target weights when a recognized profile is active
+    profile_map = {"conservative": "conservative", "base": "base", "aggressive": "aggressive"}
+    if investor_profile in profile_map:
+        try:
+            hist = get_historical_multi(tickers, period="2y")
+            closes: dict[str, pd.Series] = {}
+            for t, df in hist.items():
+                if not df.empty:
+                    col = "Close" if "Close" in df.columns else df.columns[0]
+                    closes[t] = df[col].dropna()
+            returns_df = pd.DataFrame(closes).dropna(how="all").ffill().pct_change().dropna()
+            if not returns_df.empty:
+                target_weights = compute_profile_weights(
+                    returns_df,
+                    profile_map[investor_profile],  # type: ignore[arg-type]
+                    rfr,
+                    target_return,
+                    max_single,
+                )
+            else:
+                target_weights = compute_target_weights_from_drift(rows_dicts, threshold)
+        except Exception:
+            target_weights = compute_target_weights_from_drift(rows_dicts, threshold)
+    else:
+        target_weights = compute_target_weights_from_drift(rows_dicts, threshold)
 
     return build_rebalancing_table(
         portfolio_rows=rows_dicts,

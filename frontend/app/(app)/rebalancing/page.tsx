@@ -3,11 +3,32 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchRebalancing, fetchRequiredForMaxSharpe } from "@/lib/api/analytics";
 import { usePortfolio } from "@/lib/hooks/usePortfolio";
+import { useProfileStore } from "@/lib/store/profileStore";
 import { fmtCurrency, fmtPct } from "@/lib/formatters";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell, ReferenceLine,
 } from "recharts";
+
+const PROFILE_LABELS: Record<string, { label: string; color: string; bg: string }> = {
+  conservative: { label: "Conservador", color: "#2563eb", bg: "#eff6ff" },
+  base:         { label: "Base",        color: "#16a34a", bg: "#f0fdf4" },
+  aggressive:   { label: "Agresivo",    color: "#dc2626", bg: "#fef2f2" },
+};
+
+function ProfileBadge() {
+  const { profile } = useProfileStore();
+  const info = PROFILE_LABELS[profile];
+  if (!info) return null;
+  return (
+    <span
+      className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold"
+      style={{ color: info.color, background: info.bg }}
+    >
+      Perfil: {info.label}
+    </span>
+  );
+}
 
 function DriftBadge({ drift, threshold }: { drift: number; threshold: number }) {
   if (drift > threshold) {
@@ -85,7 +106,10 @@ export default function RebalancingPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-bloomberg-gold text-xs font-bold uppercase tracking-widest">Rebalancing</h1>
+      <div className="flex items-center gap-3">
+        <h1 className="text-bloomberg-gold text-xs font-bold uppercase tracking-widest">Rebalancing</h1>
+        <ProfileBadge />
+      </div>
 
       {/* Parameters */}
       <div className="bbg-card">

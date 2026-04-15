@@ -1,8 +1,10 @@
 "use client";
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { fetchFrontier, fetchBlackLitterman } from "@/lib/api/analytics";
+import { fetchProfileOptimal } from "@/lib/api/profile";
 import { usePortfolio } from "@/lib/hooks/usePortfolio";
+import { useProfileStore } from "@/lib/store/profileStore";
 import { fmtPct, fmtCurrency } from "@/lib/formatters";
 import {
   ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -10,6 +12,17 @@ import {
 } from "recharts";
 import type { OptimizationResult, FrontierPoint } from "@/lib/types";
 import { Plus, Trash2 } from "lucide-react";
+
+const PROFILE_COLORS: Record<string, string> = {
+  conservative: "#2563eb",
+  base: "#16a34a",
+  aggressive: "#dc2626",
+};
+const PROFILE_LABELS: Record<string, string> = {
+  conservative: "Conservador",
+  base: "Base",
+  aggressive: "Agresivo",
+};
 
 const COLORS = { maxSharpe: "#f3a712", minVol: "#38b2ff", riskParity: "#4dff4d", bl: "#c084fc", current: "#8a9bb5" };
 
@@ -69,10 +82,17 @@ function WeightsSharesTable({
 
 export default function OptimizationPage() {
   const { data: portfolio } = usePortfolio();
+  const { profile } = useProfileStore();
   const [maxSingle, setMaxSingle] = useState(0.40);
   const [nSim, setNSim] = useState(3000);
   const [period, setPeriod] = useState("2y");
   const [result, setResult] = useState<OptimizationResult | null>(null);
+
+  const { data: profileData } = useQuery({
+    queryKey: ["profile-optimal"],
+    queryFn: () => fetchProfileOptimal(period),
+    staleTime: 5 * 60 * 1000,
+  });
 
   // Black-Litterman state
   const [blViews, setBlViews] = useState<{ ticker: string; ret: string }[]>([]);
@@ -108,7 +128,17 @@ export default function OptimizationPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-bloomberg-gold text-xs font-bold uppercase tracking-widest">Optimization</h1>
+      <div className="flex items-center gap-3">
+        <h1 className="text-bloomberg-gold text-xs font-bold uppercase tracking-widest">Optimization</h1>
+        {profile && (
+          <span
+            className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold"
+            style={{ color: PROFILE_COLORS[profile], background: profile === "conservative" ? "#eff6ff" : profile === "base" ? "#f0fdf4" : "#fef2f2" }}
+          >
+            Perfil: {PROFILE_LABELS[profile]}
+          </span>
+        )}
+      </div>
 
       {/* Controls */}
       <div className="bbg-card">
@@ -194,6 +224,22 @@ export default function OptimizationPage() {
                   <ReferenceDot x={result.current_metrics.volatility} y={result.current_metrics.return} r={7}
                     fill={COLORS.current} stroke="#0b0f14"
                     label={{ value: "● Current", position: "top", fontSize: 9, fill: COLORS.current }} />
+                )}
+                {profileData?.profiles?.[profile]?.metrics && (
+                  <ReferenceDot
+                    x={profileData.profiles[profile].metrics.ann_vol}
+                    y={profileData.profiles[profile].metrics.ann_return}
+                    r={8}
+                    fill={PROFILE_COLORS[profile] ?? "#888"}
+                    stroke="#fff"
+                    strokeWidth={2}
+                    label={{
+                      value: `◆ ${PROFILE_LABELS[profile] ?? profile}`,
+                      position: "bottom",
+                      fontSize: 9,
+                      fill: PROFILE_COLORS[profile] ?? "#888",
+                    }}
+                  />
                 )}
               </ScatterChart>
             </ResponsiveContainer>

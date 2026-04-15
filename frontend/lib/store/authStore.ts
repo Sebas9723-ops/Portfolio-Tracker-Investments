@@ -23,6 +23,6 @@ export const useAuthStore = create<AuthState>()(
       logout: () =>
         set({ token: null, userId: null, email: null, isAuthenticated: false }),
     }),
-    { name: "auth-storage" }
+    { name: "auth-storage", skipHydration: true }
   )
 );

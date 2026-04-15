@@ -5,7 +5,6 @@ import { fetchPositions, upsertPosition, deletePosition } from "@/lib/api/portfo
 import { fetchCash } from "@/lib/api/transactions";
 import { fetchAnalytics, fetchRebalancing, fetchFxExposure } from "@/lib/api/analytics";
 import { usePortfolio } from "@/lib/hooks/usePortfolio";
-import { fetchHistorical } from "@/lib/api/market";
 import { fmtCurrency, fmtPct, colorClass } from "@/lib/formatters";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { Plus, Trash2 } from "lucide-react";
@@ -33,27 +32,6 @@ export default function PortfolioPage() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ ticker: "", name: "", shares: "", avg_cost_native: "", currency: "USD" });
 
-  // Fetch 1-month historical for all tickers to compute monthly change
-  const tickers = (positions ?? []).map((p: Position) => p.ticker);
-  const monthlyQueries = tickers.map((ticker: string) =>
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    useQuery({
-      queryKey: ["hist-1m", ticker],
-      queryFn: () => fetchHistorical(ticker, "1m"),
-      enabled: tickers.length > 0,
-    })
-  );
-  const monthlyChange: Record<string, number | null> = {};
-  tickers.forEach((ticker: string, i: number) => {
-    const bars = monthlyQueries[i].data?.bars;
-    if (bars && bars.length >= 2) {
-      const first = bars[0].close;
-      const last = bars[bars.length - 1].close;
-      monthlyChange[ticker] = ((last - first) / first) * 100;
-    } else {
-      monthlyChange[ticker] = null;
-    }
-  });
 
   const addMutation = useMutation({
     mutationFn: upsertPosition,
@@ -157,7 +135,6 @@ export default function PortfolioPage() {
                   <th>Name</th>
                   <th className="text-right">Price</th>
                   <th className="text-right">1D%</th>
-                  <th className="text-right">1M%</th>
                   <th className="text-right">Shares</th>
                   <th className="text-right">Value</th>
                   <th className="text-right">P&L</th>
@@ -174,9 +151,6 @@ export default function PortfolioPage() {
                     <td className="text-bloomberg-muted">{row.name}</td>
                     <td className="text-right">{fmtCurrency(row.price_native, row.currency)}</td>
                     <td className={`text-right ${colorClass(row.change_pct_1d)}`}>{fmtPct(row.change_pct_1d)}</td>
-                    <td className={`text-right ${colorClass(monthlyChange[row.ticker])}`}>
-                      {monthlyChange[row.ticker] != null ? fmtPct(monthlyChange[row.ticker]) : "—"}
-                    </td>
                     <td className="text-right text-bloomberg-muted">{row.shares.toFixed(4)}</td>
                     <td className="text-right">{fmtCurrency(row.value_base, ccy)}</td>
                     <td className={`text-right ${colorClass(row.unrealized_pnl)}`}>

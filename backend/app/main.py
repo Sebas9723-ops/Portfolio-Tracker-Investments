@@ -9,6 +9,7 @@ from app.routers import (
     optimization, rebalancing, risk, settings as settings_router,
     fundamentals, technicals, news,
 )
+from app.routers import profile as profile_router
 from app.routers.settings import wl_router, alerts_router
 
 
@@ -57,6 +58,7 @@ app.include_router(alerts_router)
 app.include_router(fundamentals.router)
 app.include_router(technicals.router)
 app.include_router(news.router)
+app.include_router(profile_router.router)
 
 
 @app.get("/health")

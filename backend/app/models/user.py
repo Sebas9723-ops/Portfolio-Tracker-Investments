@@ -13,6 +13,7 @@ class UserSettings(BaseModel):
     rolling_window: int = 63
     tc_model: str = "broker"
     investor_profile: str = "balanced"
+    target_return: float = 0.08
 
 
 class LoginRequest(BaseModel):

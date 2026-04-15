@@ -5,8 +5,12 @@ import {
   LayoutDashboard, PieChart, TrendingUp, Target, RefreshCw,
   Shield, Calendar, DollarSign, ArrowLeftRight, BarChart2,
   Activity, Eye, Newspaper, Globe, Grid, LineChart, Settings, LogOut, Search, SlidersHorizontal,
+  UserCircle,
 } from "lucide-react";
 import { useAuthStore } from "@/lib/store/authStore";
+import { useProfileStore, type InvestorProfile } from "@/lib/store/profileStore";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { updateProfile } from "@/lib/api/profile";
 import { cn } from "@/lib/utils";
 
 const NAV = [
@@ -30,8 +34,62 @@ const NAV = [
   { label: "Sector Heatmap",  href: "/sector-heatmap",     icon: Grid },
   { label: "Yield Curve",     href: "/yield-curve",        icon: LineChart },
   null,
+  { label: "Perfil",          href: "/profile",            icon: UserCircle },
   { label: "Settings",        href: "/settings",           icon: Settings },
 ];
+
+const PROFILES: { key: InvestorProfile; label: string; short: string; color: string }[] = [
+  { key: "conservative", label: "Conservador", short: "C", color: "#2563eb" },
+  { key: "base",         label: "Base",        short: "B", color: "#16a34a" },
+  { key: "aggressive",   label: "Agresivo",    short: "A", color: "#dc2626" },
+];
+
+function ProfileSwitcher() {
+  const { profile, setProfile, setTargetReturn } = useProfileStore();
+  const qc = useQueryClient();
+
+  const mutation = useMutation({
+    mutationFn: (p: InvestorProfile) => updateProfile(p),
+    onSuccess: (_, p) => {
+      setProfile(p);
+      qc.invalidateQueries({ queryKey: ["rebalancing-suggestions"] });
+      qc.invalidateQueries({ queryKey: ["profile-optimal"] });
+    },
+  });
+
+  return (
+    <div className="px-3 py-2 border-b border-bloomberg-border">
+      <div className="text-[10px] text-bloomberg-muted mb-1.5 font-medium uppercase tracking-wide">
+        Perfil
+      </div>
+      <div className="flex gap-1">
+        {PROFILES.map((p) => {
+          const isActive = profile === p.key;
+          return (
+            <button
+              key={p.key}
+              title={p.label}
+              onClick={() => mutation.mutate(p.key)}
+              disabled={mutation.isPending}
+              className={cn(
+                "flex-1 py-1 rounded-md text-[10px] font-semibold transition-all",
+                isActive
+                  ? "text-white"
+                  : "text-bloomberg-muted bg-bloomberg-bg hover:bg-bloomberg-border"
+              )}
+              style={isActive ? { backgroundColor: p.color } : {}}
+            >
+              {p.short}
+            </button>
+          );
+        })}
+      </div>
+      <div className="text-[10px] text-bloomberg-muted mt-1 text-center">
+        {PROFILES.find((p) => p.key === profile)?.label}
+      </div>
+    </div>
+  );
+}
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -46,6 +104,9 @@ export function Sidebar() {
         <br />
         <span className="text-bloomberg-muted text-[11px]">Tracker</span>
       </div>
+
+      {/* Investor Profile Switcher */}
+      <ProfileSwitcher />
 
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto py-2">
