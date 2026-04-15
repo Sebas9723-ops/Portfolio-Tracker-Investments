@@ -33,6 +33,17 @@ export const fetchFxExposure = () =>
 export const fetchRollingMetrics = (window = 63, period = "2y") =>
   apiClient.get("/api/risk/rolling", { params: { window, period } }).then((r) => r.data);
 
+export const fetchRequiredForMaxSharpe = (params?: { period?: string; max_single_asset?: number }) =>
+  apiClient
+    .get<{
+      required_contribution: number;
+      max_sharpe_weights: Record<string, number>;
+      buy_plan: Record<string, { buy_value: number; buy_pct: number; target_weight: number; current_weight: number }>;
+      total_value: number;
+      total_after: number;
+    }>("/api/rebalancing/required-for-max-sharpe", { params })
+    .then((r) => r.data);
+
 export const fetchBlackLitterman = (body: {
   views: Record<string, number>;
   tau?: number;
