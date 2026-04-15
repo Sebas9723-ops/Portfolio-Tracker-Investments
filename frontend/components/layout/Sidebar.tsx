@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, PieChart, TrendingUp, Target, RefreshCw,
   Shield, Calendar, DollarSign, ArrowLeftRight, BarChart2,
-  Activity, Eye, Newspaper, Globe, Grid, LineChart, Settings, LogOut,
+  Activity, Eye, Newspaper, Globe, Grid, LineChart, Settings, LogOut, Search,
 } from "lucide-react";
 import { useAuthStore } from "@/lib/store/authStore";
 import { cn } from "@/lib/utils";
@@ -23,6 +23,7 @@ const NAV = [
   { label: "Fundamentals",    href: "/fundamentals",       icon: BarChart2 },
   { label: "Technicals",      href: "/technicals",         icon: Activity },
   { label: "Watchlist",       href: "/watchlist",          icon: Eye },
+  { label: "Lookup",          href: "/lookup",             icon: Search },
   { label: "News",            href: "/news",               icon: Newspaper },
   { label: "Market Overview", href: "/market-overview",    icon: Globe },
   { label: "Sector Heatmap",  href: "/sector-heatmap",     icon: Grid },

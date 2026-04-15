@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchAnalytics } from "@/lib/api/analytics";
+import { fetchAnalytics, fetchRollingMetrics } from "@/lib/api/analytics";
 import { MetricCard } from "@/components/shared/MetricCard";
 import { fmtPct, fmtDate, MONTHS_SHORT } from "@/lib/formatters";
 import {
@@ -16,6 +16,10 @@ export default function AnalyticsPage() {
   const { data, isLoading } = useQuery({
     queryKey: ["analytics", period],
     queryFn: () => fetchAnalytics(period),
+  });
+  const { data: rollingFull } = useQuery({
+    queryKey: ["rolling-full", period],
+    queryFn: () => fetchRollingMetrics(63, period),
   });
 
   if (isLoading) return <div className="text-bloomberg-muted text-xs p-4">Computing analytics…</div>;
@@ -95,6 +99,28 @@ export default function AnalyticsPage() {
               <Tooltip contentStyle={{ background: "#111820", border: "1px solid #1e2535", fontSize: 11 }} />
               <Line type="monotone" dataKey="sharpe" stroke="#f3a712" strokeWidth={1.5} dot={false} />
               <Line type="monotone" dataKey="sortino" stroke="#38b2ff" strokeWidth={1} dot={false} strokeDasharray="3 3" />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Rolling Volatility & Drawdown */}
+      {rollingFull && (rollingFull as { date: string; volatility: number | null }[]).length > 0 && (
+        <div className="bbg-card">
+          <p className="bbg-header">Rolling Volatility & Drawdown (63-day)</p>
+          <ResponsiveContainer width="100%" height={180}>
+            <LineChart data={rollingFull as object[]} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e2535" />
+              <XAxis dataKey="date" tick={{ fontSize: 9, fill: "#8a9bb5" }} tickLine={false} interval="preserveStartEnd" />
+              <YAxis yAxisId="vol" tick={{ fontSize: 9, fill: "#8a9bb5" }} tickLine={false} axisLine={false} width={40}
+                tickFormatter={(v) => `${(v * 100).toFixed(0)}%`} />
+              <YAxis yAxisId="dd" orientation="right" tick={{ fontSize: 9, fill: "#8a9bb5" }} tickLine={false} axisLine={false} width={40}
+                tickFormatter={(v) => `${(v * 100).toFixed(0)}%`} />
+              <Tooltip contentStyle={{ background: "#111820", border: "1px solid #1e2535", fontSize: 11 }}
+                formatter={(v: number) => `${(v * 100).toFixed(2)}%`} />
+              <Legend wrapperStyle={{ fontSize: 10 }} />
+              <Line yAxisId="vol" type="monotone" dataKey="volatility" stroke="#f3a712" strokeWidth={1.5} dot={false} name="Volatility" />
+              <Line yAxisId="dd" type="monotone" dataKey="drawdown" stroke="#ff4d4d" strokeWidth={1} dot={false} name="Drawdown" />
             </LineChart>
           </ResponsiveContainer>
         </div>

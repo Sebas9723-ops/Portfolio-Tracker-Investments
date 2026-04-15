@@ -45,9 +45,28 @@ export default function InvestmentHorizonPage() {
   const [vol, setVol] = useState(0.15);
   const [goal, setGoal] = useState(100000);
 
-  const data = monteCarlo(initial, monthly, years, ret, vol);
+  const data = monteCarlo(initial, monthly, years, ret, vol, 1000);
   const base = data[data.length - 1];
-  const successRate = base.p50 >= goal ? 75 : base.p10 >= goal ? 25 : 10;
+
+  // Proper success rate: count paths that hit goal (approximate via percentiles)
+  const successRate = (() => {
+    if (base.p10 >= goal) return 90;
+    if (base.p50 >= goal) return 50 + Math.round(50 * (base.p50 - goal) / (base.p50 - base.p10) * -1 + 50);
+    if (base.p90 >= goal) return Math.round(50 * (base.p90 - goal) / (base.p90 - base.p50));
+    return 5;
+  })();
+
+  // Required monthly contribution to hit goal at P50
+  const requiredMonthly = (() => {
+    const months = years * 12;
+    const mu = ret / 12;
+    // FV = PV*(1+mu)^n + PMT*((1+mu)^n - 1)/mu
+    const growth = Math.pow(1 + mu, months);
+    const pvComponent = initial * growth;
+    const annuityFactor = mu > 0 ? (growth - 1) / mu : months;
+    const needed = (goal - pvComponent) / annuityFactor;
+    return Math.max(0, needed);
+  })();
 
   const ccy = portfolio?.base_currency ?? "USD";
 
@@ -77,7 +96,7 @@ export default function InvestmentHorizonPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <div className="bbg-card">
           <p className="text-bloomberg-muted text-[10px] uppercase">Bear (P10)</p>
           <p className={`text-lg font-semibold ${(base?.p10 ?? 0) >= goal ? "positive" : "text-bloomberg-text"}`}>
@@ -95,6 +114,21 @@ export default function InvestmentHorizonPage() {
           <p className={`text-lg font-semibold ${(base?.p90 ?? 0) >= goal ? "positive" : "text-bloomberg-text"}`}>
             {fmtCurrency(base?.p90 ?? 0, ccy)}
           </p>
+        </div>
+        <div className="bbg-card">
+          <p className="text-bloomberg-muted text-[10px] uppercase">Success Rate</p>
+          <p className={`text-lg font-semibold ${successRate >= 50 ? "positive" : successRate >= 25 ? "gold" : "negative"}`}
+            style={successRate >= 25 && successRate < 50 ? { color: "#f3a712" } : {}}>
+            ~{successRate}%
+          </p>
+          <p className="text-bloomberg-muted text-[10px]">of hitting goal</p>
+        </div>
+        <div className="bbg-card">
+          <p className="text-bloomberg-muted text-[10px] uppercase">Required/mo</p>
+          <p className="text-lg font-semibold text-bloomberg-gold">
+            {fmtCurrency(requiredMonthly, ccy)}
+          </p>
+          <p className="text-bloomberg-muted text-[10px]">to reach P50 goal</p>
         </div>
       </div>
 
