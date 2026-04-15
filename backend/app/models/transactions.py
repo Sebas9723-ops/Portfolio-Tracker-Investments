@@ -10,6 +10,7 @@ class TransactionAction(str, Enum):
     DIVIDEND = "DIVIDEND"
     SPLIT = "SPLIT"
     FEE = "FEE"
+    ADJUSTMENT = "ADJUSTMENT"
 
 
 class TransactionCreate(BaseModel):

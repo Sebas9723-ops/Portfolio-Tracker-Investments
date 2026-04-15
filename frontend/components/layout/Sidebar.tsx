@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, PieChart, TrendingUp, Target, RefreshCw,
   Shield, Calendar, DollarSign, ArrowLeftRight, BarChart2,
-  Activity, Eye, Newspaper, Globe, Grid, LineChart, Settings, LogOut, Search,
+  Activity, Eye, Newspaper, Globe, Grid, LineChart, Settings, LogOut, Search, SlidersHorizontal,
 } from "lucide-react";
 import { useAuthStore } from "@/lib/store/authStore";
 import { cn } from "@/lib/utils";
@@ -19,6 +19,7 @@ const NAV = [
   { label: "Horizon",         href: "/investment-horizon", icon: Calendar },
   { label: "Income",          href: "/income",             icon: DollarSign },
   { label: "Transactions",    href: "/transactions",       icon: ArrowLeftRight },
+  { label: "Manage",          href: "/manage",             icon: SlidersHorizontal },
   null, // divider
   { label: "Fundamentals",    href: "/fundamentals",       icon: BarChart2 },
   { label: "Technicals",      href: "/technicals",         icon: Activity },

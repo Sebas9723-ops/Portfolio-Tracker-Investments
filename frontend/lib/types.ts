@@ -88,7 +88,7 @@ export interface Snapshot {
 
 // ── Transactions ──────────────────────────────────────────────────────────────
 
-export type TransactionAction = "BUY" | "SELL" | "DIVIDEND" | "SPLIT" | "FEE";
+export type TransactionAction = "BUY" | "SELL" | "DIVIDEND" | "SPLIT" | "FEE" | "ADJUSTMENT";
 
 export interface Transaction {
   id: string;

@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import Optional
 from app.auth.dependencies import get_user_id
 from app.db.supabase_client import get_admin_client
 from app.models.transactions import TransactionCreate, Transaction, CashBalanceUpdate
@@ -52,6 +53,21 @@ def upsert_cash(body: CashBalanceUpdate, user_id: str = Depends(get_user_id)):
         data, on_conflict="user_id,currency,account_name"
     ).execute()
     return res.data[0] if res.data else {}
+
+
+@router.delete("/cash", status_code=204)
+def delete_cash(
+    currency: str = Query(...),
+    account_name: Optional[str] = Query(default=None),
+    user_id: str = Depends(get_user_id),
+):
+    db = get_admin_client()
+    q = db.table("cash_balances").delete().eq("user_id", user_id).eq("currency", currency)
+    if account_name:
+        q = q.eq("account_name", account_name)
+    else:
+        q = q.is_("account_name", "null")
+    q.execute()
 
 
 # ── Dividends ─────────────────────────────────────────────────────────────────

@@ -16,5 +16,8 @@ export const saveSnapshot = (notes?: string) =>
 export const upsertPosition = (data: Partial<Position> & { ticker: string }) =>
   apiClient.post("/api/portfolio/positions", data).then((r) => r.data);
 
+export const updatePosition = (ticker: string, data: { shares?: number; avg_cost_native?: number; name?: string }) =>
+  apiClient.put(`/api/portfolio/positions/${ticker}`, data).then((r) => r.data);
+
 export const deletePosition = (ticker: string) =>
   apiClient.delete(`/api/portfolio/positions/${ticker}`);
