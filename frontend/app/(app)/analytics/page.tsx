@@ -169,8 +169,8 @@ export default function AnalyticsPage() {
                 .map(([ticker, s]) => (
                   <tr key={ticker}>
                     <td className="text-bloomberg-gold font-medium">{ticker}</td>
-                    <td className={`text-right ${s.ann_return >= 0 ? "text-green-400" : "text-red-400"}`}>
-                      {fmtPct(s.ann_return)}
+                    <td className={`text-right ${(s.ann_return ?? 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
+                      {s.ann_return != null ? fmtPct(s.ann_return) : "—"}
                     </td>
                     <td className="text-right text-bloomberg-muted">{fmtPct(s.ann_vol)}</td>
                     <td className={`text-right font-medium ${s.sharpe >= 1 ? "text-green-400" : s.sharpe >= 0 ? "text-bloomberg-gold" : "text-red-400"}`}>
@@ -179,6 +179,14 @@ export default function AnalyticsPage() {
                   </tr>
                 ))}
             </tbody>
+            <tfoot>
+              <tr className="border-t-2 border-bloomberg-border">
+                <td className="font-semibold text-bloomberg-text pt-2">Portfolio (current)</td>
+                <td className="text-right pt-2 text-green-600 font-semibold">{metrics.annualized_return != null ? fmtPct(metrics.annualized_return) : "—"}</td>
+                <td className="text-right pt-2 text-bloomberg-muted font-semibold">{metrics.annualized_vol != null ? fmtPct(metrics.annualized_vol) : "—"}</td>
+                <td className="text-right pt-2 font-bold text-bloomberg-text">{metrics.sharpe?.toFixed(3) ?? "—"}</td>
+              </tr>
+            </tfoot>
           </table>
         </div>
       )}

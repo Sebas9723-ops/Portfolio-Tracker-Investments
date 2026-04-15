@@ -53,7 +53,8 @@ function DriftBadge({ drift, threshold }: { drift: number; threshold: number }) 
 }
 
 export default function RebalancingPage() {
-  const [contribution, setContribution] = useState(0);
+  const [contributionStr, setContributionStr] = useState("0");
+  const contribution = parseFloat(contributionStr) || 0;
   const [tcModel, setTcModel] = useState("broker");
   const [msPeriod, setMsPeriod] = useState("2y");
   const [msMaxSingle, setMsMaxSingle] = useState(0.40);
@@ -119,8 +120,8 @@ export default function RebalancingPage() {
             <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">Cash to Deploy ({ccy})</label>
             <input
               type="number"
-              value={contribution}
-              onChange={(e) => setContribution(parseFloat(e.target.value) || 0)}
+              value={contributionStr}
+              onChange={(e) => setContributionStr(e.target.value)}
               className="bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs w-36 focus:outline-none focus:border-bloomberg-gold"
               step="100"
             />

@@ -46,10 +46,10 @@ function filterSnaps(snaps: Snapshot[], period: Period): Snapshot[] {
 function DonutCenter({ cx, cy, value, ccy }: { cx: number; cy: number; value: number; ccy: string }) {
   return (
     <g>
-      <text x={cx} y={cy - 10} textAnchor="middle" fill="#8a9bb5" fontSize={9} fontFamily="IBM Plex Mono, monospace">
+      <text x={cx} y={cy - 10} textAnchor="middle" fill="#64748b" fontSize={9} fontFamily="IBM Plex Mono, monospace">
         Total Net Worth
       </text>
-      <text x={cx} y={cy + 12} textAnchor="middle" fill="#f3f4f6" fontSize={15} fontWeight="bold" fontFamily="IBM Plex Mono, monospace">
+      <text x={cx} y={cy + 12} textAnchor="middle" fill="#0f172a" fontSize={16} fontWeight="bold" fontFamily="IBM Plex Mono, monospace">
         {fmtCurrency(value, ccy, true)}
       </text>
     </g>

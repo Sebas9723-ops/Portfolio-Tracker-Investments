@@ -24,7 +24,15 @@ const PROFILE_LABELS: Record<string, string> = {
   aggressive: "Agresivo",
 };
 
-const COLORS = { maxSharpe: "#f3a712", minVol: "#38b2ff", riskParity: "#4dff4d", bl: "#c084fc", current: "#8a9bb5" };
+const COLORS = { maxSharpe: "#f3a712", minVol: "#38b2ff", riskParity: "#4dff4d", bl: "#c084fc", current: "#8a9bb5" }
+
+function sharpeToColor(sharpe: number, min: number, max: number): string {
+  const t = max === min ? 0.5 : Math.max(0, Math.min(1, (sharpe - min) / (max - min)));
+  const r = Math.round(220 * (1 - t) + 22 * t);
+  const g = Math.round(38 * (1 - t) + 163 * t);
+  const b = Math.round(38 * (1 - t) + 74 * t);
+  return `rgb(${r},${g},${b})`;
+};
 
 // Compute recommended shares from weights + portfolio value + prices
 function computeShares(
@@ -86,7 +94,6 @@ export default function OptimizationPage() {
   const [maxSingle, setMaxSingle] = useState(0.40);
   const [nSim, setNSim] = useState(3000);
   const [period, setPeriod] = useState("2y");
-  const [result, setResult] = useState<OptimizationResult | null>(null);
 
   const { data: profileData } = useQuery({
     queryKey: ["profile-optimal"],
@@ -100,9 +107,10 @@ export default function OptimizationPage() {
   const [tau, setTau] = useState(0.05);
   const [riskAversion, setRiskAversion] = useState(3.0);
 
-  const { mutate: runFrontier, isPending: pendingFrontier } = useMutation({
-    mutationFn: () => fetchFrontier({ max_single_asset: maxSingle, n_simulations: nSim, period }),
-    onSuccess: setResult,
+  const { data: result, isFetching: pendingFrontier, refetch: runFrontier } = useQuery({
+    queryKey: ["frontier", maxSingle, nSim, period],
+    queryFn: () => fetchFrontier({ max_single_asset: maxSingle, n_simulations: nSim, period }),
+    staleTime: 10 * 60 * 1000,
   });
 
   const { mutate: runBL, isPending: pendingBL } = useMutation({
@@ -120,10 +128,13 @@ export default function OptimizationPage() {
   const totalValue = portfolio?.total_value_base ?? 0;
   const ccy = portfolio?.base_currency ?? "USD";
 
+  const minSharpe = result ? Math.min(...result.frontier.map((p) => p.sharpe)) : 0;
+  const maxSharpe = result ? Math.max(...result.frontier.map((p) => p.sharpe)) : 1;
+
   const CustomDot = (props: { payload?: FrontierPoint; cx?: number; cy?: number }) => {
     const { cx, cy, payload } = props;
     if (!payload || !cx || !cy) return null;
-    return <circle cx={cx} cy={cy} r={2} fill="#1e2535" />;
+    return <circle cx={cx} cy={cy} r={2.5} fill={sharpeToColor(payload.sharpe, minSharpe, maxSharpe)} opacity={0.75} />;
   };
 
   return (
@@ -174,6 +185,10 @@ export default function OptimizationPage() {
         </button>
       </div>
 
+      {pendingFrontier && !result && (
+        <div className="bbg-card text-center text-bloomberg-muted text-xs py-8">Computing efficient frontier…</div>
+      )}
+
       {result && (
         <>
           {/* Efficient Frontier */}
@@ -203,26 +218,26 @@ export default function OptimizationPage() {
             </div>
             <ResponsiveContainer width="100%" height={300}>
               <ScatterChart margin={{ top: 10, right: 20, bottom: 20, left: 20 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e2535" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                 <XAxis dataKey="vol" name="Volatility %" type="number" domain={["auto", "auto"]}
-                  tick={{ fontSize: 10, fill: "#8a9bb5" }} tickLine={false}
-                  label={{ value: "Volatility (%)", position: "insideBottom", offset: -10, fontSize: 10, fill: "#8a9bb5" }} />
+                  tick={{ fontSize: 10, fill: "#94a3b8" }} tickLine={false}
+                  label={{ value: "Volatility (%)", position: "insideBottom", offset: -10, fontSize: 10, fill: "#64748b" }} />
                 <YAxis dataKey="ret" name="Return %" type="number" domain={["auto", "auto"]}
-                  tick={{ fontSize: 10, fill: "#8a9bb5" }} tickLine={false} axisLine={false} width={40}
-                  label={{ value: "Return (%)", angle: -90, position: "insideLeft", fontSize: 10, fill: "#8a9bb5" }} />
+                  tick={{ fontSize: 10, fill: "#94a3b8" }} tickLine={false} axisLine={false} width={40}
+                  label={{ value: "Return (%)", angle: -90, position: "insideLeft", fontSize: 10, fill: "#64748b" }} />
                 <Tooltip cursor={false}
-                  contentStyle={{ background: "#111820", border: "1px solid #1e2535", fontSize: 11 }}
+                  contentStyle={{ background: "#fff", border: "1px solid #e2e8f0", fontSize: 11 }}
                   formatter={(v: number) => `${v.toFixed(2)}%`} />
                 <Scatter data={result.frontier} shape={<CustomDot />} />
                 <ReferenceDot x={result.max_sharpe.vol} y={result.max_sharpe.ret} r={7}
-                  fill={COLORS.maxSharpe} stroke="#0b0f14"
+                  fill={COLORS.maxSharpe} stroke="#fff"
                   label={{ value: "★ Max Sharpe", position: "top", fontSize: 9, fill: COLORS.maxSharpe }} />
                 <ReferenceDot x={result.min_vol.vol} y={result.min_vol.ret} r={7}
-                  fill={COLORS.minVol} stroke="#0b0f14"
+                  fill={COLORS.minVol} stroke="#fff"
                   label={{ value: "★ Min Vol", position: "top", fontSize: 9, fill: COLORS.minVol }} />
                 {result.current_metrics.volatility != null && (
                   <ReferenceDot x={result.current_metrics.volatility} y={result.current_metrics.return} r={7}
-                    fill={COLORS.current} stroke="#0b0f14"
+                    fill={COLORS.current} stroke="#fff"
                     label={{ value: "● Current", position: "top", fontSize: 9, fill: COLORS.current }} />
                 )}
                 {profileData?.profiles?.[profile]?.metrics && (
@@ -243,6 +258,11 @@ export default function OptimizationPage() {
                 )}
               </ScatterChart>
             </ResponsiveContainer>
+            <div className="flex items-center gap-2 mt-2 justify-end text-[10px] text-bloomberg-muted">
+              <span>Low Sharpe</span>
+              <div className="w-24 h-2 rounded" style={{ background: "linear-gradient(to right, rgb(220,38,38), rgb(22,163,74))" }} />
+              <span>High Sharpe</span>
+            </div>
           </div>
 
           {/* Weights + Shares tables */}

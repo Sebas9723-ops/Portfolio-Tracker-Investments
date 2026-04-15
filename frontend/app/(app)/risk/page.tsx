@@ -13,7 +13,7 @@ const COLORS = ["#f3a712", "#4dff4d", "#38b2ff", "#ff4d4d", "#c084fc", "#fb923c"
 
 export default function RiskPage() {
   const [confidence, setConfidence] = useState(0.95);
-  const { data: varData } = useQuery({ queryKey: ["var", confidence], queryFn: () => fetchVaR(confidence) });
+  const { data: varData, isLoading: varLoading } = useQuery({ queryKey: ["var", confidence], queryFn: () => fetchVaR(confidence) });
   const { data: stress } = useQuery({ queryKey: ["stress"], queryFn: fetchStressTest });
   const { data: corr } = useQuery({ queryKey: ["correlation"], queryFn: () => fetchCorrelation() });
   const { data: budget } = useQuery({ queryKey: ["riskbudget"], queryFn: () => fetchRiskBudget() });
@@ -36,6 +36,13 @@ export default function RiskPage() {
             ))}
           </div>
         </div>
+        {varLoading && !varData && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[...Array(4)].map((_, i) => (
+              <div key={i} className="bbg-card animate-pulse h-14 bg-bloomberg-bg" />
+            ))}
+          </div>
+        )}
         {varData && (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <MetricCard label="Historical VaR" value={fmtCurrency(varData.var_historical)} deltaPositive={false} />
