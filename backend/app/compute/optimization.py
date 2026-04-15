@@ -110,6 +110,78 @@ def _risk_parity(cov_matrix: np.ndarray, tickers: list[str]) -> dict[str, float]
         return {t: round(1 / n, 4) for t in tickers}
 
 
+def black_litterman(
+    returns_df: pd.DataFrame,
+    views: dict[str, float],          # ticker → expected annual return (e.g. 0.12 = 12%)
+    tau: float = 0.05,
+    risk_aversion: float = 3.0,
+    max_single_asset: float = 0.40,
+) -> dict[str, float]:
+    """
+    Black-Litterman optimization.
+    Uses equal-weight market portfolio as prior.
+    Views are absolute: user specifies expected annual return per ticker.
+    Returns optimal weights dict.
+    """
+    if returns_df.empty or returns_df.shape[1] < 2:
+        return {}
+
+    tickers = list(returns_df.columns)
+    n = len(tickers)
+    cov = returns_df.cov().values * 252  # annualized covariance
+
+    # Prior: market equilibrium with equal weights
+    w_eq = np.ones(n) / n
+    pi = risk_aversion * cov @ w_eq  # implied equilibrium returns
+
+    if not views:
+        # No views → optimize on equilibrium returns
+        mu_bl = pi
+    else:
+        # Build P (views matrix) and q (views vector) for absolute views
+        view_tickers = [t for t in views if t in tickers]
+        k = len(view_tickers)
+        if k == 0:
+            mu_bl = pi
+        else:
+            P = np.zeros((k, n))
+            q = np.zeros(k)
+            for i, t in enumerate(view_tickers):
+                j = tickers.index(t)
+                P[i, j] = 1.0
+                q[i] = views[t]
+
+            # Uncertainty: proportional to variance of view assets
+            omega = np.diag([tau * cov[tickers.index(t), tickers.index(t)] for t in view_tickers])
+
+            tau_sigma = tau * cov
+            try:
+                inv_tau_sigma = np.linalg.inv(tau_sigma)
+                inv_omega = np.linalg.inv(omega)
+                M = inv_tau_sigma + P.T @ inv_omega @ P
+                mu_bl = np.linalg.solve(M, inv_tau_sigma @ pi + P.T @ inv_omega @ q)
+            except np.linalg.LinAlgError:
+                mu_bl = pi
+
+    # Optimize max Sharpe with BL expected returns
+    def neg_sharpe(w: np.ndarray) -> float:
+        r = float(mu_bl @ w)
+        v = float(np.sqrt(w @ cov @ w))
+        return -(r - 0.045) / v if v > 0 else 0.0
+
+    w0 = np.ones(n) / n
+    bounds = [(0.0, max_single_asset)] * n
+    constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
+    try:
+        res = minimize(neg_sharpe, w0, method="SLSQP", bounds=bounds, constraints=constraints,
+                       options={"ftol": 1e-9, "maxiter": 1000})
+        w = np.clip(res.x, 0, None)
+        w /= w.sum()
+        return {t: round(float(w[i]), 4) for i, t in enumerate(tickers)}
+    except Exception:
+        return {t: round(1 / n, 4) for t in tickers}
+
+
 def _empty_point() -> FrontierPoint:
     return FrontierPoint(ret=0, vol=0, sharpe=0, weights={})
 

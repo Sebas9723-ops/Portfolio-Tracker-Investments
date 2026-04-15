@@ -32,3 +32,12 @@ export const fetchFxExposure = () =>
 
 export const fetchRollingMetrics = (window = 63, period = "2y") =>
   apiClient.get("/api/risk/rolling", { params: { window, period } }).then((r) => r.data);
+
+export const fetchBlackLitterman = (body: {
+  views: Record<string, number>;
+  tau?: number;
+  risk_aversion?: number;
+  max_single_asset?: number;
+  period?: string;
+}) =>
+  apiClient.post<{ weights: Record<string, number> }>("/api/optimization/black-litterman", body).then((r) => r.data);
