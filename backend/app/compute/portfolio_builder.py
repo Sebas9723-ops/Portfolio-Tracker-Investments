@@ -34,11 +34,18 @@ def build_portfolio(
         if shares == 0:
             continue
 
-        currency = pos.get("currency") or get_native_currency(ticker)
+        # Exchange currency: always determined by where the ticker trades
+        # (EUR for XETRA, GBP for LSE, USD for US). Used for price conversion.
+        exchange_currency = get_native_currency(ticker)
+        # Position currency: the currency in which avg_cost was entered by the user.
+        # May differ from exchange_currency (e.g. user buys VWCE.DE on XTB in USD).
+        pos_currency = pos.get("currency") or exchange_currency
+
         quote = quotes.get(ticker)
         price_native = quote.price if quote else 0.0
-        fx_rate = fx_rates.get(currency, 1.0)
-        price_base = price_native * fx_rate
+        # Always convert price using the exchange's native currency, not the DB field
+        price_fx_rate = fx_rates.get(exchange_currency, 1.0)
+        price_base = price_native * price_fx_rate
 
         value_native = shares * price_native
         value_base = shares * price_base
@@ -48,7 +55,9 @@ def build_portfolio(
             tx_avg_costs.get(ticker)
             or pos.get("avg_cost_native")
         )
-        avg_cost_base = (avg_cost_native * fx_rate) if avg_cost_native else None
+        # Avg cost may be in pos_currency (e.g. USD if user entered cost in USD)
+        avg_cost_fx_rate = fx_rates.get(pos_currency, 1.0)
+        avg_cost_base = (avg_cost_native * avg_cost_fx_rate) if avg_cost_native else None
         invested_base = (shares * avg_cost_base) if avg_cost_base else None
         unrealized_pnl = (value_base - invested_base) if invested_base else None
         unrealized_pnl_pct = (unrealized_pnl / invested_base * 100) if invested_base else None
@@ -57,11 +66,11 @@ def build_portfolio(
             ticker=ticker,
             name=pos.get("name") or ticker,
             shares=shares,
-            currency=currency,
+            currency=exchange_currency,
             market=pos.get("market", "US"),
             price_native=price_native,
             price_base=price_base,
-            fx_rate=fx_rate,
+            fx_rate=price_fx_rate,
             avg_cost_native=avg_cost_native,
             avg_cost_base=avg_cost_base,
             value_native=value_native,

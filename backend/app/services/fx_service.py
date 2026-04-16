@@ -31,20 +31,33 @@ def get_fx_rates(currencies: list[str], base: str = "USD") -> dict[str, float]:
             pairs_needed.append(ccy)
 
     if pairs_needed:
-        yf_symbols = [_FX_PAIR_MAP.get(c, f"{c}{base}=X") for c in pairs_needed if _FX_PAIR_MAP.get(c) or True]
-        yf_symbols = [s for s in yf_symbols if s is not None]
+        # Build symbol list and a reverse map sym → ccy
+        sym_to_ccy: dict[str, str] = {}
+        yf_symbols: list[str] = []
+        for c in pairs_needed:
+            sym = _FX_PAIR_MAP.get(c, f"{c}{base}=X")
+            if sym:
+                yf_symbols.append(sym)
+                sym_to_ccy[sym] = c
+
         try:
-            raw = yf.download(yf_symbols, period="5d", interval="1d",
+            # Use 1h interval so we get the most recent intraday FX rate
+            raw = yf.download(yf_symbols, period="2d", interval="1h",
                               auto_adjust=False, progress=False)
-            closes = raw["Close"] if "Close" in raw.columns else raw
-            if not isinstance(closes, pd.DataFrame):
-                closes = closes.to_frame()
-            for ccy in pairs_needed:
-                sym = _FX_PAIR_MAP.get(ccy, f"{ccy}{base}=X")
-                if sym and sym in closes.columns:
+
+            # Normalise to a DataFrame with FX symbols as columns
+            if isinstance(raw.columns, pd.MultiIndex):
+                closes = raw["Close"]  # MultiIndex → columns are ticker names
+            elif "Close" in raw.columns:
+                # Single ticker download returns flat columns; rebuild with sym name
+                closes = raw[["Close"]].rename(columns={"Close": yf_symbols[0]})
+            else:
+                closes = raw  # already column-per-ticker
+
+            for sym, ccy in sym_to_ccy.items():
+                if sym in closes.columns:
                     series = closes[sym].dropna()
                     if len(series) > 0:
-                        # All pairs are quoted as X/USD — invert if base != USD
                         rates[ccy] = float(series.iloc[-1])
                         continue
                 rates[ccy] = _FALLBACK_RATES.get(ccy, 1.0)

@@ -42,8 +42,12 @@ def get_portfolio(user_id: str = Depends(get_user_id)):
     tickers = [p["ticker"] for p in positions]
     quotes = get_quotes(tickers)
 
-    # Build FX rates
-    currencies = list(set(get_native_currency(t) for t in tickers))
+    # Build FX rates — include both exchange native currencies (for price) and
+    # position DB currencies (for avg cost, which the user may have entered in a
+    # different currency, e.g. USD for a XETRA-listed ETF bought via XTB)
+    exchange_currencies = [get_native_currency(t) for t in tickers]
+    pos_currencies = [p.get("currency") or get_native_currency(p["ticker"]) for p in positions]
+    currencies = list(set(exchange_currencies + pos_currencies))
     fx_rates = get_fx_rates(currencies, base=base_currency)
 
     return build_portfolio(positions, quotes, fx_rates, base_currency, transactions)
@@ -106,7 +110,12 @@ def save_snapshot(body: SnapshotCreate, user_id: str = Depends(get_user_id)):
 
     tickers = [p["ticker"] for p in positions]
     quotes = get_quotes(tickers) if tickers else {}
-    currencies = list(set(get_native_currency(t) for t in tickers)) if tickers else []
+    if tickers:
+        exchange_currencies = [get_native_currency(t) for t in tickers]
+        pos_currencies = [p.get("currency") or get_native_currency(p["ticker"]) for p in positions]
+        currencies = list(set(exchange_currencies + pos_currencies))
+    else:
+        currencies = []
     fx_rates = get_fx_rates(currencies, base=base_currency) if currencies else {}
     summary = build_portfolio(positions, quotes, fx_rates, base_currency, transactions)
 
