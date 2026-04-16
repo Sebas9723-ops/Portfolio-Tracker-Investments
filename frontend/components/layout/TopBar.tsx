@@ -1,5 +1,6 @@
 "use client";
 import { useMarketQuotes } from "@/lib/hooks/useMarketQuotes";
+import { useSettingsStore } from "@/lib/store/settingsStore";
 import { fmtCurrency, fmtPct, colorClass } from "@/lib/formatters";
 import { RefreshCw } from "lucide-react";
 
@@ -10,6 +11,7 @@ const LABELS: Record<string, string> = {
 
 export function TopBar() {
   const { data: quotes, isFetching } = useMarketQuotes(WATCH_TICKERS);
+  const base_currency = useSettingsStore((s) => s.base_currency);
 
   return (
     <header
@@ -36,9 +38,16 @@ export function TopBar() {
         })}
       </div>
 
-      {/* Status */}
-      <div className="flex items-center gap-2 text-bloomberg-muted">
+      {/* Status + currency indicator */}
+      <div className="flex items-center gap-3 text-bloomberg-muted">
         {isFetching && <RefreshCw size={11} className="animate-spin text-bloomberg-muted" />}
+        <span
+          className="text-[10px] font-bold px-2 py-0.5 border"
+          style={{ borderColor: "#f3a712", color: "#f3a712" }}
+          title="Moneda base del portfolio"
+        >
+          {base_currency}
+        </span>
         <span className="text-bloomberg-text-dim">
           {new Date().toLocaleTimeString("en-US", { hour12: false })}
         </span>

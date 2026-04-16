@@ -3,15 +3,15 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/lib/store/authStore";
 import { useProfileStore } from "@/lib/store/profileStore";
+import { useSettingsStore } from "@/lib/store/settingsStore";
+import { fetchSettings } from "@/lib/api/settings";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const router = useRouter();
-  // Wait for stores to rehydrate from localStorage before checking auth.
-  // Without this, isAuthenticated is briefly false on first render even when logged in,
-  // causing a flash redirect to /login.
+  const setSettings = useSettingsStore((s) => s.setSettings);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
@@ -24,6 +24,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       router.push("/login");
     }
   }, [hydrated, isAuthenticated, router]);
+
+  // Bootstrap settings from DB on every app load so the store is always in sync.
+  useEffect(() => {
+    if (hydrated && isAuthenticated) {
+      fetchSettings().then(setSettings).catch(() => {});
+    }
+  }, [hydrated, isAuthenticated]);
 
   if (!hydrated || !isAuthenticated) return null;
 
