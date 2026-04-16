@@ -18,12 +18,20 @@ export default function TransactionsPage() {
 
   const createMut = useMutation({
     mutationFn: createTransaction,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["transactions"] }); setShowForm(false); setForm(initForm); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["transactions"] });
+      qc.invalidateQueries({ queryKey: ["portfolioHistory"] });
+      setShowForm(false);
+      setForm(initForm);
+    },
   });
 
   const delMut = useMutation({
     mutationFn: deleteTransaction,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["transactions"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["transactions"] });
+      qc.invalidateQueries({ queryKey: ["portfolioHistory"] });
+    },
   });
 
   const totalBought = transactions?.filter((t) => t.action === "BUY")
