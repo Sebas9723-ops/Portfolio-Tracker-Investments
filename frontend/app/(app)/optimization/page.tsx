@@ -614,7 +614,7 @@ export default function OptimizationPage() {
                     strokeWidth={2}
                     label={{
                       value: `◆ ${PROFILE_LABELS[profile as ProfileKey] ?? profile}`,
-                      position: "bottom",
+                      position: "right",
                       fontSize: 9,
                       fill: PROFILE_COLORS[profile as ProfileKey] ?? "#888",
                     }}
