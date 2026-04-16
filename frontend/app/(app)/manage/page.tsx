@@ -10,7 +10,7 @@ import type { Position, TransactionAction } from "@/lib/types";
 const CURRENCIES = ["USD", "EUR", "GBP", "COP", "CHF", "AUD"];
 const MARKETS = ["US", "LSE", "XETRA", "EURONEXT", "TSX", "ASX"];
 
-const initPositionForm = { ticker: "", name: "", shares: "", avg_cost_native: "", currency: "USD", market: "US" };
+const initPositionForm = { ticker: "", name: "", shares: "", avg_cost_native: "" };
 const initCashForm = { currency: "USD", amount: "", account_name: "" };
 
 type EditRow = { shares: string; avg_cost_native: string; name: string };
@@ -165,38 +165,44 @@ export default function ManagePage() {
         {showPosForm && (
           <div className="mb-4 p-3 border border-bloomberg-border bg-bloomberg-bg">
             <p className="text-bloomberg-muted text-[10px] uppercase mb-2">New Position</p>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-2">
-              {(["ticker", "name", "shares", "avg_cost_native"] as const).map((f) => (
-                <div key={f}>
-                  <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">{f}</label>
-                  <input
-                    type={["shares", "avg_cost_native"].includes(f) ? "number" : "text"}
-                    step="any"
-                    value={(posForm as Record<string, string>)[f]}
-                    onChange={(e) => setPosForm((p) => ({ ...p, [f]: f === "ticker" ? e.target.value.toUpperCase() : e.target.value }))}
-                    className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
-                  />
-                </div>
-              ))}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-2">
               <div>
-                <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">Currency</label>
-                <select
-                  value={posForm.currency}
-                  onChange={(e) => setPosForm((p) => ({ ...p, currency: e.target.value }))}
-                  className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs"
-                >
-                  {CURRENCIES.map((c) => <option key={c}>{c}</option>)}
-                </select>
+                <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">Ticker</label>
+                <input
+                  type="text"
+                  value={posForm.ticker}
+                  onChange={(e) => setPosForm((p) => ({ ...p, ticker: e.target.value.toUpperCase() }))}
+                  className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
+                />
               </div>
               <div>
-                <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">Market</label>
-                <select
-                  value={posForm.market}
-                  onChange={(e) => setPosForm((p) => ({ ...p, market: e.target.value }))}
-                  className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs"
-                >
-                  {MARKETS.map((m) => <option key={m}>{m}</option>)}
-                </select>
+                <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">Name</label>
+                <input
+                  type="text"
+                  value={posForm.name}
+                  onChange={(e) => setPosForm((p) => ({ ...p, name: e.target.value }))}
+                  className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
+                />
+              </div>
+              <div>
+                <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">Shares</label>
+                <input
+                  type="number"
+                  step="any"
+                  value={posForm.shares}
+                  onChange={(e) => setPosForm((p) => ({ ...p, shares: e.target.value }))}
+                  className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
+                />
+              </div>
+              <div>
+                <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">Avg Cost (USD)</label>
+                <input
+                  type="number"
+                  step="any"
+                  value={posForm.avg_cost_native}
+                  onChange={(e) => setPosForm((p) => ({ ...p, avg_cost_native: e.target.value }))}
+                  className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
+                />
               </div>
             </div>
             <div className="flex gap-2">
@@ -207,8 +213,8 @@ export default function ManagePage() {
                     name: posForm.name || posForm.ticker,
                     shares: parseFloat(posForm.shares) || 0,
                     avg_cost_native: posForm.avg_cost_native ? parseFloat(posForm.avg_cost_native) : undefined,
-                    currency: posForm.currency,
-                    market: posForm.market,
+                    currency: "USD",
+                    market: "US",
                   })
                 }
                 disabled={!posForm.ticker || !posForm.shares}
@@ -233,7 +239,7 @@ export default function ManagePage() {
                   <th>Ticker</th>
                   <th>Name</th>
                   <th className="text-right">Shares</th>
-                  <th className="text-right">Avg Cost</th>
+                  <th className="text-right">Avg Cost (USD)</th>
                   <th>CCY</th>
                   <th>Market</th>
                   <th className="text-center">Actions</th>
