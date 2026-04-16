@@ -152,14 +152,10 @@ export default function DashboardPage() {
   const winners = portfolio.rows.filter((r) => (r.unrealized_pnl ?? 0) >= 0).length;
   const losers = portfolio.rows.length - winners;
 
-  // Current Return: rolling 1-year window, floored at portfolio inception date
-  const INCEPTION_DATE = "2026-03-02";
-  const oneYearAgo = new Date(); oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-  const oneYearAgoStr = oneYearAgo.toISOString().split("T")[0];
-  const START_DATE = oneYearAgoStr > INCEPTION_DATE ? oneYearAgoStr : INCEPTION_DATE;
-  const startEntry = allHistory.find((d) => d.date >= START_DATE);
-  const currentReturnVal = startEntry ? totalValue - startEntry.value : null;
-  const currentReturnPct = startEntry && startEntry.value > 0 ? ((totalValue - startEntry.value) / startEntry.value) * 100 : null;
+  // Current Return: (price gain + dividends) / invested capital — exact P&L since inception
+  const INCEPTION_DATE = "2026-03-26";
+  const currentReturnVal = invested > 0 ? totalReturn : null;
+  const currentReturnPct = invested > 0 ? (totalReturn / invested) * 100 : null;
 
   return (
     <div className="space-y-4">

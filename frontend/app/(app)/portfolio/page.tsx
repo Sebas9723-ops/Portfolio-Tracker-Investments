@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchPositions, upsertPosition, deletePosition } from "@/lib/api/portfolio";
 import { fetchCash } from "@/lib/api/transactions";
 import { fetchAnalytics, fetchRebalancing, fetchFxExposure } from "@/lib/api/analytics";
-import { usePortfolio, usePortfolioHistory } from "@/lib/hooks/usePortfolio";
+import { usePortfolio } from "@/lib/hooks/usePortfolio";
 import { fmtCurrency, fmtPct, colorClass } from "@/lib/formatters";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { Plus, Trash2 } from "lucide-react";
@@ -21,7 +21,6 @@ export default function PortfolioPage() {
   const { data: positions, isLoading } = useQuery({ queryKey: ["positions"], queryFn: fetchPositions });
   const { data: cash } = useQuery({ queryKey: ["cash"], queryFn: fetchCash });
   const { data: portfolio } = usePortfolio();
-  const { data: historyData } = usePortfolioHistory();
   const { data: rebalancing } = useQuery({ queryKey: ["rebalancing", 0, "broker"], queryFn: () => fetchRebalancing({}) });
   const { data: analytics } = useQuery({ queryKey: ["analytics", "1y"], queryFn: () => fetchAnalytics("1y") });
   const { data: fx } = useQuery({ queryKey: ["fxexposure"], queryFn: fetchFxExposure });
@@ -54,16 +53,13 @@ export default function PortfolioPage() {
 
   if (isLoading) return <div className="text-bloomberg-muted text-xs p-4">Loading…</div>;
 
-  // Current Return: rolling 1-year window, floored at portfolio inception date
-  const INCEPTION_DATE = "2026-03-02";
-  const oneYearAgo = new Date(); oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-  const oneYearAgoStr = oneYearAgo.toISOString().split("T")[0];
-  const START_DATE = oneYearAgoStr > INCEPTION_DATE ? oneYearAgoStr : INCEPTION_DATE;
+  // Current Return: (price gain + dividends) / invested capital — exact P&L since inception
+  const INCEPTION_DATE = "2026-03-26";
   const totalValue = portfolio?.total_value_base ?? 0;
-  const allHistory = (historyData ?? []).slice().sort((a, b) => a.date.localeCompare(b.date));
-  const startEntry = allHistory.find((d) => d.date >= START_DATE);
-  const currentReturnVal = startEntry ? totalValue - startEntry.value : null;
-  const currentReturnPct = startEntry && startEntry.value > 0 ? ((totalValue - startEntry.value) / startEntry.value) * 100 : null;
+  const invested = portfolio?.total_invested_base ?? 0;
+  const priceGain = portfolio?.total_unrealized_pnl ?? 0;
+  const currentReturnVal = invested > 0 ? priceGain : null;   // dividends not available on this page
+  const currentReturnPct = invested > 0 ? ((priceGain) / invested) * 100 : null;
 
   // Allocation pie data from portfolio
   const pieData = (portfolio?.rows ?? []).map((r) => ({ name: r.ticker, value: r.value_base }));
