@@ -71,12 +71,12 @@ export default function ManagePage() {
     mutationFn: upsertPosition,
     onSuccess: (_, vars) => {
       // Auto-register invested capital as a BUY transaction
-      if (vars.avg_cost_native && vars.shares > 0) {
+      if (vars.avg_cost_native && vars.shares != null && vars.shares > 0) {
         auditMut.mutate({
           ticker: vars.ticker,
           date: posForm.date || today(),
           action: "BUY" as TransactionAction,
-          quantity: vars.shares,
+          quantity: vars.shares!,
           price_native: vars.avg_cost_native,
           fee_native: 0,
           currency: vars.currency || "USD",
