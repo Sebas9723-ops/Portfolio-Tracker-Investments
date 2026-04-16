@@ -1,12 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from app.auth.dependencies import get_user_id
 from app.db.supabase_client import get_admin_client
 from app.models.portfolio import PortfolioSummary, PositionCreate, PositionUpdate, Snapshot, SnapshotCreate
 from app.services.market_data import get_quotes
-from app.services.fx_service import get_fx_rates
+from app.services.fx_service import get_fx_rates, _FX_PAIR_MAP, _FALLBACK_RATES
 from app.compute.portfolio_builder import build_portfolio
-from app.services.exchange_classifier import get_native_currency
-from datetime import date
+from app.services.exchange_classifier import get_native_currency, yf_ticker
+from datetime import date, timedelta
 
 router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
 
@@ -83,6 +83,175 @@ def update_position(ticker: str, body: PositionUpdate, user_id: str = Depends(ge
 def delete_position(ticker: str, user_id: str = Depends(get_user_id)):
     db = get_admin_client()
     db.table("positions").delete().eq("user_id", user_id).eq("ticker", ticker).execute()
+
+
+# ── Portfolio history (auto, no snapshots needed) ─────────────────────────────
+
+@router.get("/history")
+def get_portfolio_history(
+    start: str = Query(default="2026-03-01"),
+    user_id: str = Depends(get_user_id),
+):
+    """
+    Reconstructs daily portfolio value from historical prices + transactions.
+    No manual snapshots required. Returns [{date, value}] sorted by date.
+    """
+    import pandas as pd
+    import yfinance as yf
+
+    db = get_admin_client()
+    settings = _get_settings_for_user(user_id)
+    base_currency = settings.get("base_currency", "USD")
+
+    pos_res = db.table("positions").select("*").eq("user_id", user_id).execute()
+    positions = pos_res.data or []
+    if not positions:
+        return []
+
+    tickers = [p["ticker"] for p in positions if float(p.get("shares", 0)) > 0]
+    if not tickers:
+        return []
+
+    current_shares = {p["ticker"]: float(p.get("shares", 0)) for p in positions}
+
+    tx_res = (
+        db.table("transactions")
+        .select("*")
+        .eq("user_id", user_id)
+        .order("date")
+        .execute()
+    )
+    transactions = tx_res.data or []
+
+    end_str = str(date.today() + timedelta(days=1))
+
+    # ── Historical prices ──────────────────────────────────────────────────────
+    yf_map = {yf_ticker(t): t for t in tickers}
+    try:
+        raw = yf.download(
+            list(yf_map.keys()),
+            start=start,
+            end=end_str,
+            interval="1d",
+            auto_adjust=True,
+            progress=False,
+        )
+        if isinstance(raw.columns, pd.MultiIndex):
+            price_df = raw["Close"].rename(columns=yf_map)
+        elif "Close" in raw.columns:
+            orig = list(yf_map.values())[0]
+            price_df = raw[["Close"]].rename(columns={"Close": orig})
+        else:
+            return []
+        price_df = price_df.ffill()
+    except Exception:
+        return []
+
+    if price_df.empty:
+        return []
+
+    # ── Historical FX rates ────────────────────────────────────────────────────
+    exchange_currencies = list(set(get_native_currency(t) for t in tickers))
+    non_base = [c for c in exchange_currencies if c != base_currency]
+
+    # Build fx_df aligned to price_df index
+    fx_df = pd.DataFrame(index=price_df.index)
+    for ccy in exchange_currencies:
+        if ccy == base_currency:
+            fx_df[ccy] = 1.0
+
+    if non_base:
+        fx_symbols = [_FX_PAIR_MAP.get(c, f"{c}{base_currency}=X") for c in non_base if _FX_PAIR_MAP.get(c)]
+        if fx_symbols:
+            try:
+                fx_raw = yf.download(
+                    fx_symbols,
+                    start=start,
+                    end=end_str,
+                    interval="1d",
+                    auto_adjust=False,
+                    progress=False,
+                )
+                if isinstance(fx_raw.columns, pd.MultiIndex):
+                    fx_closes = fx_raw["Close"]
+                elif "Close" in fx_raw.columns:
+                    fx_closes = fx_raw[["Close"]].rename(columns={"Close": fx_symbols[0]})
+                else:
+                    fx_closes = fx_raw
+                fx_closes = fx_closes.ffill()
+                for ccy in non_base:
+                    sym = _FX_PAIR_MAP.get(ccy, f"{ccy}{base_currency}=X")
+                    if sym in fx_closes.columns:
+                        fx_df[ccy] = fx_closes[sym].reindex(price_df.index).ffill()
+                    else:
+                        fx_df[ccy] = _FALLBACK_RATES.get(ccy, 1.0)
+            except Exception:
+                for ccy in non_base:
+                    fx_df[ccy] = _FALLBACK_RATES.get(ccy, 1.0)
+        else:
+            for ccy in non_base:
+                fx_df[ccy] = _FALLBACK_RATES.get(ccy, 1.0)
+
+    # ── Reconstruct shares held on each day ────────────────────────────────────
+    # Replay BUY/SELL transactions before start_date to get the initial state
+    running: dict[str, float] = {t: 0.0 for t in tickers}
+    for tx in transactions:
+        tx_date = (tx.get("date") or "")[:10]
+        if tx_date >= start:
+            break
+        ticker = tx.get("ticker", "")
+        if ticker not in running:
+            continue
+        qty = float(tx.get("quantity", 0))
+        if tx.get("action") == "BUY":
+            running[ticker] += qty
+        elif tx.get("action") == "SELL":
+            running[ticker] = max(0.0, running[ticker] - qty)
+
+    # If no transactions at all before start, fall back to current shares
+    if all(v == 0.0 for v in running.values()):
+        running = dict(current_shares)
+
+    # Index transactions >= start_date by date
+    changes: dict[str, dict[str, float]] = {}
+    for tx in transactions:
+        tx_date = (tx.get("date") or "")[:10]
+        if tx_date < start:
+            continue
+        ticker = tx.get("ticker", "")
+        if ticker not in tickers:
+            continue
+        qty = float(tx.get("quantity", 0))
+        delta = qty if tx.get("action") == "BUY" else -qty
+        changes.setdefault(tx_date, {})[ticker] = changes.get(tx_date, {}).get(ticker, 0) + delta
+
+    # ── Build daily series ─────────────────────────────────────────────────────
+    result = []
+    for day in price_df.index:
+        day_str = str(day.date())
+
+        if day_str in changes:
+            for ticker, delta in changes[day_str].items():
+                running[ticker] = max(0.0, running.get(ticker, 0) + delta)
+
+        total = 0.0
+        for ticker in tickers:
+            shares = running.get(ticker, 0.0)
+            if shares <= 0 or ticker not in price_df.columns:
+                continue
+            price = price_df[ticker].get(day)
+            if price is None or pd.isna(price):
+                continue
+            ccy = get_native_currency(ticker)
+            fx = float(fx_df[ccy].get(day, 1.0)) if ccy in fx_df.columns else 1.0
+            if pd.isna(fx):
+                fx = _FALLBACK_RATES.get(ccy, 1.0)
+            total += shares * float(price) * fx
+
+        if total > 0:
+            result.append({"date": day_str, "value": round(total, 2)})
+
+    return result
 
 
 # ── Snapshots ─────────────────────────────────────────────────────────────────

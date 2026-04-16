@@ -13,6 +13,11 @@ export const fetchSnapshots = () =>
 export const saveSnapshot = (notes?: string) =>
   apiClient.post("/api/portfolio/snapshots", { notes }).then((r) => r.data);
 
+export const fetchPortfolioHistory = (start = "2026-03-01") =>
+  apiClient
+    .get<{ date: string; value: number }[]>("/api/portfolio/history", { params: { start } })
+    .then((r) => r.data);
+
 export const upsertPosition = (data: Partial<Position> & { ticker: string }) =>
   apiClient.post("/api/portfolio/positions", data).then((r) => r.data);
 

@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { usePortfolio, useSnapshots, useSaveSnapshot } from "@/lib/hooks/usePortfolio";
+import { usePortfolio, useSnapshots, useSaveSnapshot, usePortfolioHistory } from "@/lib/hooks/usePortfolio";
 import { fetchTransactions } from "@/lib/api/transactions";
 import { fmtCurrency, fmtPct, fmtDate } from "@/lib/formatters";
 import { useSettingsStore } from "@/lib/store/settingsStore";
@@ -11,7 +11,6 @@ import {
   BarChart, Bar,
 } from "recharts";
 import { Save, RefreshCw, TrendingUp, TrendingDown } from "lucide-react";
-import type { Snapshot } from "@/lib/types";
 import Link from "next/link";
 
 // ── Colors ────────────────────────────────────────────────────────────────────
@@ -27,7 +26,7 @@ function tickerBadgeColor(ticker: string): string {
 const PERIODS = ["1W", "1M", "YTD", "1Y", "Max"] as const;
 type Period = typeof PERIODS[number];
 
-function filterSnaps(snaps: Snapshot[], period: Period): Snapshot[] {
+function filterHistory(data: { date: string; value: number }[], period: Period) {
   const ms = (d: number) => d * 864e5;
   const now = new Date();
   const cutoffs: Record<Period, Date | null> = {
@@ -38,8 +37,8 @@ function filterSnaps(snaps: Snapshot[], period: Period): Snapshot[] {
     "Max": null,
   };
   const c = cutoffs[period];
-  if (!c) return snaps;
-  return snaps.filter((s) => new Date(s.snapshot_date) >= c!);
+  if (!c) return data;
+  return data.filter((d) => new Date(d.date) >= c!);
 }
 
 // ── Center label for donut ────────────────────────────────────────────────────
@@ -87,8 +86,8 @@ export default function DashboardPage() {
   const [chartPeriod, setChartPeriod] = useState<Period>("Max");
 
   const { data: portfolio, isLoading, isFetching } = usePortfolio();
-  const { data: snapshots } = useSnapshots();
   const { mutate: saveSnap, isPending: saving } = useSaveSnapshot();
+  const { data: historyData, isLoading: historyLoading } = usePortfolioHistory();
   const { data: transactions } = useQuery({ queryKey: ["transactions"], queryFn: fetchTransactions });
   const base_currency = useSettingsStore((s) => s.base_currency);
 
@@ -111,12 +110,9 @@ export default function DashboardPage() {
   const dayChange = portfolio.total_day_change_base ?? 0;
   const dayChangePct = totalValue > 0 ? (dayChange / (totalValue - dayChange)) * 100 : 0;
 
-  // Chart data — filtered snapshots sorted by date
-  const allSnaps = (snapshots ?? [])
-    .slice()
-    .sort((a, b) => a.snapshot_date.localeCompare(b.snapshot_date));
-  const filteredSnaps = filterSnaps(allSnaps, chartPeriod);
-  const chartData = filteredSnaps.map((s) => ({ date: s.snapshot_date, value: s.total_value_base ?? 0 }));
+  // Chart data — from automatic history (historical prices × shares)
+  const allHistory = (historyData ?? []).slice().sort((a, b) => a.date.localeCompare(b.date));
+  const chartData = filterHistory(allHistory, chartPeriod);
 
   // Period P&L from chart range
   const periodStart = chartData[0]?.value ?? totalValue;
@@ -220,7 +216,11 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            {chartData.length > 1 ? (
+            {historyLoading ? (
+              <div className="flex items-center justify-center h-40 text-bloomberg-muted text-xs mt-3">
+                Loading history…
+              </div>
+            ) : chartData.length > 1 ? (
               <ResponsiveContainer width="100%" height={200}>
                 <AreaChart data={chartData} margin={{ top: 10, right: 0, bottom: 0, left: 0 }}>
                   <defs>
@@ -248,7 +248,7 @@ export default function DashboardPage() {
               </ResponsiveContainer>
             ) : (
               <div className="flex items-center justify-center h-40 text-bloomberg-muted text-xs border border-dashed border-bloomberg-border mt-3">
-                Save snapshots daily to build history chart
+                No price data available for selected period
               </div>
             )}
           </div>

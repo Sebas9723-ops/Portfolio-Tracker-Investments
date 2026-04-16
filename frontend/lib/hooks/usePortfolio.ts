@@ -1,6 +1,6 @@
 "use client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { fetchPortfolio, saveSnapshot, fetchSnapshots } from "@/lib/api/portfolio";
+import { fetchPortfolio, saveSnapshot, fetchSnapshots, fetchPortfolioHistory } from "@/lib/api/portfolio";
 
 export function usePortfolio() {
   return useQuery({
@@ -23,5 +23,13 @@ export function useSaveSnapshot() {
   return useMutation({
     mutationFn: (notes?: string) => saveSnapshot(notes),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["snapshots"] }),
+  });
+}
+
+export function usePortfolioHistory(start = "2026-03-01") {
+  return useQuery({
+    queryKey: ["portfolioHistory", start],
+    queryFn: () => fetchPortfolioHistory(start),
+    staleTime: 5 * 60_000,  // 5 min
   });
 }
