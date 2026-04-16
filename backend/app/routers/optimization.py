@@ -60,6 +60,13 @@ def _build_returns_df(tickers: list[str], period: str) -> pd.DataFrame:
     return pd.DataFrame(closes).dropna(how="all").ffill().pct_change().dropna()
 
 
+def _load_user_rfr(user_id: str, db) -> float:
+    """Load risk_free_rate from user_settings, fallback to live rate."""
+    res = db.table("user_settings").select("risk_free_rate").eq("user_id", user_id).maybe_single().execute()
+    val = (res.data or {}).get("risk_free_rate")
+    return float(val) if val is not None else get_risk_free_rate()
+
+
 @router.post("/frontier", response_model=OptimizationResult)
 def frontier(body: OptimizationRequest, user_id: str = Depends(get_user_id)):
     db = get_admin_client()
@@ -71,7 +78,7 @@ def frontier(body: OptimizationRequest, user_id: str = Depends(get_user_id)):
     current_weights = {t: shares[t] / total for t in tickers} if total > 0 else {}
 
     returns_df = _build_returns_df(tickers, body.period)
-    rfr = get_risk_free_rate()
+    rfr = _load_user_rfr(user_id, db)
     per_ticker_bounds, combination_constraints = _load_profile_constraints(user_id, db, body.profile)
 
     return simulate_efficient_frontier(
@@ -124,7 +131,7 @@ def max_sharpe(body: OptimizationRequest, user_id: str = Depends(get_user_id)):
     tickers = [p["ticker"] for p in (pos_res.data or []) if float(p.get("shares", 0)) > 0]
 
     returns_df = _build_returns_df(tickers, body.period)
-    rfr = get_risk_free_rate()
+    rfr = _load_user_rfr(user_id, db)
     per_ticker_bounds, combination_constraints = _load_profile_constraints(user_id, db, body.profile)
     weights = optimize_max_sharpe(returns_df, rfr, body.max_single_asset, per_ticker_bounds or None, combination_constraints or None)
     return {"weights": weights}
@@ -137,7 +144,7 @@ def max_return_endpoint(body: OptimizationRequest, user_id: str = Depends(get_us
     tickers = [p["ticker"] for p in (pos_res.data or []) if float(p.get("shares", 0)) > 0]
 
     returns_df = _build_returns_df(tickers, body.period)
-    rfr = get_risk_free_rate()
+    rfr = _load_user_rfr(user_id, db)
     per_ticker_bounds, combination_constraints = _load_profile_constraints(user_id, db, body.profile)
     weights = optimize_max_return(returns_df, rfr, body.max_single_asset, per_ticker_bounds or None, combination_constraints or None)
     return {"weights": weights}

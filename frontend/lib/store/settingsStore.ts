@@ -10,14 +10,14 @@ interface SettingsState extends UserSettings {
 const defaults: UserSettings = {
   base_currency: "USD",
   rebalancing_threshold: 0.05,
-  max_single_asset: 0.30,
+  max_single_asset: 0.40,
   min_bonds: 0.10,
   min_gold: 0.05,
   preferred_benchmark: "VOO",
   risk_free_rate: 0.045,
   rolling_window: 63,
   tc_model: "broker",
-  investor_profile: "balanced",
+  investor_profile: "base",   // matches backend profile engine (conservative | base | aggressive)
   ticker_weight_rules: {},
   combination_ranges: {},
 };

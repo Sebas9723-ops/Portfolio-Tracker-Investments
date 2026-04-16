@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAnalytics, fetchRollingMetrics, fetchExtendedAnalytics, fetchVolRegime } from "@/lib/api/analytics";
+import { useSettingsStore } from "@/lib/store/settingsStore";
 import { MetricCard } from "@/components/shared/MetricCard";
 import { fmtPct, fmtDate, MONTHS_SHORT } from "@/lib/formatters";
 import {
@@ -37,6 +38,7 @@ function fmt(v: number | null | undefined, digits = 3): string {
 
 export default function AnalyticsPage() {
   const [period, setPeriod] = useState("2y");
+  const rolling_window = useSettingsStore((s) => s.rolling_window);
 
   const { data, isLoading } = useQuery({
     queryKey: ["analytics", period],
@@ -44,8 +46,8 @@ export default function AnalyticsPage() {
   });
 
   const { data: rollingFull } = useQuery({
-    queryKey: ["rolling-full", period],
-    queryFn: () => fetchRollingMetrics(63, period),
+    queryKey: ["rolling-full", period, rolling_window],
+    queryFn: () => fetchRollingMetrics(rolling_window, period),
   });
 
   const { data: extended } = useQuery({

@@ -2,16 +2,19 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/lib/store/authStore";
-import { useProfileStore } from "@/lib/store/profileStore";
+import { useProfileStore, type InvestorProfile } from "@/lib/store/profileStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { fetchSettings } from "@/lib/api/settings";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
 
+const VALID_PROFILES = new Set(["conservative", "base", "aggressive"]);
+
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const router = useRouter();
   const setSettings = useSettingsStore((s) => s.setSettings);
+  const setProfile = useProfileStore((s) => s.setProfile);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
@@ -25,10 +28,16 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     }
   }, [hydrated, isAuthenticated, router]);
 
-  // Bootstrap settings from DB on every app load so the store is always in sync.
+  // Bootstrap settings from DB on every app load — syncs both stores to DB truth.
   useEffect(() => {
     if (hydrated && isAuthenticated) {
-      fetchSettings().then(setSettings).catch(() => {});
+      fetchSettings().then((data) => {
+        setSettings(data);
+        // Sync profileStore so it always matches investor_profile in DB
+        if (data.investor_profile && VALID_PROFILES.has(data.investor_profile)) {
+          setProfile(data.investor_profile as InvestorProfile);
+        }
+      }).catch(() => {});
     }
   }, [hydrated, isAuthenticated]);
 

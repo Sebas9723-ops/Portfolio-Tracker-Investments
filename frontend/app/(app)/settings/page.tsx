@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchSettings, updateSettings } from "@/lib/api/settings";
 import { useSettingsStore } from "@/lib/store/settingsStore";
+import { useProfileStore, type InvestorProfile } from "@/lib/store/profileStore";
 import type { UserSettings } from "@/lib/types";
 
 const CURRENCIES = [
@@ -19,15 +20,22 @@ export default function SettingsPage() {
   const qc = useQueryClient();
   const { data: remote } = useQuery({ queryKey: ["settings"], queryFn: fetchSettings });
   const setLocal = useSettingsStore((s) => s.setSettings);
+  const setProfile = useProfileStore((s) => s.setProfile);
   const [form, setForm] = useState<UserSettings | null>(null);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => { if (remote) setForm(remote); }, [remote]);
 
+  const VALID_PROFILES = new Set(["conservative", "base", "aggressive"]);
+
   const { mutate, isPending } = useMutation({
     mutationFn: (data: UserSettings) => updateSettings(data),
     onSuccess: (data) => {
       setLocal(data);
+      // Sync profileStore so all pages reflect the new profile immediately
+      if (data.investor_profile && VALID_PROFILES.has(data.investor_profile)) {
+        setProfile(data.investor_profile as InvestorProfile);
+      }
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
       // Invalidate all queries so every page re-fetches with the new settings
@@ -94,7 +102,7 @@ export default function SettingsPage() {
         <div className="grid grid-cols-2 gap-4">
           {field("Preferred Benchmark", "preferred_benchmark", "text", BENCHMARKS)}
           {field("Broker / TC Model", "tc_model", "text", TC_MODELS)}
-          {field("Investor Profile", "investor_profile", "text", ["conservative", "balanced", "growth", "aggressive"])}
+          {field("Investor Profile", "investor_profile", "text", ["conservative", "base", "aggressive"])}
         </div>
       </div>
 

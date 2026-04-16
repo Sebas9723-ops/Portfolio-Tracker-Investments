@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchProfileOptimal, updateProfile } from "@/lib/api/profile";
 import { useProfileStore, type InvestorProfile } from "@/lib/store/profileStore";
+import { useSettingsStore } from "@/lib/store/settingsStore";
 import { Shield, Target, TrendingUp, Check } from "lucide-react";
 
 const PROFILES: {
@@ -96,6 +97,7 @@ function WeightBar({
 export default function ProfilePage() {
   const qc = useQueryClient();
   const { profile: localProfile, targetReturn, setProfile, setTargetReturn } = useProfileStore();
+  const setSettings = useSettingsStore((s) => s.setSettings);
   const [targetReturnInput, setTargetReturnInput] = useState(String(Math.round(targetReturn * 100)));
 
   const { data, isLoading } = useQuery({
@@ -109,9 +111,9 @@ export default function ProfilePage() {
       updateProfile(profile, tr),
     onSuccess: (_, vars) => {
       setProfile(vars.profile);
+      setSettings({ investor_profile: vars.profile });
       if (vars.tr !== undefined) setTargetReturn(vars.tr);
-      qc.invalidateQueries({ queryKey: ["profile-optimal"] });
-      qc.invalidateQueries({ queryKey: ["rebalancing-suggestions"] });
+      qc.invalidateQueries();
     },
   });
 
