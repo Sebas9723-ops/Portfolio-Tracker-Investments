@@ -1,8 +1,9 @@
 "use client";
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { usePortfolio, useSnapshots, useSaveSnapshot, usePortfolioHistory } from "@/lib/hooks/usePortfolio";
 import { fetchTransactions } from "@/lib/api/transactions";
+import { updateSettings } from "@/lib/api/settings";
 import { fmtCurrency, fmtPct, fmtDate } from "@/lib/formatters";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import {
@@ -91,9 +92,15 @@ export default function DashboardPage() {
   const { mutate: saveSnap, isPending: saving } = useSaveSnapshot();
   const { data: historyData, isLoading: historyLoading } = usePortfolioHistory();
   const { data: transactions } = useQuery({ queryKey: ["transactions"], queryFn: fetchTransactions });
+  const qc = useQueryClient();
   const base_currency = useSettingsStore((s) => s.base_currency);
   const cost_basis_usd = useSettingsStore((s) => s.cost_basis_usd);
-  const setCostBasis = useSettingsStore((s) => s.setCostBasis);
+  const setSettings = useSettingsStore((s) => s.setSettings);
+
+  const { mutate: saveBasis } = useMutation({
+    mutationFn: (v: number) => updateSettings({ cost_basis_usd: v }),
+    onSuccess: (data) => { setSettings(data); qc.invalidateQueries({ queryKey: ["settings"] }); },
+  });
 
   if (isLoading) {
     return <div className="flex items-center justify-center h-64 text-bloomberg-muted text-xs">Loading portfolio…</div>;
@@ -480,7 +487,7 @@ export default function DashboardPage() {
                     <button
                       onClick={() => {
                         const v = parseFloat(basisInput);
-                        if (!isNaN(v) && v > 0) setCostBasis(v);
+                        if (!isNaN(v) && v > 0) saveBasis(v);
                         setEditingBasis(false);
                       }}
                       className="text-green-400 text-[10px] px-1 hover:opacity-80"

@@ -16,6 +16,7 @@ class UserSettings(BaseModel):
     target_return: float = 0.08
     ticker_weight_rules: dict = {}  # {profile: {ticker: {"floor": float, "cap": float}}}
     combination_ranges: dict = {}   # {profile: [{"id": str, "tickers": [str], "min": float, "max": float}]}
+    cost_basis_usd: Optional[float] = None  # actual USD deployed at purchase FX rates
 
 
 class LoginRequest(BaseModel):
