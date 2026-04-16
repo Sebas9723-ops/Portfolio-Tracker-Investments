@@ -54,8 +54,11 @@ export default function PortfolioPage() {
 
   if (isLoading) return <div className="text-bloomberg-muted text-xs p-4">Loading…</div>;
 
-  // Current Return since start date (rolling 1-year window)
-  const START_DATE = "2026-03-02";
+  // Current Return: rolling 1-year window, floored at portfolio inception date
+  const INCEPTION_DATE = "2026-03-02";
+  const oneYearAgo = new Date(); oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+  const oneYearAgoStr = oneYearAgo.toISOString().split("T")[0];
+  const START_DATE = oneYearAgoStr > INCEPTION_DATE ? oneYearAgoStr : INCEPTION_DATE;
   const totalValue = portfolio?.total_value_base ?? 0;
   const allHistory = (historyData ?? []).slice().sort((a, b) => a.date.localeCompare(b.date));
   const startEntry = allHistory.find((d) => d.date >= START_DATE);
