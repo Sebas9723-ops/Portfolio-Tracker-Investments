@@ -1,5 +1,5 @@
 "use client";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { fetchFrontier, fetchBlackLitterman } from "@/lib/api/analytics";
 import { fetchProfileOptimal } from "@/lib/api/profile";
@@ -136,20 +136,21 @@ export default function OptimizationPage() {
   const [m2Saved, setM2Saved] = useState(false);
 
   // Load saved settings to pre-populate Motor 1 & 2
-  useQuery({
+  const { data: savedSettings } = useQuery({
     queryKey: ["settings"],
     queryFn: fetchSettings,
     staleTime: 60 * 1000,
-    select: (data) => {
-      if (data.ticker_weight_rules && Object.keys(data.ticker_weight_rules).length > 0) {
-        setAllFloorCap(data.ticker_weight_rules as Record<string, Record<string, TickerFloorCap>>);
-      }
-      if (data.combination_ranges && Object.keys(data.combination_ranges).length > 0) {
-        setAllCombos(data.combination_ranges as Record<string, CombinationRange[]>);
-      }
-      return data;
-    },
   });
+
+  useEffect(() => {
+    if (!savedSettings) return;
+    if (savedSettings.ticker_weight_rules && Object.keys(savedSettings.ticker_weight_rules).length > 0) {
+      setAllFloorCap(savedSettings.ticker_weight_rules as Record<string, Record<string, TickerFloorCap>>);
+    }
+    if (savedSettings.combination_ranges && Object.keys(savedSettings.combination_ranges).length > 0) {
+      setAllCombos(savedSettings.combination_ranges as Record<string, CombinationRange[]>);
+    }
+  }, [savedSettings]);
 
   const { data: profileData } = useQuery({
     queryKey: ["profile-optimal"],
