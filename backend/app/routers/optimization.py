@@ -165,23 +165,35 @@ class CombinationRangesUpdate(BaseModel):
 @router.put("/ticker-weight-rules")
 def save_ticker_weight_rules(body: TickerWeightRulesUpdate, user_id: str = Depends(get_user_id)):
     """Save Motor 1 floor/cap rules for a specific profile."""
-    db = get_admin_client()
-    res = db.table("user_settings").select("ticker_weight_rules").eq("user_id", user_id).maybe_single().execute()
-    existing = (res.data or {}).get("ticker_weight_rules") or {}
-
-    # Validate profile
+    from fastapi import HTTPException
     if body.profile not in ("conservative", "base", "aggressive"):
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail="Invalid profile")
+        raise HTTPException(status_code=400, detail=f"Invalid profile: {body.profile!r}")
 
-    # Merge: update only the specified profile's rules
-    merged = {**existing, body.profile: body.rules}
+    try:
+        db = get_admin_client()
+        res = db.table("user_settings").select("ticker_weight_rules").eq("user_id", user_id).maybe_single().execute()
+        raw_existing = (res.data or {}).get("ticker_weight_rules")
+        existing = raw_existing if isinstance(raw_existing, dict) else {}
 
-    db.table("user_settings").upsert(
-        {"user_id": user_id, "ticker_weight_rules": merged},
-        on_conflict="user_id",
-    ).execute()
-    return {"profile": body.profile, "rules": body.rules}
+        # Sanitize rules: ensure values are {floor: float, cap: float}
+        clean_rules: dict = {}
+        for ticker, rule in body.rules.items():
+            if isinstance(rule, dict):
+                clean_rules[ticker] = {
+                    "floor": float(rule.get("floor", 0.0)),
+                    "cap": float(rule.get("cap", 1.0)),
+                }
+
+        merged = {**existing, body.profile: clean_rules}
+        db.table("user_settings").upsert(
+            {"user_id": user_id, "ticker_weight_rules": merged},
+            on_conflict="user_id",
+        ).execute()
+        return {"profile": body.profile, "rules": clean_rules}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Motor 1 save failed: {e}")
 
 
 @router.put("/combination-ranges")

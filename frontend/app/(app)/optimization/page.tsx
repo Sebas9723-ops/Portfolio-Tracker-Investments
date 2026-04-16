@@ -1,6 +1,6 @@
 "use client";
 import { useState, useCallback, useEffect } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchFrontier, fetchBlackLitterman } from "@/lib/api/analytics";
 import { fetchProfileOptimal } from "@/lib/api/profile";
 import { fetchSettings, saveTickerWeightRules, saveCombinationRanges } from "@/lib/api/settings";
@@ -93,6 +93,7 @@ function WeightsSharesTable({
 
 
 export default function OptimizationPage() {
+  const qc = useQueryClient();
   const { data: portfolio } = usePortfolio();
   const { profile } = useProfileStore();
   const [maxSingle, setMaxSingle] = useState(0.40);
@@ -103,6 +104,7 @@ export default function OptimizationPage() {
   // {profile: {ticker: {floor, cap}}} — local edit state
   const [allFloorCap, setAllFloorCap] = useState<Record<string, Record<string, TickerFloorCap>>>({});
   const [m1Saved, setM1Saved] = useState(false);
+  const [m1Error, setM1Error] = useState<string | null>(null);
 
   // ── Motor 2 state ─────────────────────────────────────────────────────────
   const [allCombos, setAllCombos] = useState<Record<string, CombinationRange[]>>({});
@@ -181,25 +183,43 @@ export default function OptimizationPage() {
   const setFloorCap = (ticker: string, field: "floor" | "cap", val: string) => {
     const num = parseFloat(val);
     if (isNaN(num)) return;
-    setAllFloorCap((prev) => ({
-      ...prev,
-      [activeProfile]: {
-        ...(prev[activeProfile] ?? {}),
-        [ticker]: {
-          ...getFloorCap(ticker),
-          [field]: num / 100,
+    setAllFloorCap((prev) => {
+      const existing = prev[activeProfile]?.[ticker] ?? { floor: 0, cap: 1 };
+      return {
+        ...prev,
+        [activeProfile]: {
+          ...(prev[activeProfile] ?? {}),
+          [ticker]: { ...existing, [field]: num / 100 },
         },
-      },
-    }));
+      };
+    });
     setM1Saved(false);
+    setM1Error(null);
   };
 
   const { mutate: saveM1, isPending: savingM1 } = useMutation({
     mutationFn: () => {
-      const rules = allFloorCap[activeProfile] ?? {};
-      return saveTickerWeightRules(activeProfile, rules);
+      const profileRules = allFloorCap[activeProfile] ?? {};
+      // Sanitize: only send valid {floor, cap} entries
+      const cleanRules: Record<string, { floor: number; cap: number }> = {};
+      for (const [ticker, rule] of Object.entries(profileRules)) {
+        if (rule && typeof rule === "object" && "floor" in rule && "cap" in rule) {
+          cleanRules[ticker] = { floor: Number(rule.floor), cap: Number(rule.cap) };
+        }
+      }
+      return saveTickerWeightRules(activeProfile, cleanRules);
     },
-    onSuccess: () => setM1Saved(true),
+    onSuccess: () => {
+      setM1Saved(true);
+      setM1Error(null);
+      qc.invalidateQueries({ queryKey: ["settings"] });
+    },
+    onError: (err: unknown) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const detail = (err as any)?.response?.data?.detail ?? (err instanceof Error ? err.message : String(err));
+      setM1Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+      setM1Saved(false);
+    },
   });
 
   // ── Motor 2 helpers ───────────────────────────────────────────────────────
@@ -369,6 +389,7 @@ export default function OptimizationPage() {
             {savingM1 ? "GUARDANDO…" : "GUARDAR MOTOR 1"}
           </button>
           {m1Saved && <span className="text-green-600 text-[10px]">✓ Guardado</span>}
+          {m1Error && <span className="text-red-400 text-[10px]">✗ {m1Error}</span>}
         </div>
       </div>
 
