@@ -13,7 +13,7 @@ const MARKETS = ["US", "LSE", "XETRA", "EURONEXT", "TSX", "ASX"];
 const initPositionForm = { ticker: "", name: "", shares: "", avg_cost_native: "" };
 const initCashForm = { currency: "USD", amount: "", account_name: "" };
 
-type EditRow = { shares: string; avg_cost_native: string; name: string };
+type EditRow = { shares: string; avg_cost_native: string; name: string; currency: string };
 
 export default function ManagePage() {
   const qc = useQueryClient();
@@ -47,7 +47,7 @@ export default function ManagePage() {
   const [saveStatus, setSaveStatus] = useState<Record<string, "ok" | "err">>({});
 
   const updateMut = useMutation({
-    mutationFn: ({ ticker, data }: { ticker: string; data: { shares?: number; avg_cost_native?: number; name?: string } }) =>
+    mutationFn: ({ ticker, data }: { ticker: string; data: { shares?: number; avg_cost_native?: number; name?: string; currency?: string } }) =>
       updatePosition(ticker, data),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ["positions"] });
@@ -106,6 +106,7 @@ export default function ManagePage() {
         shares: String(pos.shares),
         avg_cost_native: String(pos.avg_cost_native ?? ""),
         name: pos.name,
+        currency: pos.currency,
       },
     }));
   }
@@ -120,7 +121,7 @@ export default function ManagePage() {
     const newShares = parseFloat(row.shares);
     const newAvg = row.avg_cost_native ? parseFloat(row.avg_cost_native) : undefined;
 
-    await updateMut.mutateAsync({ ticker: pos.ticker, data: { shares: newShares, avg_cost_native: newAvg, name: row.name } });
+    await updateMut.mutateAsync({ ticker: pos.ticker, data: { shares: newShares, avg_cost_native: newAvg, name: row.name, currency: row.currency } });
 
     // Log adjustment for audit trail
     if (newShares !== pos.shares) {
@@ -292,7 +293,19 @@ export default function ManagePage() {
                           </span>
                         )}
                       </td>
-                      <td className="text-bloomberg-muted">{pos.currency}</td>
+                      <td>
+                        {isEditing ? (
+                          <select
+                            value={row.currency}
+                            onChange={(e) => setEditing((ed) => ({ ...ed, [pos.ticker]: { ...ed[pos.ticker], currency: e.target.value } }))}
+                            className="bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-1 py-0.5 text-xs"
+                          >
+                            {CURRENCIES.map((c) => <option key={c}>{c}</option>)}
+                          </select>
+                        ) : (
+                          <span className="text-bloomberg-muted">{pos.currency}</span>
+                        )}
+                      </td>
                       <td className="text-bloomberg-muted">{pos.market}</td>
                       <td className="text-center">
                         <div className="flex items-center justify-center gap-2">

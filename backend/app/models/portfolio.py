@@ -16,6 +16,7 @@ class PositionUpdate(BaseModel):
     name: Optional[str] = None
     shares: Optional[float] = None
     avg_cost_native: Optional[float] = None
+    currency: Optional[str] = None
 
 
 class Position(PositionCreate):
