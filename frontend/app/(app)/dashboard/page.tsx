@@ -156,20 +156,16 @@ export default function DashboardPage() {
     .sort((a, b) => Number(a.year) - Number(b.year));
 
   // Performance breakdown
+  // When cost_basis_usd is set, use it as the basis so all metrics are FX-correct.
+  // Falls back to backend's total_invested_base (current-FX, may drift).
   const invested = portfolio.total_invested_base ?? 0;
-  const priceGain = portfolio.total_unrealized_pnl ?? 0;
-  const priceGainPct = portfolio.total_unrealized_pnl_pct ?? 0;
+  const INCEPTION_DATE = "2026-03-26";
+  const basis = cost_basis_usd ?? invested;
+  const priceGain = basis > 0 ? totalValue - basis : (portfolio.total_unrealized_pnl ?? 0);
+  const priceGainPct = basis > 0 ? ((totalValue - basis) / basis) * 100 : (portfolio.total_unrealized_pnl_pct ?? 0);
   const totalReturn = priceGain + totalDivReceived;
   const winners = portfolio.rows.filter((r) => (r.unrealized_pnl ?? 0) >= 0).length;
   const losers = portfolio.rows.length - winners;
-
-  // Current Return: (current value - cost basis) / cost basis
-  // cost_basis_usd is user-set (actual USD deployed, FX-correct at purchase time)
-  // falls back to total_invested_base if not set
-  const INCEPTION_DATE = "2026-03-26";
-  const basis = cost_basis_usd ?? invested;
-  const currentReturnVal = basis > 0 ? totalValue - basis : null;
-  const currentReturnPct = basis > 0 ? ((totalValue - basis) / basis) * 100 : null;
 
   return (
     <div className="space-y-4">
@@ -540,40 +536,23 @@ export default function DashboardPage() {
             {/* Total return */}
             <div className="border-t border-bloomberg-border pt-2">
               <div className="flex justify-between items-center text-xs">
-                <span className="text-bloomberg-muted font-medium">Total return</span>
-                <span className={`font-bold ${totalReturn >= 0 ? "text-green-400" : "text-red-400"}`}>
-                  {totalReturn >= 0 ? "↑" : "↓"}{fmtCurrency(Math.abs(totalReturn), ccy)}
-                </span>
-              </div>
-              {portfolio.total_unrealized_pnl_pct != null && (
-                <div className="flex justify-between items-center text-xs mt-1">
-                  <span className="text-bloomberg-muted">P&L %</span>
-                  <span className={priceGainPct >= 0 ? "text-green-400" : "text-red-400"}>
-                    {priceGainPct >= 0 ? "↑" : "↓"}{fmtPct(Math.abs(priceGainPct))}
+                <div>
+                  <span className="text-bloomberg-muted font-medium">Total return</span>
+                  {cost_basis_usd != null && (
+                    <span className="block text-[9px] text-bloomberg-muted">since {INCEPTION_DATE}</span>
+                  )}
+                </div>
+                <div className="text-right">
+                  <span className={`font-bold ${totalReturn >= 0 ? "text-green-400" : "text-red-400"}`}>
+                    {totalReturn >= 0 ? "+" : ""}{fmtCurrency(totalReturn, ccy)}
+                  </span>
+                  <span className={`block text-[10px] ${priceGainPct >= 0 ? "text-green-400" : "text-red-400"}`}>
+                    {priceGainPct >= 0 ? "+" : "-"}{Math.abs(priceGainPct).toFixed(2)}%
                   </span>
                 </div>
-              )}
+              </div>
             </div>
 
-            {/* Current Return (since start date, rolling 1-year) */}
-            {currentReturnPct != null && currentReturnVal != null && (
-              <div className="border-t border-bloomberg-border pt-2">
-                <div className="flex justify-between items-center text-xs">
-                  <div>
-                    <span className="text-bloomberg-muted font-medium">Current return</span>
-                    <span className="block text-[9px] text-bloomberg-muted">since {INCEPTION_DATE}</span>
-                  </div>
-                  <div className="text-right">
-                    <span className={`font-bold text-sm ${currentReturnPct >= 0 ? "text-green-400" : "text-red-400"}`}>
-                      {currentReturnPct >= 0 ? "+" : "-"}{Math.abs(currentReturnPct).toFixed(2)}%
-                    </span>
-                    <span className={`block text-[10px] ${currentReturnVal >= 0 ? "text-green-400" : "text-red-400"}`}>
-                      {currentReturnVal >= 0 ? "+" : ""}{fmtCurrency(currentReturnVal, ccy)}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            )}
 
             {/* Day change */}
             <div className="border-t border-bloomberg-border pt-2">
