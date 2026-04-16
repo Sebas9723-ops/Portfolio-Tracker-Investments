@@ -211,9 +211,22 @@ export interface RebalancingRow {
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 
+// Legacy per-ticker fixed-weight rule (used in rebalancing page)
 export interface TickerWeightRule {
   mode: "free" | "fixed";
   weight?: number;
+}
+
+export interface TickerFloorCap {
+  floor: number;
+  cap: number;
+}
+
+export interface CombinationRange {
+  id: string;
+  tickers: string[];
+  min: number | null;  // null = sin límite inferior
+  max: number | null;  // null = sin límite superior
 }
 
 export interface UserSettings {
@@ -227,7 +240,10 @@ export interface UserSettings {
   rolling_window: number;
   tc_model: string;
   investor_profile: string;
-  ticker_weight_rules: Record<string, TickerWeightRule>;
+  // Motor 1: {profile: {ticker: {floor, cap}}}
+  ticker_weight_rules: Record<string, Record<string, TickerFloorCap>>;
+  // Motor 2: {profile: CombinationRange[]}
+  combination_ranges: Record<string, CombinationRange[]>;
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────

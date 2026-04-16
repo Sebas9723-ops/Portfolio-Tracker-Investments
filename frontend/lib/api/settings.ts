@@ -1,11 +1,23 @@
 import { apiClient } from "./client";
-import type { UserSettings } from "@/lib/types";
+import type { UserSettings, TickerFloorCap, CombinationRange } from "@/lib/types";
 
 export const fetchSettings = () =>
   apiClient.get<UserSettings>("/api/settings").then((r) => r.data);
 
 export const updateSettings = (data: Partial<UserSettings>) =>
   apiClient.put<UserSettings>("/api/settings", data).then((r) => r.data);
+
+// Motor 1 — save floor/cap rules for a specific profile
+export const saveTickerWeightRules = (profile: string, rules: Record<string, TickerFloorCap>) =>
+  apiClient
+    .put("/api/optimization/ticker-weight-rules", { profile, rules })
+    .then((r) => r.data);
+
+// Motor 2 — save combination range rules for a specific profile
+export const saveCombinationRanges = (profile: string, ranges: CombinationRange[]) =>
+  apiClient
+    .put("/api/optimization/combination-ranges", { profile, ranges })
+    .then((r) => r.data);
 
 export const fetchWatchlist = () =>
   apiClient.get("/api/watchlist").then((r) => r.data);

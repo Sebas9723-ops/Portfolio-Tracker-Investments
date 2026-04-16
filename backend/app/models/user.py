@@ -14,7 +14,8 @@ class UserSettings(BaseModel):
     tc_model: str = "broker"
     investor_profile: str = "balanced"
     target_return: float = 0.08
-    ticker_weight_rules: dict = {}  # {ticker: {"mode": "fixed"|"free", "weight": float}}
+    ticker_weight_rules: dict = {}  # {profile: {ticker: {"floor": float, "cap": float}}}
+    combination_ranges: dict = {}   # {profile: [{"id": str, "tickers": [str], "min": float, "max": float}]}
 
 
 class LoginRequest(BaseModel):

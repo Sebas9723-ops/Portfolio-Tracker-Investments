@@ -19,6 +19,7 @@ def simulate_efficient_frontier(
     min_gold: float = 0.0,
     current_weights: Optional[dict[str, float]] = None,
     per_ticker_bounds: Optional[dict[str, tuple[float, float]]] = None,
+    combination_constraints: Optional[list[dict]] = None,
 ) -> OptimizationResult:
     """Monte Carlo efficient frontier simulation."""
     if returns_df.empty or returns_df.shape[1] < 2:
@@ -52,6 +53,25 @@ def simulate_efficient_frontier(
         if w.sum() == 0:
             continue
         w /= w.sum()
+
+        # Filter portfolios that violate combination constraints (2% tolerance)
+        if combination_constraints:
+            skip = False
+            for rule in combination_constraints:
+                rule_tickers = rule.get("tickers", [])
+                raw_min = rule.get("min")
+                raw_max = rule.get("max")
+                indices = [i for i, t in enumerate(tickers) if t in rule_tickers]
+                if indices:
+                    total = sum(w[i] for i in indices)
+                    if raw_min is not None and total < float(raw_min) - 0.02:
+                        skip = True
+                        break
+                    if raw_max is not None and total > float(raw_max) + 0.02:
+                        skip = True
+                        break
+            if skip:
+                continue
 
         port_ret = float(mu.values @ w)
         port_vol = float(np.sqrt(w @ cov.values @ w))
@@ -90,7 +110,7 @@ def simulate_efficient_frontier(
     rp_weights = _risk_parity(cov.values, tickers)
 
     # Exact Max Return via scipy (overrides Monte Carlo best)
-    mr_row = optimize_max_return(returns_df, risk_free_rate, max_single_asset, per_ticker_bounds)
+    mr_row = optimize_max_return(returns_df, risk_free_rate, max_single_asset, per_ticker_bounds, combination_constraints)
     if mr_row:
         w_arr = np.array([mr_row.get(t, 0.0) for t in tickers])
         mr_ret = float(mu.values @ w_arr) * 100
@@ -210,11 +230,39 @@ def _empty_point() -> FrontierPoint:
     return FrontierPoint(ret=0, vol=0, sharpe=0, weights={})
 
 
+def _build_combination_scipy_constraints(tickers: list[str], combination_constraints: list[dict]) -> list[dict]:
+    """Convert combination range rules to scipy inequality constraints.
+    min/max can be None (no bound on that side) or a fraction in [0, 1].
+    """
+    constraints = []
+    for rule in combination_constraints:
+        rule_tickers = rule.get("tickers", [])
+        raw_min = rule.get("min")
+        raw_max = rule.get("max")
+        indices = [i for i, t in enumerate(tickers) if t in rule_tickers]
+        if not indices:
+            continue
+        if raw_min is not None:
+            min_w = float(raw_min)
+            constraints.append({
+                "type": "ineq",
+                "fun": lambda w, idx=indices, m=min_w: sum(w[i] for i in idx) - m,
+            })
+        if raw_max is not None:
+            max_w = float(raw_max)
+            constraints.append({
+                "type": "ineq",
+                "fun": lambda w, idx=indices, m=max_w: m - sum(w[i] for i in idx),
+            })
+    return constraints
+
+
 def optimize_max_sharpe(
     returns_df: pd.DataFrame,
     risk_free_rate: float = 0.045,
     max_single_asset: float = 0.40,
     per_ticker_bounds: Optional[dict[str, tuple[float, float]]] = None,
+    combination_constraints: Optional[list[dict]] = None,
 ) -> dict[str, float]:
     """Scipy-optimized Max Sharpe weights."""
     if returns_df.empty:
@@ -231,7 +279,8 @@ def optimize_max_sharpe(
 
     bounds = _build_bounds(tickers, max_single_asset, per_ticker_bounds)
     w0 = _make_w0(n, bounds)
-    constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
+    combo_constraints = _build_combination_scipy_constraints(tickers, combination_constraints or [])
+    constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}] + combo_constraints
     try:
         res = minimize(neg_sharpe, w0, method="SLSQP", bounds=bounds, constraints=constraints)
         w = np.clip(res.x, 0, None)
@@ -246,6 +295,7 @@ def optimize_max_return(
     risk_free_rate: float = 0.045,
     max_single_asset: float = 0.40,
     per_ticker_bounds: Optional[dict[str, tuple[float, float]]] = None,
+    combination_constraints: Optional[list[dict]] = None,
 ) -> dict[str, float]:
     """Scipy-optimized maximum-return portfolio."""
     if returns_df.empty:
@@ -259,7 +309,8 @@ def optimize_max_return(
 
     bounds = _build_bounds(tickers, max_single_asset, per_ticker_bounds)
     w0 = _make_w0(n, bounds)
-    constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
+    combo_constraints = _build_combination_scipy_constraints(tickers, combination_constraints or [])
+    constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}] + combo_constraints
     try:
         res = minimize(neg_return, w0, method="SLSQP", bounds=bounds, constraints=constraints,
                        options={"ftol": 1e-12, "maxiter": 1000})

@@ -75,11 +75,27 @@ def get_profile_optimal(
     if returns_df.empty:
         return {"profiles": {}, "current": {}, "active_profile": active_profile}
 
+    # Load Motor 1 & Motor 2 constraints per profile
+    ticker_weight_rules = settings.get("ticker_weight_rules") or {}
+    combination_ranges = settings.get("combination_ranges") or {}
+
     # Compute optimal weights for all 3 profiles
     profiles_out = {}
     for profile in ["conservative", "base", "aggressive"]:
         tr = target_return if profile == "base" else 0.08
-        w = compute_profile_weights(returns_df, profile, rfr, tr, max_single)  # type: ignore[arg-type]
+
+        # Per-ticker bounds for this profile
+        profile_rules = ticker_weight_rules.get(profile, {})
+        per_ticker_bounds = {
+            ticker: (float(rule.get("floor", 0.0)), float(rule.get("cap", 1.0)))
+            for ticker, rule in profile_rules.items()
+            if isinstance(rule, dict)
+        } or None
+
+        # Combination constraints for this profile
+        combo_constraints = combination_ranges.get(profile, []) or None
+
+        w = compute_profile_weights(returns_df, profile, rfr, tr, max_single, per_ticker_bounds, combo_constraints)  # type: ignore[arg-type]
         m = compute_profile_metrics(returns_df, w, rfr)
         profiles_out[profile] = {"weights": w, "metrics": m}
 

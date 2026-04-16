@@ -1,8 +1,9 @@
 "use client";
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { fetchFrontier, fetchBlackLitterman } from "@/lib/api/analytics";
 import { fetchProfileOptimal } from "@/lib/api/profile";
+import { fetchSettings, saveTickerWeightRules, saveCombinationRanges } from "@/lib/api/settings";
 import { usePortfolio } from "@/lib/hooks/usePortfolio";
 import { useProfileStore } from "@/lib/store/profileStore";
 import { fmtPct, fmtCurrency } from "@/lib/formatters";
@@ -10,15 +11,18 @@ import {
   ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceDot,
 } from "recharts";
-import type { OptimizationResult, FrontierPoint } from "@/lib/types";
-import { Plus, Trash2 } from "lucide-react";
+import type { OptimizationResult, FrontierPoint, TickerFloorCap, CombinationRange } from "@/lib/types";
+import { Plus, Trash2, Save } from "lucide-react";
 
-const PROFILE_COLORS: Record<string, string> = {
+const PROFILES = ["conservative", "base", "aggressive"] as const;
+type ProfileKey = typeof PROFILES[number];
+
+const PROFILE_COLORS: Record<ProfileKey, string> = {
   conservative: "#2563eb",
   base: "#16a34a",
   aggressive: "#dc2626",
 };
-const PROFILE_LABELS: Record<string, string> = {
+const PROFILE_LABELS: Record<ProfileKey, string> = {
   conservative: "Conservador",
   base: "Base",
   aggressive: "Agresivo",
@@ -34,7 +38,6 @@ function sharpeToColor(sharpe: number, min: number, max: number): string {
   return `rgb(${r},${g},${b})`;
 };
 
-// Compute recommended shares from weights + portfolio value + prices
 function computeShares(
   weights: Record<string, number>,
   rows: { ticker: string; price_base: number }[],
@@ -53,7 +56,7 @@ function computeShares(
 }
 
 function WeightsSharesTable({
-  label, color, weights, shares, currency,
+  label, color, weights, shares,
 }: {
   label: string;
   color: string;
@@ -88,12 +91,65 @@ function WeightsSharesTable({
   );
 }
 
+function ProfileTabs({ active, onChange }: { active: ProfileKey; onChange: (p: ProfileKey) => void }) {
+  return (
+    <div className="flex gap-1 mb-3">
+      {PROFILES.map((p) => (
+        <button
+          key={p}
+          onClick={() => onChange(p)}
+          className="text-[10px] px-3 py-1 border transition-colors"
+          style={
+            active === p
+              ? { borderColor: PROFILE_COLORS[p], color: PROFILE_COLORS[p] }
+              : { borderColor: "#334155", color: "#64748b" }
+          }
+        >
+          {PROFILE_LABELS[p]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function OptimizationPage() {
   const { data: portfolio } = usePortfolio();
   const { profile } = useProfileStore();
   const [maxSingle, setMaxSingle] = useState(0.40);
   const [nSim, setNSim] = useState(3000);
   const [period, setPeriod] = useState("2y");
+
+  // ── Motor 1 state ─────────────────────────────────────────────────────────
+  const [m1Profile, setM1Profile] = useState<ProfileKey>("base");
+  // {profile: {ticker: {floor, cap}}} — local edit state
+  const [allFloorCap, setAllFloorCap] = useState<Record<string, Record<string, TickerFloorCap>>>({});
+  const [m1Saved, setM1Saved] = useState(false);
+
+  // ── Motor 2 state ─────────────────────────────────────────────────────────
+  const [m2Profile, setM2Profile] = useState<ProfileKey>("base");
+  const [allCombos, setAllCombos] = useState<Record<string, CombinationRange[]>>({});
+  const [newComboTickers, setNewComboTickers] = useState<string[]>([]);
+  const [newComboMinEnabled, setNewComboMinEnabled] = useState(true);
+  const [newComboMaxEnabled, setNewComboMaxEnabled] = useState(true);
+  const [newComboMin, setNewComboMin] = useState("40");
+  const [newComboMax, setNewComboMax] = useState("60");
+  const [m2Saved, setM2Saved] = useState(false);
+
+  // Load saved settings to pre-populate Motor 1 & 2
+  useQuery({
+    queryKey: ["settings"],
+    queryFn: fetchSettings,
+    staleTime: 60 * 1000,
+    select: (data) => {
+      if (data.ticker_weight_rules && Object.keys(data.ticker_weight_rules).length > 0) {
+        setAllFloorCap(data.ticker_weight_rules as Record<string, Record<string, TickerFloorCap>>);
+      }
+      if (data.combination_ranges && Object.keys(data.combination_ranges).length > 0) {
+        setAllCombos(data.combination_ranges as Record<string, CombinationRange[]>);
+      }
+      return data;
+    },
+  });
 
   const { data: profileData } = useQuery({
     queryKey: ["profile-optimal"],
@@ -109,7 +165,7 @@ export default function OptimizationPage() {
 
   const { data: result, isFetching: pendingFrontier, refetch: runFrontier } = useQuery({
     queryKey: ["frontier", maxSingle, nSim, period],
-    queryFn: () => fetchFrontier({ max_single_asset: maxSingle, n_simulations: nSim, period }),
+    queryFn: () => fetchFrontier({ max_single_asset: maxSingle, n_simulations: nSim, period, profile }),
     staleTime: 10 * 60 * 1000,
   });
 
@@ -137,6 +193,83 @@ export default function OptimizationPage() {
     return <circle cx={cx} cy={cy} r={2.5} fill={sharpeToColor(payload.sharpe, minSharpe, maxSharpe)} opacity={0.75} />;
   };
 
+  // ── Motor 1 helpers ───────────────────────────────────────────────────────
+  const getFloorCap = (ticker: string): TickerFloorCap =>
+    allFloorCap[m1Profile]?.[ticker] ?? { floor: 0, cap: 100 };
+
+  const setFloorCap = (ticker: string, field: "floor" | "cap", val: string) => {
+    const num = parseFloat(val);
+    if (isNaN(num)) return;
+    setAllFloorCap((prev) => ({
+      ...prev,
+      [m1Profile]: {
+        ...(prev[m1Profile] ?? {}),
+        [ticker]: {
+          ...getFloorCap(ticker),
+          [field]: num / 100,
+        },
+      },
+    }));
+    setM1Saved(false);
+  };
+
+  const { mutate: saveM1, isPending: savingM1 } = useMutation({
+    mutationFn: () => {
+      // Convert {ticker: {floor, cap}} (values already 0-1 fractions)
+      const rules = allFloorCap[m1Profile] ?? {};
+      return saveTickerWeightRules(m1Profile, rules);
+    },
+    onSuccess: () => setM1Saved(true),
+  });
+
+  // ── Motor 2 helpers ───────────────────────────────────────────────────────
+  const combosForProfile = allCombos[m2Profile] ?? [];
+
+  const addCombo = () => {
+    if (newComboTickers.length < 2) return;
+    if (!newComboMinEnabled && !newComboMaxEnabled) return;
+    const minVal = newComboMinEnabled ? parseFloat(newComboMin) / 100 : null;
+    const maxVal = newComboMaxEnabled ? parseFloat(newComboMax) / 100 : null;
+    if (minVal !== null && isNaN(minVal)) return;
+    if (maxVal !== null && isNaN(maxVal)) return;
+    if (minVal !== null && maxVal !== null && minVal > maxVal) return;
+    const newRule: CombinationRange = {
+      id: crypto.randomUUID(),
+      tickers: [...newComboTickers],
+      min: minVal,
+      max: maxVal,
+    };
+    setAllCombos((prev) => ({
+      ...prev,
+      [m2Profile]: [...(prev[m2Profile] ?? []), newRule],
+    }));
+    setNewComboTickers([]);
+    setNewComboMinEnabled(true);
+    setNewComboMaxEnabled(true);
+    setNewComboMin("40");
+    setNewComboMax("60");
+    setM2Saved(false);
+  };
+
+  const removeCombo = (id: string) => {
+    setAllCombos((prev) => ({
+      ...prev,
+      [m2Profile]: (prev[m2Profile] ?? []).filter((r) => r.id !== id),
+    }));
+    setM2Saved(false);
+  };
+
+  const toggleNewComboTicker = (ticker: string) => {
+    setNewComboTickers((prev) =>
+      prev.includes(ticker) ? prev.filter((t) => t !== ticker) : [...prev, ticker]
+    );
+  };
+
+  const { mutate: saveM2, isPending: savingM2 } = useMutation({
+    mutationFn: () => saveCombinationRanges(m2Profile, combosForProfile),
+    onSuccess: () => setM2Saved(true),
+  });
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
@@ -144,16 +277,16 @@ export default function OptimizationPage() {
         {profile && (
           <span
             className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold"
-            style={{ color: PROFILE_COLORS[profile], background: profile === "conservative" ? "#eff6ff" : profile === "base" ? "#f0fdf4" : "#fef2f2" }}
+            style={{ color: PROFILE_COLORS[profile as ProfileKey], background: profile === "conservative" ? "#eff6ff" : profile === "base" ? "#f0fdf4" : "#fef2f2" }}
           >
-            Perfil: {PROFILE_LABELS[profile]}
+            Perfil: {PROFILE_LABELS[profile as ProfileKey]}
           </span>
         )}
       </div>
 
       {/* Controls */}
       <div className="bbg-card">
-        <p className="bbg-header">Constraints</p>
+        <p className="bbg-header">Constraints Globales</p>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-3">
           <div>
             <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">
@@ -183,6 +316,217 @@ export default function OptimizationPage() {
           className="bg-bloomberg-gold text-bloomberg-bg text-xs font-bold px-6 py-1.5 hover:opacity-90 disabled:opacity-50">
           {pendingFrontier ? "COMPUTING…" : "RUN OPTIMIZATION"}
         </button>
+      </div>
+
+      {/* ── Motor 1 — Floor & Cap por Ticker ─────────────────────────────── */}
+      <div className="bbg-card">
+        <p className="bbg-header" style={{ color: "#f3a712" }}>
+          Motor 1 — Floor &amp; Cap por Ticker
+        </p>
+        <p className="text-bloomberg-muted text-[10px] mb-3">
+          Define el rango mínimo (floor) y máximo (cap) de peso para cada activo, por perfil. Se guarda y aplica al optimizador.
+        </p>
+
+        <ProfileTabs active={m1Profile} onChange={setM1Profile} />
+
+        {rows.length === 0 ? (
+          <p className="text-bloomberg-muted text-[10px]">No hay posiciones cargadas.</p>
+        ) : (
+          <table className="bbg-table mb-3">
+            <thead>
+              <tr>
+                <th>Ticker</th>
+                <th className="text-right">Floor %</th>
+                <th className="text-right">Cap %</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const fc = getFloorCap(r.ticker);
+                return (
+                  <tr key={r.ticker}>
+                    <td className="text-bloomberg-gold">{r.ticker}</td>
+                    <td className="text-right">
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        step={1}
+                        value={Math.round((fc.floor ?? 0) * 100)}
+                        onChange={(e) => setFloorCap(r.ticker, "floor", e.target.value)}
+                        className="w-20 bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-0.5 text-xs text-right focus:outline-none focus:border-bloomberg-gold"
+                      />
+                    </td>
+                    <td className="text-right">
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        step={1}
+                        value={Math.round((fc.cap ?? 1) * 100)}
+                        onChange={(e) => setFloorCap(r.ticker, "cap", e.target.value)}
+                        className="w-20 bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-0.5 text-xs text-right focus:outline-none focus:border-bloomberg-gold"
+                      />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => saveM1()}
+            disabled={savingM1}
+            className="flex items-center gap-1 bg-bloomberg-gold text-bloomberg-bg text-xs font-bold px-5 py-1.5 hover:opacity-90 disabled:opacity-50"
+          >
+            <Save size={11} />
+            {savingM1 ? "GUARDANDO…" : "GUARDAR MOTOR 1"}
+          </button>
+          {m1Saved && <span className="text-green-600 text-[10px]">✓ Guardado</span>}
+        </div>
+      </div>
+
+      {/* ── Motor 2 — Rangos de Combinaciones ────────────────────────────── */}
+      <div className="bbg-card">
+        <p className="bbg-header" style={{ color: "#38b2ff" }}>
+          Motor 2 — Rangos de Combinaciones
+        </p>
+        <p className="text-bloomberg-muted text-[10px] mb-3">
+          Define rangos para la suma de pesos de grupos de activos (ej. VOO + VWCE entre 40% y 58%), por perfil.
+        </p>
+
+        <ProfileTabs active={m2Profile} onChange={setM2Profile} />
+
+        {/* Existing rules */}
+        {combosForProfile.length > 0 && (
+          <div className="space-y-2 mb-3">
+            {combosForProfile.map((rule) => (
+              <div
+                key={rule.id}
+                className="flex items-center gap-3 px-3 py-2 border border-bloomberg-border text-xs"
+              >
+                <span className="text-bloomberg-gold font-mono">
+                  {rule.tickers.join(" + ")}
+                </span>
+                <span className="text-bloomberg-muted text-[10px]">
+                  {rule.min !== null && rule.max !== null
+                    ? `≥ ${Math.round(rule.min * 100)}%  y  ≤ ${Math.round(rule.max * 100)}%`
+                    : rule.min !== null
+                    ? `≥ ${Math.round(rule.min * 100)}%`
+                    : `≤ ${Math.round((rule.max ?? 1) * 100)}%`}
+                </span>
+                <button
+                  onClick={() => removeCombo(rule.id)}
+                  className="ml-auto text-bloomberg-muted hover:text-bloomberg-red"
+                >
+                  <Trash2 size={11} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Add new rule */}
+        <div className="border border-bloomberg-border p-3 mb-3 space-y-3">
+          <p className="text-bloomberg-muted text-[10px] uppercase">Nueva regla</p>
+
+          {/* Ticker selector */}
+          <div>
+            <p className="text-bloomberg-muted text-[10px] mb-1">Activos (selecciona ≥ 2):</p>
+            <div className="flex flex-wrap gap-1">
+              {rows.map((r) => (
+                <button
+                  key={r.ticker}
+                  onClick={() => toggleNewComboTicker(r.ticker)}
+                  className="text-[10px] px-2 py-0.5 border transition-colors"
+                  style={
+                    newComboTickers.includes(r.ticker)
+                      ? { borderColor: "#38b2ff", color: "#38b2ff" }
+                      : { borderColor: "#334155", color: "#64748b" }
+                  }
+                >
+                  {r.ticker}
+                </button>
+              ))}
+            </div>
+            {newComboTickers.length >= 2 && (
+              <p className="text-[#38b2ff] text-[10px] mt-1">
+                {newComboTickers.join(" + ")}
+              </p>
+            )}
+          </div>
+
+          {/* Bounds */}
+          <div className="flex flex-wrap items-end gap-4">
+            {/* Min (≥) */}
+            <div className="space-y-1">
+              <label className="flex items-center gap-1.5 text-bloomberg-muted text-[10px] cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={newComboMinEnabled}
+                  onChange={(e) => setNewComboMinEnabled(e.target.checked)}
+                  className="accent-[#38b2ff]"
+                />
+                <span className="text-[#38b2ff] font-bold">≥</span> Mínimo %
+              </label>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step={1}
+                value={newComboMin}
+                disabled={!newComboMinEnabled}
+                onChange={(e) => setNewComboMin(e.target.value)}
+                className="w-20 bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs focus:outline-none focus:border-bloomberg-gold disabled:opacity-30"
+              />
+            </div>
+
+            {/* Max (≤) */}
+            <div className="space-y-1">
+              <label className="flex items-center gap-1.5 text-bloomberg-muted text-[10px] cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={newComboMaxEnabled}
+                  onChange={(e) => setNewComboMaxEnabled(e.target.checked)}
+                  className="accent-[#38b2ff]"
+                />
+                <span className="text-[#38b2ff] font-bold">≤</span> Máximo %
+              </label>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step={1}
+                value={newComboMax}
+                disabled={!newComboMaxEnabled}
+                onChange={(e) => setNewComboMax(e.target.value)}
+                className="w-20 bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs focus:outline-none focus:border-bloomberg-gold disabled:opacity-30"
+              />
+            </div>
+
+            <button
+              onClick={addCombo}
+              disabled={newComboTickers.length < 2 || (!newComboMinEnabled && !newComboMaxEnabled)}
+              className="flex items-center gap-1 border border-[#38b2ff] text-[#38b2ff] text-[10px] px-3 py-1.5 hover:bg-[#38b2ff] hover:text-bloomberg-bg disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <Plus size={11} /> Agregar
+            </button>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => saveM2()}
+            disabled={savingM2}
+            className="flex items-center gap-1 bg-[#38b2ff] text-bloomberg-bg text-xs font-bold px-5 py-1.5 hover:opacity-90 disabled:opacity-50"
+          >
+            <Save size={11} />
+            {savingM2 ? "GUARDANDO…" : "GUARDAR MOTOR 2"}
+          </button>
+          {m2Saved && <span className="text-green-600 text-[10px]">✓ Guardado</span>}
+        </div>
       </div>
 
       {pendingFrontier && !result && (
@@ -254,14 +598,14 @@ export default function OptimizationPage() {
                     x={profileData.profiles[profile].metrics.ann_vol}
                     y={profileData.profiles[profile].metrics.ann_return}
                     r={8}
-                    fill={PROFILE_COLORS[profile] ?? "#888"}
+                    fill={PROFILE_COLORS[profile as ProfileKey] ?? "#888"}
                     stroke="#fff"
                     strokeWidth={2}
                     label={{
-                      value: `◆ ${PROFILE_LABELS[profile] ?? profile}`,
+                      value: `◆ ${PROFILE_LABELS[profile as ProfileKey] ?? profile}`,
                       position: "bottom",
                       fontSize: 9,
-                      fill: PROFILE_COLORS[profile] ?? "#888",
+                      fill: PROFILE_COLORS[profile as ProfileKey] ?? "#888",
                     }}
                   />
                 )}
@@ -315,7 +659,6 @@ export default function OptimizationPage() {
           Express your views on expected annual returns for specific tickers. The model combines your views with the market equilibrium prior.
         </p>
 
-        {/* BL parameters */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
           <div>
             <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">Tau (uncertainty): {tau}</label>
@@ -331,7 +674,6 @@ export default function OptimizationPage() {
           </div>
         </div>
 
-        {/* Views input */}
         <div className="space-y-2 mb-3">
           <p className="text-bloomberg-muted text-[10px] uppercase">Views (expected annual return %)</p>
           {blViews.map((v, i) => (
@@ -365,7 +707,6 @@ export default function OptimizationPage() {
           </button>
         </div>
 
-        {/* Portfolio tickers as quick-add hints */}
         {rows.length > 0 && (
           <div className="flex flex-wrap gap-1 mb-3">
             <span className="text-bloomberg-muted text-[10px] self-center">Quick add:</span>

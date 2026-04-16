@@ -68,14 +68,16 @@ export default function RebalancingPage() {
   const totalValue = portfolio?.total_value_base ?? 0;
   const ccy = portfolio?.base_currency ?? "USD";
 
-  // Weight rules (per-ticker pinning)
+  // Weight rules (per-ticker pinning — legacy global format, separate from Motor 1 profile rules)
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: fetchSettings });
-  const savedRules: Record<string, TickerWeightRule> = settings?.ticker_weight_rules ?? {};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const savedRules: Record<string, TickerWeightRule> = (settings?.ticker_weight_rules as any) ?? {};
   const [localRules, setLocalRules] = useState<Record<string, TickerWeightRule>>(savedRules);
 
   const saveRulesMut = useMutation({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     mutationFn: (rules: Record<string, TickerWeightRule>) =>
-      updateSettings({ ticker_weight_rules: rules }),
+      updateSettings({ ticker_weight_rules: rules as any }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
   });
 

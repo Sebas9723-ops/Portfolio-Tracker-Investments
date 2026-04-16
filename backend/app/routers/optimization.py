@@ -17,18 +17,37 @@ class OptimizationRequest(BaseModel):
     max_single_asset: float = 0.40
     min_bonds: float = 0.0
     min_gold: float = 0.0
+    profile: str = "base"
 
 
-def _load_per_ticker_bounds(user_id: str, db) -> dict[str, tuple[float, float]]:
-    """Load fixed-weight rules from user_settings and convert to per_ticker_bounds dict."""
-    settings_res = db.table("user_settings").select("ticker_weight_rules").eq("user_id", user_id).maybe_single().execute()
-    rules = (settings_res.data or {}).get("ticker_weight_rules") or {}
-    bounds = {}
-    for ticker, rule in rules.items():
-        if isinstance(rule, dict) and rule.get("mode") == "fixed":
-            w = float(rule.get("weight", 0.0))
-            bounds[ticker] = (w, w)
-    return bounds
+def _load_profile_constraints(
+    user_id: str, db, profile: str
+) -> tuple[dict[str, tuple[float, float]], list[dict]]:
+    """Load per-ticker bounds and combination constraints for the given profile."""
+    settings_res = (
+        db.table("user_settings")
+        .select("ticker_weight_rules,combination_ranges")
+        .eq("user_id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    data = settings_res.data or {}
+
+    # Motor 1 — per-ticker floor/cap: {profile: {ticker: {floor, cap}}}
+    rules = data.get("ticker_weight_rules") or {}
+    profile_rules = rules.get(profile, {})
+    per_ticker_bounds: dict[str, tuple[float, float]] = {}
+    for ticker, rule in profile_rules.items():
+        if isinstance(rule, dict):
+            floor = float(rule.get("floor", 0.0))
+            cap = float(rule.get("cap", 1.0))
+            per_ticker_bounds[ticker] = (floor, cap)
+
+    # Motor 2 — combination ranges: {profile: [{id, tickers, min, max}]}
+    ranges = data.get("combination_ranges") or {}
+    combination_constraints: list[dict] = ranges.get(profile, [])
+
+    return per_ticker_bounds or {}, combination_constraints or []
 
 
 def _build_returns_df(tickers: list[str], period: str) -> pd.DataFrame:
@@ -53,7 +72,7 @@ def frontier(body: OptimizationRequest, user_id: str = Depends(get_user_id)):
 
     returns_df = _build_returns_df(tickers, body.period)
     rfr = get_risk_free_rate()
-    per_ticker_bounds = _load_per_ticker_bounds(user_id, db)
+    per_ticker_bounds, combination_constraints = _load_profile_constraints(user_id, db, body.profile)
 
     return simulate_efficient_frontier(
         returns_df=returns_df,
@@ -62,6 +81,7 @@ def frontier(body: OptimizationRequest, user_id: str = Depends(get_user_id)):
         max_single_asset=body.max_single_asset,
         current_weights=current_weights,
         per_ticker_bounds=per_ticker_bounds or None,
+        combination_constraints=combination_constraints or None,
     )
 
 
@@ -105,8 +125,8 @@ def max_sharpe(body: OptimizationRequest, user_id: str = Depends(get_user_id)):
 
     returns_df = _build_returns_df(tickers, body.period)
     rfr = get_risk_free_rate()
-    per_ticker_bounds = _load_per_ticker_bounds(user_id, db)
-    weights = optimize_max_sharpe(returns_df, rfr, body.max_single_asset, per_ticker_bounds or None)
+    per_ticker_bounds, combination_constraints = _load_profile_constraints(user_id, db, body.profile)
+    weights = optimize_max_sharpe(returns_df, rfr, body.max_single_asset, per_ticker_bounds or None, combination_constraints or None)
     return {"weights": weights}
 
 
@@ -118,6 +138,60 @@ def max_return_endpoint(body: OptimizationRequest, user_id: str = Depends(get_us
 
     returns_df = _build_returns_df(tickers, body.period)
     rfr = get_risk_free_rate()
-    per_ticker_bounds = _load_per_ticker_bounds(user_id, db)
-    weights = optimize_max_return(returns_df, rfr, body.max_single_asset, per_ticker_bounds or None)
+    per_ticker_bounds, combination_constraints = _load_profile_constraints(user_id, db, body.profile)
+    weights = optimize_max_return(returns_df, rfr, body.max_single_asset, per_ticker_bounds or None, combination_constraints or None)
     return {"weights": weights}
+
+
+# ── Dedicated endpoints to save Motor 1 & Motor 2 constraints ────────────────
+
+class TickerWeightRulesUpdate(BaseModel):
+    profile: str
+    rules: dict[str, dict]  # {ticker: {floor: float, cap: float}}
+
+
+class CombinationRangesUpdate(BaseModel):
+    profile: str
+    ranges: list[dict]  # [{id, tickers, min, max}]
+
+
+@router.put("/ticker-weight-rules")
+def save_ticker_weight_rules(body: TickerWeightRulesUpdate, user_id: str = Depends(get_user_id)):
+    """Save Motor 1 floor/cap rules for a specific profile."""
+    db = get_admin_client()
+    res = db.table("user_settings").select("ticker_weight_rules").eq("user_id", user_id).maybe_single().execute()
+    existing = (res.data or {}).get("ticker_weight_rules") or {}
+
+    # Validate profile
+    if body.profile not in ("conservative", "base", "aggressive"):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Invalid profile")
+
+    # Merge: update only the specified profile's rules
+    merged = {**existing, body.profile: body.rules}
+
+    db.table("user_settings").upsert(
+        {"user_id": user_id, "ticker_weight_rules": merged},
+        on_conflict="user_id",
+    ).execute()
+    return {"profile": body.profile, "rules": body.rules}
+
+
+@router.put("/combination-ranges")
+def save_combination_ranges(body: CombinationRangesUpdate, user_id: str = Depends(get_user_id)):
+    """Save Motor 2 combination range rules for a specific profile."""
+    db = get_admin_client()
+    res = db.table("user_settings").select("combination_ranges").eq("user_id", user_id).maybe_single().execute()
+    existing = (res.data or {}).get("combination_ranges") or {}
+
+    if body.profile not in ("conservative", "base", "aggressive"):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Invalid profile")
+
+    merged = {**existing, body.profile: body.ranges}
+
+    db.table("user_settings").upsert(
+        {"user_id": user_id, "combination_ranges": merged},
+        on_conflict="user_id",
+    ).execute()
+    return {"profile": body.profile, "ranges": body.ranges}

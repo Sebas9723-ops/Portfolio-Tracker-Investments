@@ -4,9 +4,48 @@ Investor Profile Engine — Conservative (Max Sharpe), Base (Target Return), Agg
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
-from typing import Literal
+from typing import Literal, Optional
 
 ProfileType = Literal["conservative", "base", "aggressive"]
+
+
+def _build_bounds(
+    tickers: list[str],
+    max_single_asset: float,
+    per_ticker_bounds: Optional[dict[str, tuple[float, float]]],
+) -> list[tuple[float, float]]:
+    bounds = []
+    for t in tickers:
+        if per_ticker_bounds and t in per_ticker_bounds:
+            bounds.append(per_ticker_bounds[t])
+        else:
+            bounds.append((0.0, max_single_asset))
+    return bounds
+
+
+def _build_combination_scipy_constraints(tickers: list[str], combination_constraints: list[dict]) -> list[dict]:
+    """min/max can be None (no bound on that side) or a fraction in [0, 1]."""
+    constraints = []
+    for rule in combination_constraints:
+        rule_tickers = rule.get("tickers", [])
+        raw_min = rule.get("min")
+        raw_max = rule.get("max")
+        indices = [i for i, t in enumerate(tickers) if t in rule_tickers]
+        if not indices:
+            continue
+        if raw_min is not None:
+            min_w = float(raw_min)
+            constraints.append({
+                "type": "ineq",
+                "fun": lambda w, idx=indices, m=min_w: sum(w[i] for i in idx) - m,
+            })
+        if raw_max is not None:
+            max_w = float(raw_max)
+            constraints.append({
+                "type": "ineq",
+                "fun": lambda w, idx=indices, m=max_w: m - sum(w[i] for i in idx),
+            })
+    return constraints
 
 
 def optimize_max_sharpe(
@@ -15,11 +54,17 @@ def optimize_max_sharpe(
     tickers: list[str],
     risk_free_rate: float = 0.045,
     max_single_asset: float = 0.40,
+    per_ticker_bounds: Optional[dict[str, tuple[float, float]]] = None,
+    combination_constraints: Optional[list[dict]] = None,
 ) -> dict[str, float]:
     n = len(tickers)
-    w0 = np.ones(n) / n
-    bounds = [(0.0, max_single_asset)] * n
-    constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
+    bounds = _build_bounds(tickers, max_single_asset, per_ticker_bounds)
+    lo = np.array([b[0] for b in bounds])
+    hi = np.array([b[1] for b in bounds])
+    w0 = np.clip(np.ones(n) / n, lo, hi)
+    w0 = w0 / w0.sum() if w0.sum() > 0 else np.ones(n) / n
+    combo = _build_combination_scipy_constraints(tickers, combination_constraints or [])
+    constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}] + combo
 
     def neg_sharpe(w):
         r = w @ mu
@@ -42,15 +87,21 @@ def optimize_target_return(
     tickers: list[str],
     target_return: float,
     max_single_asset: float = 0.40,
+    per_ticker_bounds: Optional[dict[str, tuple[float, float]]] = None,
+    combination_constraints: Optional[list[dict]] = None,
 ) -> dict[str, float]:
     """Min variance with return >= target_return (annualized fraction, e.g. 0.10 = 10%)."""
     n = len(tickers)
-    w0 = np.ones(n) / n
-    bounds = [(0.0, max_single_asset)] * n
+    bounds = _build_bounds(tickers, max_single_asset, per_ticker_bounds)
+    lo = np.array([b[0] for b in bounds])
+    hi = np.array([b[1] for b in bounds])
+    w0 = np.clip(np.ones(n) / n, lo, hi)
+    w0 = w0 / w0.sum() if w0.sum() > 0 else np.ones(n) / n
+    combo = _build_combination_scipy_constraints(tickers, combination_constraints or [])
     constraints = [
         {"type": "eq", "fun": lambda w: np.sum(w) - 1},
         {"type": "ineq", "fun": lambda w: w @ mu - target_return},
-    ]
+    ] + combo
 
     def portfolio_var(w):
         return float(w @ cov @ w)
@@ -62,8 +113,8 @@ def optimize_target_return(
             w = np.clip(res.x, 0, None)
             w /= w.sum()
             return {t: round(float(w[i]), 4) for i, t in enumerate(tickers)}
-        # fallback: relax return constraint, return min-variance
-        constraints_relaxed = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
+        # fallback: relax return constraint
+        constraints_relaxed = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}] + combo
         res2 = minimize(portfolio_var, w0, method="SLSQP", bounds=bounds, constraints=constraints_relaxed,
                         options={"ftol": 1e-10, "maxiter": 1000})
         w = np.clip(res2.x, 0, None)
@@ -78,12 +129,18 @@ def optimize_max_return(
     cov: np.ndarray,
     tickers: list[str],
     max_single_asset: float = 0.40,
+    per_ticker_bounds: Optional[dict[str, tuple[float, float]]] = None,
+    combination_constraints: Optional[list[dict]] = None,
 ) -> dict[str, float]:
-    """Maximize μ^T w — concentrates on highest-return asset up to max_single_asset cap."""
+    """Maximize μ^T w."""
     n = len(tickers)
-    w0 = np.ones(n) / n
-    bounds = [(0.0, max_single_asset)] * n
-    constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
+    bounds = _build_bounds(tickers, max_single_asset, per_ticker_bounds)
+    lo = np.array([b[0] for b in bounds])
+    hi = np.array([b[1] for b in bounds])
+    w0 = np.clip(np.ones(n) / n, lo, hi)
+    w0 = w0 / w0.sum() if w0.sum() > 0 else np.ones(n) / n
+    combo = _build_combination_scipy_constraints(tickers, combination_constraints or [])
+    constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}] + combo
 
     def neg_return(w):
         return -float(w @ mu)
@@ -104,6 +161,8 @@ def compute_profile_weights(
     risk_free_rate: float = 0.045,
     target_return: float = 0.08,
     max_single_asset: float = 0.40,
+    per_ticker_bounds: Optional[dict[str, tuple[float, float]]] = None,
+    combination_constraints: Optional[list[dict]] = None,
 ) -> dict[str, float]:
     """Dispatcher: returns optimal weights for the selected profile."""
     if returns_df.empty or returns_df.shape[1] < 1:
@@ -114,11 +173,11 @@ def compute_profile_weights(
     cov = returns_df.cov().values * 252
 
     if profile == "conservative":
-        return optimize_max_sharpe(mu, cov, tickers, risk_free_rate, max_single_asset)
+        return optimize_max_sharpe(mu, cov, tickers, risk_free_rate, max_single_asset, per_ticker_bounds, combination_constraints)
     elif profile == "base":
-        return optimize_target_return(mu, cov, tickers, target_return, max_single_asset)
+        return optimize_target_return(mu, cov, tickers, target_return, max_single_asset, per_ticker_bounds, combination_constraints)
     else:  # aggressive
-        return optimize_max_return(mu, cov, tickers, max_single_asset)
+        return optimize_max_return(mu, cov, tickers, max_single_asset, per_ticker_bounds, combination_constraints)
 
 
 def compute_profile_metrics(
@@ -146,7 +205,6 @@ def compute_profile_metrics(
     ann_vol = float(np.sqrt(w @ cov @ w))
     sharpe = (ann_return - risk_free_rate) / ann_vol if ann_vol > 0 else 0.0
 
-    # Max drawdown on portfolio return series
     cum = np.cumprod(1 + port_returns)
     running_max = np.maximum.accumulate(cum)
     drawdowns = (cum - running_max) / running_max

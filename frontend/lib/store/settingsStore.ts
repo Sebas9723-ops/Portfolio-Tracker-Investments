@@ -19,6 +19,7 @@ const defaults: UserSettings = {
   tc_model: "broker",
   investor_profile: "balanced",
   ticker_weight_rules: {},
+  combination_ranges: {},
 };
 
 export const useSettingsStore = create<SettingsState>()(
