@@ -97,9 +97,9 @@ export default function OptimizationPage() {
   const qc = useQueryClient();
   const { data: portfolio } = usePortfolio();
   const { profile } = useProfileStore();
-  const { bl_views: savedBlViews, setSettings } = useSettingsStore();
-  const [maxSingle, setMaxSingle] = useState(0.40);
-  const [period, setPeriod] = useState("2y");
+  const { bl_views: savedBlViews, setSettings, max_single_asset, optimization_periods } = useSettingsStore();
+  const maxSingle = max_single_asset ?? 0.40;
+  const period = optimization_periods?.[profile] ?? "2y";
   const N_SIM = 12000;
 
   // ── Motor 1 state ─────────────────────────────────────────────────────────
@@ -314,37 +314,9 @@ export default function OptimizationPage() {
             Profile: {PROFILE_LABELS[profile as ProfileKey]}
           </span>
         )}
-      </div>
-
-      {/* Controls */}
-      <div className="bbg-card">
-        <p className="bbg-header">Global Constraints</p>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-3">
-          <div>
-            <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">
-              Max Single Asset: {fmtPct(maxSingle * 100)}
-            </label>
-            <input type="range" min={0.1} max={1} step={0.05} value={maxSingle}
-              onChange={(e) => setMaxSingle(parseFloat(e.target.value))}
-              className="w-full accent-bloomberg-gold" />
-          </div>
-          <div>
-            <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">Simulations</label>
-            <div className="flex items-center h-[26px]">
-              <span className="text-bloomberg-gold text-xs font-bold">12,000</span>
-              <span className="text-bloomberg-muted text-[10px] ml-1.5">portfolios (fixed)</span>
-            </div>
-          </div>
-          <div>
-            <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">Period</label>
-            <select value={period} onChange={(e) => setPeriod(e.target.value)}
-              className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs">
-              {["1y", "2y", "3y", "5y", "10y"].map((p) => <option key={p}>{p}</option>)}
-            </select>
-          </div>
-        </div>
+        <span className="text-bloomberg-muted text-[10px]">{period}</span>
         <button onClick={() => runFrontier()} disabled={pendingFrontier}
-          className="bg-bloomberg-gold text-bloomberg-bg text-xs font-bold px-6 py-1.5 hover:opacity-90 disabled:opacity-50">
+          className="ml-auto bg-bloomberg-gold text-bloomberg-bg text-[10px] font-bold px-4 py-1 hover:opacity-90 disabled:opacity-50">
           {pendingFrontier ? "COMPUTING…" : "RUN OPTIMIZATION"}
         </button>
       </div>

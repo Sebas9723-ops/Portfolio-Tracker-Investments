@@ -6,6 +6,10 @@ import { useSettingsStore } from "@/lib/store/settingsStore";
 import { useProfileStore, type InvestorProfile } from "@/lib/store/profileStore";
 import type { UserSettings } from "@/lib/types";
 
+const PROFILES_LABELS: Record<string, string> = { conservative: "Conservative", base: "Base", aggressive: "Aggressive" };
+const PROFILE_COLORS: Record<string, string> = { conservative: "#2563eb", base: "#16a34a", aggressive: "#dc2626" };
+const OPT_PERIODS = ["1y", "2y", "3y", "5y", "10y", "15y"];
+
 const CURRENCIES = [
   { code: "USD", label: "US Dollar" },
   { code: "EUR", label: "Euro" },
@@ -116,6 +120,40 @@ export default function SettingsPage() {
           {field("Min Bonds Weight", "min_bonds", "number")}
           {field("Min Gold Weight", "min_gold", "number")}
         </div>
+      </div>
+
+      {/* ── Optimization Period per Profile ──────────────────────────────── */}
+      <div className="bbg-card space-y-4">
+        <p className="bbg-header">Optimization Period</p>
+        <p className="text-bloomberg-muted text-[10px]">
+          Historical data window used to compute the efficient frontier. Saved per profile.
+        </p>
+        {(["conservative", "base", "aggressive"] as const).map((p) => {
+          const current = (form.optimization_periods ?? {})[p] ?? "2y";
+          return (
+            <div key={p}>
+              <label className="block text-[10px] uppercase tracking-widest mb-2" style={{ color: PROFILE_COLORS[p] }}>
+                {PROFILES_LABELS[p]}
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {OPT_PERIODS.map((opt) => (
+                  <button
+                    key={opt}
+                    onClick={() => set("optimization_periods", { ...(form.optimization_periods ?? {}), [p]: opt })}
+                    className="px-3 py-1 text-[10px] border transition-colors"
+                    style={
+                      current === opt
+                        ? { borderColor: PROFILE_COLORS[p], color: PROFILE_COLORS[p], background: `${PROFILE_COLORS[p]}18` }
+                        : { borderColor: "#334155", color: "#64748b" }
+                    }
+                  >
+                    {opt}
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       <div className="flex items-center gap-4">

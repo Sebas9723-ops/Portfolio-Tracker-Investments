@@ -253,6 +253,8 @@ export interface UserSettings {
   };
   // Actual USD cost basis (set by user, persisted to Supabase — FX-correct across devices)
   cost_basis_usd?: number | null;
+  // Optimization period per profile (e.g. {conservative: "2y", base: "3y"})
+  optimization_periods?: Record<string, string>;
   // Black-Litterman views per profile
   bl_views?: Record<string, { ticker: string; ret: string }[]>;
   // Last frontier result — used by Contribution Planner (profile-aware)
