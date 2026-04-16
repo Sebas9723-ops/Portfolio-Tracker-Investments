@@ -519,7 +519,7 @@ export default function DashboardPage() {
                 <div className="flex justify-between items-center text-xs">
                   <div>
                     <span className="text-bloomberg-muted font-medium">Current return</span>
-                    <span className="block text-[9px] text-bloomberg-muted">since {START_DATE}</span>
+                    <span className="block text-[9px] text-bloomberg-muted">since {INCEPTION_DATE}</span>
                   </div>
                   <div className="text-right">
                     <span className={`font-bold text-sm ${currentReturnPct >= 0 ? "text-green-400" : "text-red-400"}`}>

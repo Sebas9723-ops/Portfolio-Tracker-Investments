@@ -136,7 +136,7 @@ export default function PortfolioPage() {
         <div className="bbg-card flex items-center justify-between">
           <div>
             <p className="text-bloomberg-muted text-[10px] uppercase tracking-widest mb-0.5">Current Return</p>
-            <p className="text-[11px] text-bloomberg-muted">since {START_DATE} (1-year rolling)</p>
+            <p className="text-[11px] text-bloomberg-muted">since {INCEPTION_DATE}</p>
           </div>
           <div className="text-right">
             <p className={`text-2xl font-bold ${currentReturnPct >= 0 ? "text-green-400" : "text-red-400"}`}>
