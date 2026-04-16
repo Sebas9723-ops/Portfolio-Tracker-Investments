@@ -91,26 +91,6 @@ function WeightsSharesTable({
   );
 }
 
-function ProfileTabs({ active, onChange }: { active: ProfileKey; onChange: (p: ProfileKey) => void }) {
-  return (
-    <div className="flex gap-1 mb-3">
-      {PROFILES.map((p) => (
-        <button
-          key={p}
-          onClick={() => onChange(p)}
-          className="text-[10px] px-3 py-1 border transition-colors"
-          style={
-            active === p
-              ? { borderColor: PROFILE_COLORS[p], color: PROFILE_COLORS[p] }
-              : { borderColor: "#334155", color: "#64748b" }
-          }
-        >
-          {PROFILE_LABELS[p]}
-        </button>
-      ))}
-    </div>
-  );
-}
 
 export default function OptimizationPage() {
   const { data: portfolio } = usePortfolio();
@@ -120,13 +100,11 @@ export default function OptimizationPage() {
   const [period, setPeriod] = useState("2y");
 
   // ── Motor 1 state ─────────────────────────────────────────────────────────
-  const [m1Profile, setM1Profile] = useState<ProfileKey>("base");
   // {profile: {ticker: {floor, cap}}} — local edit state
   const [allFloorCap, setAllFloorCap] = useState<Record<string, Record<string, TickerFloorCap>>>({});
   const [m1Saved, setM1Saved] = useState(false);
 
   // ── Motor 2 state ─────────────────────────────────────────────────────────
-  const [m2Profile, setM2Profile] = useState<ProfileKey>("base");
   const [allCombos, setAllCombos] = useState<Record<string, CombinationRange[]>>({});
   const [newComboTickers, setNewComboTickers] = useState<string[]>([]);
   const [newComboMinEnabled, setNewComboMinEnabled] = useState(true);
@@ -194,17 +172,19 @@ export default function OptimizationPage() {
     return <circle cx={cx} cy={cy} r={2.5} fill={sharpeToColor(payload.sharpe, minSharpe, maxSharpe)} opacity={0.75} />;
   };
 
+  const activeProfile = (profile as ProfileKey) || "base";
+
   // ── Motor 1 helpers ───────────────────────────────────────────────────────
   const getFloorCap = (ticker: string): TickerFloorCap =>
-    allFloorCap[m1Profile]?.[ticker] ?? { floor: 0, cap: 100 };
+    allFloorCap[activeProfile]?.[ticker] ?? { floor: 0, cap: 100 };
 
   const setFloorCap = (ticker: string, field: "floor" | "cap", val: string) => {
     const num = parseFloat(val);
     if (isNaN(num)) return;
     setAllFloorCap((prev) => ({
       ...prev,
-      [m1Profile]: {
-        ...(prev[m1Profile] ?? {}),
+      [activeProfile]: {
+        ...(prev[activeProfile] ?? {}),
         [ticker]: {
           ...getFloorCap(ticker),
           [field]: num / 100,
@@ -216,15 +196,14 @@ export default function OptimizationPage() {
 
   const { mutate: saveM1, isPending: savingM1 } = useMutation({
     mutationFn: () => {
-      // Convert {ticker: {floor, cap}} (values already 0-1 fractions)
-      const rules = allFloorCap[m1Profile] ?? {};
-      return saveTickerWeightRules(m1Profile, rules);
+      const rules = allFloorCap[activeProfile] ?? {};
+      return saveTickerWeightRules(activeProfile, rules);
     },
     onSuccess: () => setM1Saved(true),
   });
 
   // ── Motor 2 helpers ───────────────────────────────────────────────────────
-  const combosForProfile = allCombos[m2Profile] ?? [];
+  const combosForProfile = allCombos[activeProfile] ?? [];
 
   const addCombo = () => {
     if (newComboTickers.length < 2) return;
@@ -242,7 +221,7 @@ export default function OptimizationPage() {
     };
     setAllCombos((prev) => ({
       ...prev,
-      [m2Profile]: [...(prev[m2Profile] ?? []), newRule],
+      [activeProfile]: [...(prev[activeProfile] ?? []), newRule],
     }));
     setNewComboTickers([]);
     setNewComboMinEnabled(true);
@@ -255,7 +234,7 @@ export default function OptimizationPage() {
   const removeCombo = (id: string) => {
     setAllCombos((prev) => ({
       ...prev,
-      [m2Profile]: (prev[m2Profile] ?? []).filter((r) => r.id !== id),
+      [activeProfile]: (prev[activeProfile] ?? []).filter((r) => r.id !== id),
     }));
     setM2Saved(false);
   };
@@ -267,7 +246,7 @@ export default function OptimizationPage() {
   };
 
   const { mutate: saveM2, isPending: savingM2 } = useMutation({
-    mutationFn: () => saveCombinationRanges(m2Profile, combosForProfile),
+    mutationFn: () => saveCombinationRanges(activeProfile, combosForProfile),
     onSuccess: () => setM2Saved(true),
   });
 
@@ -325,10 +304,14 @@ export default function OptimizationPage() {
           Motor 1 — Floor &amp; Cap por Ticker
         </p>
         <p className="text-bloomberg-muted text-[10px] mb-3">
-          Define el rango mínimo (floor) y máximo (cap) de peso para cada activo, por perfil. Se guarda y aplica al optimizador.
+          Define el rango mínimo (floor) y máximo (cap) de peso para cada activo. Se aplica al perfil activo.
         </p>
 
-        <ProfileTabs active={m1Profile} onChange={setM1Profile} />
+        <div className="mb-3">
+          <span className="text-[10px] px-3 py-1 border" style={{ borderColor: PROFILE_COLORS[activeProfile], color: PROFILE_COLORS[activeProfile] }}>
+            Perfil activo: {PROFILE_LABELS[activeProfile]}
+          </span>
+        </div>
 
         {rows.length === 0 ? (
           <p className="text-bloomberg-muted text-[10px]">No hay posiciones cargadas.</p>
@@ -395,10 +378,14 @@ export default function OptimizationPage() {
           Motor 2 — Rangos de Combinaciones
         </p>
         <p className="text-bloomberg-muted text-[10px] mb-3">
-          Define rangos para la suma de pesos de grupos de activos (ej. VOO + VWCE entre 40% y 58%), por perfil.
+          Define rangos para la suma de pesos de grupos de activos (ej. VOO + VWCE entre 40% y 58%). Se aplica al perfil activo.
         </p>
 
-        <ProfileTabs active={m2Profile} onChange={setM2Profile} />
+        <div className="mb-3">
+          <span className="text-[10px] px-3 py-1 border" style={{ borderColor: PROFILE_COLORS[activeProfile], color: PROFILE_COLORS[activeProfile] }}>
+            Perfil activo: {PROFILE_LABELS[activeProfile]}
+          </span>
+        </div>
 
         {/* Existing rules */}
         {combosForProfile.length > 0 && (
