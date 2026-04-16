@@ -549,7 +549,7 @@ export default function OptimizationPage() {
           {/* Efficient Frontier */}
           <div className="bbg-card">
             <p className="bbg-header">Efficient Frontier ({result.frontier.length.toLocaleString()} portfolios)</p>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-3">
               <div>
                 <p className="text-bloomberg-muted text-[10px]">Max Sharpe</p>
                 <p className="text-bloomberg-gold text-xs font-bold">
@@ -576,6 +576,16 @@ export default function OptimizationPage() {
                     : "—"}
                 </p>
               </div>
+              {profileData?.profiles?.[profile]?.metrics && (
+                <div>
+                  <p className="text-[10px]" style={{ color: PROFILE_COLORS[profile as ProfileKey] }}>
+                    {PROFILE_LABELS[profile as ProfileKey]}
+                  </p>
+                  <p className="text-xs font-bold" style={{ color: PROFILE_COLORS[profile as ProfileKey] }}>
+                    Sharpe {profileData.profiles[profile].metrics.sharpe?.toFixed(3) ?? "—"} · Ret {fmtPct(profileData.profiles[profile].metrics.ann_return)} · Vol {fmtPct(profileData.profiles[profile].metrics.ann_vol)}
+                  </p>
+                </div>
+              )}
             </div>
             <ResponsiveContainer width="100%" height={300}>
               <ScatterChart margin={{ top: 10, right: 20, bottom: 20, left: 20 }}>
@@ -612,12 +622,6 @@ export default function OptimizationPage() {
                     fill={PROFILE_COLORS[profile as ProfileKey] ?? "#888"}
                     stroke="#fff"
                     strokeWidth={2}
-                    label={{
-                      value: `◆ ${PROFILE_LABELS[profile as ProfileKey] ?? profile}`,
-                      position: "right",
-                      fontSize: 9,
-                      fill: PROFILE_COLORS[profile as ProfileKey] ?? "#888",
-                    }}
                   />
                 )}
               </ScatterChart>
