@@ -145,7 +145,7 @@ export default function OptimizationPage() {
   const [riskAversion, setRiskAversion] = useState(3.0);
 
   const { data: result, isFetching: pendingFrontier, refetch: runFrontier } = useQuery({
-    queryKey: ["frontier", maxSingle, nSim, period],
+    queryKey: ["frontier", maxSingle, nSim, period, profile],
     queryFn: () => fetchFrontier({ max_single_asset: maxSingle, n_simulations: nSim, period, profile }),
     staleTime: 10 * 60 * 1000,
   });

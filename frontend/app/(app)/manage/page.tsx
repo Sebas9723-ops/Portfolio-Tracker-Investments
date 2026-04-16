@@ -52,6 +52,8 @@ export default function ManagePage() {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ["positions"] });
       qc.invalidateQueries({ queryKey: ["portfolio"] });
+      qc.invalidateQueries({ queryKey: ["rebalancing"] });
+      qc.invalidateQueries({ queryKey: ["frontier"] });
       setEditing((e) => { const n = { ...e }; delete n[vars.ticker]; return n; });
       setSaveStatus((s) => ({ ...s, [vars.ticker]: "ok" }));
       setTimeout(() => setSaveStatus((s) => { const n = { ...s }; delete n[vars.ticker]; return n; }), 2000);
@@ -69,6 +71,8 @@ export default function ManagePage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["positions"] });
       qc.invalidateQueries({ queryKey: ["portfolio"] });
+      qc.invalidateQueries({ queryKey: ["rebalancing"] });
+      qc.invalidateQueries({ queryKey: ["frontier"] });
       setShowPosForm(false);
       setPosForm(initPositionForm);
     },
