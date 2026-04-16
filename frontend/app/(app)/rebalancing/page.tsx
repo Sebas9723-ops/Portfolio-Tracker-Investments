@@ -1,8 +1,8 @@
 "use client";
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { fetchRebalancing, fetchRequiredForMaxSharpe } from "@/lib/api/analytics";
-import { fetchSettings, updateSettings } from "@/lib/api/settings";
+import { fetchSettings } from "@/lib/api/settings";
 import { usePortfolio } from "@/lib/hooks/usePortfolio";
 import { useProfileStore } from "@/lib/store/profileStore";
 import { fmtCurrency, fmtPct } from "@/lib/formatters";
@@ -10,7 +10,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell, ReferenceLine,
 } from "recharts";
-import type { TickerWeightRule } from "@/lib/types";
+import type { TickerFloorCap, CombinationRange } from "@/lib/types";
 
 const PROFILE_LABELS: Record<string, { label: string; color: string; bg: string }> = {
   conservative: { label: "Conservador", color: "#2563eb", bg: "#eff6ff" },
@@ -55,37 +55,23 @@ function DriftBadge({ drift, threshold }: { drift: number; threshold: number }) 
 }
 
 export default function RebalancingPage() {
-  const qc = useQueryClient();
   const [contributionStr, setContributionStr] = useState("0");
   const contribution = parseFloat(contributionStr) || 0;
   const [tcModel, setTcModel] = useState("broker");
   const [msPeriod, setMsPeriod] = useState("2y");
   const [msMaxSingle, setMsMaxSingle] = useState(0.40);
-  const [showWeightRules, setShowWeightRules] = useState(false);
 
   const { data: portfolio } = usePortfolio();
+  const { profile } = useProfileStore();
   const rows = portfolio?.rows ?? [];
   const totalValue = portfolio?.total_value_base ?? 0;
   const ccy = portfolio?.base_currency ?? "USD";
 
-  // Weight rules (per-ticker pinning — legacy global format, separate from Motor 1 profile rules)
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: fetchSettings });
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const savedRules: Record<string, TickerWeightRule> = (settings?.ticker_weight_rules as any) ?? {};
-  const [localRules, setLocalRules] = useState<Record<string, TickerWeightRule>>(savedRules);
 
-  const saveRulesMut = useMutation({
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mutationFn: (rules: Record<string, TickerWeightRule>) =>
-      updateSettings({ ticker_weight_rules: rules as any }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
-  });
-
-  const tickers = rows.map((r) => r.ticker);
-  const fixedSum = tickers.reduce((s, t) => {
-    const rule = localRules[t];
-    return s + (rule?.mode === "fixed" ? (rule.weight ?? 0) : 0);
-  }, 0);
+  // Motor 1 & 2 — active constraints for the current profile
+  const motor1Rules: Record<string, TickerFloorCap> = settings?.ticker_weight_rules?.[profile] ?? {};
+  const motor2Ranges: CombinationRange[] = settings?.combination_ranges?.[profile] ?? [];
 
   const { data, isLoading } = useQuery({
     queryKey: ["rebalancing", contribution, tcModel],
@@ -165,85 +151,63 @@ export default function RebalancingPage() {
         </div>
       </div>
 
-      {/* Weight Rules per Ticker */}
-      <div className="bbg-card">
-        <div className="flex items-center justify-between mb-2">
-          <p className="bbg-header mb-0">Weight Rules per Ticker</p>
-          <button
-            onClick={() => setShowWeightRules((v) => !v)}
-            className="text-[10px] text-bloomberg-muted border border-bloomberg-border px-2 py-1 hover:text-bloomberg-gold hover:border-bloomberg-gold"
-          >
-            {showWeightRules ? "HIDE" : "SHOW"}
-          </button>
-        </div>
-        <p className="text-bloomberg-muted text-[10px] mb-2">
-          Fix a ticker&apos;s weight — the rest optimise freely. Applied across the whole app (frontier, rebalancing, required contribution).
-        </p>
-        {showWeightRules && (
-          <div className="space-y-2">
-            {tickers.map((t) => {
-              const rule = localRules[t] ?? { mode: "free" as const };
-              return (
-                <div key={t} className="flex items-center gap-3 text-xs">
-                  <span className="text-bloomberg-gold w-24 font-medium">{t}</span>
-                  <select
-                    value={rule.mode}
-                    onChange={(e) =>
-                      setLocalRules((r) => ({ ...r, [t]: { ...r[t], mode: e.target.value as "free" | "fixed" } }))
-                    }
-                    className="bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs"
-                  >
-                    <option value="free">Free (Max Sharpe)</option>
-                    <option value="fixed">Fixed weight</option>
-                  </select>
-                  {rule.mode === "fixed" && (
-                    <input
-                      type="number"
-                      min={0} max={1} step={0.01}
-                      value={rule.weight ?? 0}
-                      onChange={(e) =>
-                        setLocalRules((r) => ({ ...r, [t]: { ...r[t], weight: parseFloat(e.target.value) || 0 } }))
-                      }
-                      className="bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs w-24 focus:outline-none focus:border-bloomberg-gold"
-                      placeholder="0.00"
-                    />
-                  )}
-                  {rule.mode === "fixed" && (
-                    <span className="text-bloomberg-muted text-[10px]">{fmtPct((rule.weight ?? 0) * 100)}</span>
-                  )}
-                </div>
-              );
-            })}
-            {fixedSum > 1.0 && (
-              <p className="text-red-400 text-[10px]">Fixed weights sum to {fmtPct(fixedSum * 100)} — must be ≤ 100%.</p>
+      {/* Active Constraints (Motor 1 + Motor 2) */}
+      {(Object.keys(motor1Rules).length > 0 || motor2Ranges.length > 0) && (
+        <div className="bbg-card">
+          <p className="bbg-header">Active Constraints — {profile.charAt(0).toUpperCase() + profile.slice(1)} Profile</p>
+          <p className="text-bloomberg-muted text-[10px] mb-3">
+            These rules are applied when computing target weights and the contribution plan. Edit them in Optimization → Motor 1 / Motor 2.
+          </p>
+          <div className="flex flex-wrap gap-6">
+            {Object.keys(motor1Rules).length > 0 && (
+              <div>
+                <p className="text-bloomberg-muted text-[10px] uppercase mb-1">Motor 1 — Floor / Cap per Ticker</p>
+                <table className="bbg-table text-xs">
+                  <thead>
+                    <tr>
+                      <th>Ticker</th>
+                      <th className="text-right">Floor</th>
+                      <th className="text-right">Cap</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(motor1Rules).map(([t, rule]) => (
+                      <tr key={t}>
+                        <td className="text-bloomberg-gold font-medium">{t}</td>
+                        <td className="text-right text-bloomberg-muted">{fmtPct((rule.floor ?? 0) * 100)}</td>
+                        <td className="text-right text-bloomberg-muted">{fmtPct((rule.cap ?? 1) * 100)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
-            {fixedSum > 0 && fixedSum <= 1.0 && (
-              <p className="text-bloomberg-muted text-[10px]">
-                Fixed: {fmtPct(fixedSum * 100)} · Free to optimise: {fmtPct((1 - fixedSum) * 100)}
-              </p>
+            {motor2Ranges.length > 0 && (
+              <div>
+                <p className="text-bloomberg-muted text-[10px] uppercase mb-1">Motor 2 — Combination Ranges</p>
+                <table className="bbg-table text-xs">
+                  <thead>
+                    <tr>
+                      <th>Tickers</th>
+                      <th className="text-right">Min</th>
+                      <th className="text-right">Max</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {motor2Ranges.map((r) => (
+                      <tr key={r.id}>
+                        <td className="text-bloomberg-gold font-medium">{r.tickers.join(" + ")}</td>
+                        <td className="text-right text-bloomberg-muted">{r.min != null ? fmtPct(r.min) : "—"}</td>
+                        <td className="text-right text-bloomberg-muted">{r.max != null ? fmtPct(r.max) : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
-            <div className="flex gap-2 mt-2">
-              <button
-                onClick={() => saveRulesMut.mutate(localRules)}
-                disabled={fixedSum > 1.0 || saveRulesMut.isPending}
-                className="bg-bloomberg-gold text-bloomberg-bg text-xs font-bold px-4 py-1 disabled:opacity-50"
-              >
-                {saveRulesMut.isPending ? "SAVING…" : "SAVE RULES"}
-              </button>
-              <button
-                onClick={() => {
-                  const cleared = Object.fromEntries(tickers.map((t) => [t, { mode: "free" as const }]));
-                  setLocalRules(cleared);
-                  saveRulesMut.mutate(cleared);
-                }}
-                className="text-bloomberg-muted text-xs px-3 py-1 border border-bloomberg-border hover:text-bloomberg-gold hover:border-bloomberg-gold"
-              >
-                CLEAR ALL
-              </button>
-            </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Deviation Monitor */}
       <div className="bbg-card">

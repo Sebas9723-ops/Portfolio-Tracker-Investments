@@ -17,12 +17,15 @@ def get_settings(user_id: str = Depends(get_user_id)):
 
 
 @router.put("", response_model=UserSettings)
-def update_settings(body: UserSettings, user_id: str = Depends(get_user_id)):
+def update_settings(body: dict, user_id: str = Depends(get_user_id)):
     db = get_admin_client()
-    data = body.model_dump()
-    data["user_id"] = user_id
-    db.table("user_settings").upsert(data, on_conflict="user_id").execute()
-    return body
+    # Read existing first so we only overwrite fields that were explicitly sent
+    res = db.table("user_settings").select("*").eq("user_id", user_id).maybe_single().execute()
+    existing = {k: v for k, v in (res.data or {}).items() if k in UserSettings.model_fields}
+    merged = {**existing, **{k: v for k, v in body.items() if k in UserSettings.model_fields}}
+    merged["user_id"] = user_id
+    db.table("user_settings").upsert(merged, on_conflict="user_id").execute()
+    return UserSettings(**{k: v for k, v in merged.items() if k in UserSettings.model_fields})
 
 
 # ── Watchlist ─────────────────────────────────────────────────────────────────
