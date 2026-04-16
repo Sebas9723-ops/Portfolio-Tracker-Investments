@@ -60,6 +60,8 @@ export const fetchRequiredForMaxSharpe = (params?: { period?: string; max_single
       buy_plan: Record<string, { buy_value: number; buy_pct: number; target_weight: number; current_weight: number }>;
       total_value: number;
       total_after: number;
+      profile: string;
+      profile_metrics?: { ann_return: number; ann_vol: number; sharpe: number; max_drawdown: number };
     }>("/api/rebalancing/required-for-max-sharpe", { params })
     .then((r) => r.data);
 

@@ -384,11 +384,15 @@ export default function RebalancingPage() {
         )}
       </div>
 
-      {/* Required Contribution for Max Sharpe */}
+      {/* Required Contribution — Profile-aware */}
       <div className="bbg-card">
-        <p className="bbg-header" style={{ color: "#f3a712" }}>Required Contribution to Reach Max Sharpe (No Selling)</p>
+        <p className="bbg-header" style={{ color: "#f3a712" }}>
+          Required Contribution to Reach{" "}
+          {profile === "aggressive" ? "Max Return" : profile === "conservative" ? "Max Sharpe" : "Target Return"}{" "}
+          (No Selling)
+        </p>
         <p className="text-bloomberg-muted text-[10px] mb-3">
-          Minimum cash needed to reach Max Sharpe weights without selling any existing positions.
+          Minimum cash needed to reach the {PROFILE_LABELS[profile]?.label ?? profile} profile optimal weights without selling any existing positions.
         </p>
 
         <div className="flex flex-wrap gap-4 items-end mb-3">
@@ -439,10 +443,30 @@ export default function RebalancingPage() {
               <div className="bbg-card">
                 <p className="text-bloomberg-muted text-[10px]">Assets in Plan</p>
                 <p className="text-bloomberg-text text-sm font-bold">
-                  {Object.values(msData.buy_plan).filter((x) => x.buy_value > 0).length}
+                  {Object.values(msData.buy_plan).filter((x: { buy_value: number }) => x.buy_value > 0).length}
                 </p>
               </div>
             </div>
+            {msData.profile_metrics && Object.keys(msData.profile_metrics).length > 0 && (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                <div className="bbg-card">
+                  <p className="text-bloomberg-muted text-[10px]">Target Ann. Return</p>
+                  <p className="text-green-400 text-sm font-bold">{msData.profile_metrics.ann_return?.toFixed(1)}%</p>
+                </div>
+                <div className="bbg-card">
+                  <p className="text-bloomberg-muted text-[10px]">Target Volatility</p>
+                  <p className="text-bloomberg-text text-sm font-bold">{msData.profile_metrics.ann_vol?.toFixed(1)}%</p>
+                </div>
+                <div className="bbg-card">
+                  <p className="text-bloomberg-muted text-[10px]">Target Sharpe</p>
+                  <p className="text-bloomberg-gold text-sm font-bold">{msData.profile_metrics.sharpe?.toFixed(3)}</p>
+                </div>
+                <div className="bbg-card">
+                  <p className="text-bloomberg-muted text-[10px]">Target Max DD</p>
+                  <p className="text-red-400 text-sm font-bold">{msData.profile_metrics.max_drawdown?.toFixed(1)}%</p>
+                </div>
+              </div>
+            )}
 
             <table className="bbg-table">
               <thead>

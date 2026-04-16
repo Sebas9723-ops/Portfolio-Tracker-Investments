@@ -6,7 +6,7 @@ from app.services.fx_service import get_fx_rates
 from app.compute.portfolio_builder import build_portfolio
 from app.compute.rebalancing import build_rebalancing_table, compute_target_weights_from_drift
 from app.compute.optimization import optimize_max_sharpe
-from app.compute.profile import compute_profile_weights
+from app.compute.profile import compute_profile_weights, compute_profile_metrics
 from app.services.exchange_classifier import get_native_currency
 from app.models.analytics import RebalancingRow
 import pandas as pd
@@ -156,7 +156,12 @@ def required_for_max_sharpe(
     } or None
     combination_constraints = combination_ranges_data.get(profile_key, []) or None
 
-    ms_weights = optimize_max_sharpe(returns_df, rfr, max_single_asset, per_ticker_bounds, combination_constraints)
+    # Use profile-appropriate optimizer (not always Max Sharpe)
+    target_return_val = float(settings.get("target_return", 0.08))
+    ms_weights = compute_profile_weights(
+        returns_df, profile_key, rfr, target_return_val, max_single_asset,
+        per_ticker_bounds, combination_constraints,
+    )
 
     if not ms_weights:
         return {"required_contribution": 0, "max_sharpe_weights": {}, "buy_plan": {}}
@@ -189,10 +194,14 @@ def required_for_max_sharpe(
             "current_weight": round(current_v / total_value * 100, 2) if total_value > 0 else 0.0,
         }
 
+    profile_metrics = compute_profile_metrics(returns_df, ms_weights, rfr)
+
     return {
         "required_contribution": required,
         "max_sharpe_weights": {t: round(w * 100, 2) for t, w in ms_weights.items()},
         "buy_plan": buy_plan,
         "total_value": total_value,
         "total_after": round(total_new, 2),
+        "profile": profile_key,
+        "profile_metrics": profile_metrics,
     }
