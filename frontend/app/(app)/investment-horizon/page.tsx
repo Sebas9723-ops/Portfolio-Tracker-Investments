@@ -8,9 +8,22 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
 
+// Profile → which frontier point to use
+const PROFILE_FRONTIER_KEY = {
+  conservative: "min_vol",
+  base:         "max_sharpe",
+  aggressive:   "max_return",
+} as const;
+
+const PROFILE_FRONTIER_LABEL = {
+  conservative: "Min Volatility",
+  base:         "Max Sharpe",
+  aggressive:   "Max Return",
+} as const;
+
 function monteCarlo(
   initial: number, monthly: number, years: number,
-  avgReturn: number, volatility: number, nPaths = 500,
+  avgReturn: number, volatility: number, nPaths = 1000,
 ) {
   const months = years * 12;
   const mu = avgReturn / 12;
@@ -40,42 +53,44 @@ function monteCarlo(
 export default function InvestmentHorizonPage() {
   const { data: portfolio } = usePortfolio();
   const initial = portfolio?.total_value_base ?? 10000;
-  const { targetReturn } = useProfileStore();
-  const { horizon_params, frontier_max_sharpe, setSettings } = useSettingsStore();
+  const { profile, targetReturn } = useProfileStore();
+  const { horizon_params, frontier_result, setSettings } = useSettingsStore();
 
-  // Priority: frontier_max_sharpe > profileStore.targetReturn > persisted horizon_params
-  const defaultRet = frontier_max_sharpe
-    ? frontier_max_sharpe.ret / 100
-    : targetReturn;
-  const defaultVol = frontier_max_sharpe
-    ? frontier_max_sharpe.vol / 100
-    : (horizon_params?.vol ?? 0.15);
+  // Pick the right frontier point for the active profile
+  const frontierKey = PROFILE_FRONTIER_KEY[profile as keyof typeof PROFILE_FRONTIER_KEY] ?? "max_sharpe";
+  const frontierPoint = frontier_result?.[frontierKey];
+  const frontierLabel = PROFILE_FRONTIER_LABEL[profile as keyof typeof PROFILE_FRONTIER_LABEL] ?? "Max Sharpe";
+
+  // Default ret/vol: frontier (profile-specific point) > profileStore.targetReturn
+  const defaultRet = frontierPoint ? frontierPoint.ret / 100 : targetReturn;
+  const defaultVol = frontierPoint ? frontierPoint.vol / 100 : (horizon_params?.vol ?? 0.15);
 
   const [monthly, setMonthly] = useState(horizon_params?.monthly ?? 500);
-  const [years, setYears] = useState(horizon_params?.years ?? 10);
-  const [ret, setRet] = useState(defaultRet);
-  const [vol, setVol] = useState(defaultVol);
-  const [goal, setGoal] = useState(horizon_params?.goal ?? 100000);
+  const [years, setYears]     = useState(horizon_params?.years ?? 10);
+  const [ret, setRet]         = useState(defaultRet);
+  const [vol, setVol]         = useState(defaultVol);
+  const [goal, setGoal]       = useState(horizon_params?.goal ?? 100000);
 
-  // When frontier updates (user runs optimization), sync ret + vol
+  // Sync when frontier result updates (user ran optimization)
   useEffect(() => {
-    if (!frontier_max_sharpe) return;
-    setRet(frontier_max_sharpe.ret / 100);
-    setVol(frontier_max_sharpe.vol / 100);
-  }, [frontier_max_sharpe]);
+    if (!frontierPoint) return;
+    setRet(frontierPoint.ret / 100);
+    setVol(frontierPoint.vol / 100);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [frontier_result, profile]);
 
-  // Fallback: sync targetReturn when no frontier result exists
+  // Fallback: sync targetReturn only when no frontier result
   useEffect(() => {
-    if (frontier_max_sharpe) return;
+    if (frontierPoint) return;
     setRet(targetReturn);
-  }, [targetReturn, frontier_max_sharpe]);
+  }, [targetReturn, frontierPoint]);
 
-  // Persist monthly / years / vol / goal changes
+  // Persist non-rate params
   useEffect(() => {
     setSettings({ horizon_params: { monthly, years, vol, goal } });
   }, [monthly, years, vol, goal, setSettings]);
 
-  const data = monteCarlo(initial, monthly, years, ret, vol, 1000);
+  const data = monteCarlo(initial, monthly, years, ret, vol);
   const base = data[data.length - 1];
 
   const successRate = (() => {
@@ -91,32 +106,42 @@ export default function InvestmentHorizonPage() {
     const growth = Math.pow(1 + mu, months);
     const pvComponent = initial * growth;
     const annuityFactor = mu > 0 ? (growth - 1) / mu : months;
-    const needed = (goal - pvComponent) / annuityFactor;
-    return Math.max(0, needed);
+    return Math.max(0, (goal - pvComponent) / annuityFactor);
   })();
 
   const ccy = portfolio?.base_currency ?? "USD";
-  const source = frontier_max_sharpe
-    ? `Frontier Max Sharpe (Sharpe ${frontier_max_sharpe.sharpe.toFixed(3)})`
-    : `Investor profile target (${fmtPct(targetReturn * 100)})`;
 
   return (
     <div className="space-y-4">
       <h1 className="text-bloomberg-gold text-xs font-bold uppercase tracking-widest">Investment Horizon</h1>
 
       {/* Source banner */}
-      <div className="flex items-center gap-2 px-3 py-2 border border-bloomberg-border text-[10px]">
-        <span className="text-bloomberg-muted uppercase tracking-widest">Return &amp; Vol source:</span>
-        <span className={frontier_max_sharpe ? "text-bloomberg-gold font-semibold" : "text-bloomberg-muted"}>
-          {source}
-        </span>
-        {frontier_max_sharpe && (
-          <button
-            onClick={() => { setRet(targetReturn); setVol(horizon_params?.vol ?? 0.15); setSettings({ frontier_max_sharpe: undefined }); }}
-            className="ml-auto text-bloomberg-muted hover:text-bloomberg-red text-[10px]"
-          >
-            ✕ Clear frontier
-          </button>
+      <div className="flex items-center gap-3 px-3 py-2 border border-bloomberg-border text-[10px]">
+        <span className="text-bloomberg-muted uppercase tracking-widest">Guided by:</span>
+        {frontierPoint ? (
+          <>
+            <span className="text-bloomberg-gold font-semibold">
+              Efficient Frontier — {frontierLabel}
+            </span>
+            <span className="text-bloomberg-muted">
+              Ret {fmtPct(frontierPoint.ret)} · Vol {fmtPct(frontierPoint.vol)} · Sharpe {frontierPoint.sharpe.toFixed(3)}
+            </span>
+            <button
+              onClick={() => {
+                setSettings({ frontier_result: undefined });
+                setRet(targetReturn);
+                setVol(horizon_params?.vol ?? 0.15);
+              }}
+              className="ml-auto text-bloomberg-muted hover:text-bloomberg-red"
+            >
+              ✕ Clear
+            </button>
+          </>
+        ) : (
+          <span className="text-bloomberg-muted">
+            No frontier result — using investor profile target ({fmtPct(targetReturn * 100)}).
+            Run Optimization to connect.
+          </span>
         )}
       </div>
 
@@ -134,9 +159,12 @@ export default function InvestmentHorizonPage() {
               <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">
                 {label}{isRate ? `: ${fmtPct(value * 100)}` : ""}
               </label>
-              <input type="number" value={value} onChange={(e) => setter(parseFloat(e.target.value) || 0)}
+              <input
+                type="number" value={value}
+                onChange={(e) => setter(parseFloat(e.target.value) || 0)}
                 step={step} min={min} max={max}
-                className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs focus:outline-none focus:border-bloomberg-gold" />
+                className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
+              />
             </div>
           ))}
         </div>
@@ -163,8 +191,10 @@ export default function InvestmentHorizonPage() {
         </div>
         <div className="bbg-card">
           <p className="text-bloomberg-muted text-[10px] uppercase">Success Rate</p>
-          <p className={`text-lg font-semibold ${successRate >= 50 ? "positive" : successRate >= 25 ? "gold" : "negative"}`}
-            style={successRate >= 25 && successRate < 50 ? { color: "#f3a712" } : {}}>
+          <p
+            className={`text-lg font-semibold ${successRate >= 50 ? "positive" : "negative"}`}
+            style={successRate >= 25 && successRate < 50 ? { color: "#f3a712" } : {}}
+          >
             ~{successRate}%
           </p>
           <p className="text-bloomberg-muted text-[10px]">of hitting goal</p>
@@ -197,8 +227,10 @@ export default function InvestmentHorizonPage() {
               tickFormatter={(v) => `Y${v}`} />
             <YAxis tick={{ fontSize: 9, fill: "#8a9bb5" }} tickLine={false} axisLine={false}
               tickFormatter={(v) => fmtCurrency(v, ccy, true)} width={65} />
-            <Tooltip contentStyle={{ background: "#111820", border: "1px solid #1e2535", fontSize: 10 }}
-              formatter={(v: number) => fmtCurrency(v, ccy)} />
+            <Tooltip
+              contentStyle={{ background: "#111820", border: "1px solid #1e2535", fontSize: 10 }}
+              formatter={(v: number) => fmtCurrency(v, ccy)}
+            />
             <Area type="monotone" dataKey="p90" fill="url(#bull)" stroke="#4dff4d" strokeWidth={1} name="Bull (P90)" dot={false} />
             <Area type="monotone" dataKey="p50" fill="none" stroke="#f3a712" strokeWidth={2} name="Base (P50)" dot={false} />
             <Area type="monotone" dataKey="p10" fill="url(#bear)" stroke="#ff4d4d" strokeWidth={1} name="Bear (P10)" dot={false} />

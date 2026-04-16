@@ -155,14 +155,15 @@ export default function OptimizationPage() {
     staleTime: 10 * 60 * 1000,
   });
 
-  // Persist Max Sharpe metrics to store so Contribution Planner can read them
+  // Persist all three frontier reference points so Contribution Planner can
+  // pick the right one based on the active profile (aggressive→max_return, etc.)
   useEffect(() => {
-    if (!result?.max_sharpe) return;
+    if (!result) return;
     setSettings({
-      frontier_max_sharpe: {
-        ret: result.max_sharpe.ret,
-        vol: result.max_sharpe.vol,
-        sharpe: result.max_sharpe.sharpe,
+      frontier_result: {
+        max_sharpe: { ret: result.max_sharpe.ret, vol: result.max_sharpe.vol, sharpe: result.max_sharpe.sharpe },
+        min_vol:    { ret: result.min_vol.ret,    vol: result.min_vol.vol,    sharpe: result.min_vol.sharpe },
+        max_return: { ret: result.max_return.ret, vol: result.max_return.vol, sharpe: result.max_return.sharpe },
       },
     });
   }, [result, setSettings]);
