@@ -149,7 +149,7 @@ export default function OptimizationPage() {
   const [riskAversion, setRiskAversion] = useState(3.0);
   const [blViewsSaved, setBlViewsSaved] = useState(false);
 
-  const { data: result, isFetching: pendingFrontier, refetch: runFrontier } = useQuery({
+  const { data: result, isFetching: pendingFrontier } = useQuery({
     queryKey: ["frontier", maxSingle, N_SIM, period, profile],
     queryFn: () => fetchFrontier({ max_single_asset: maxSingle, n_simulations: N_SIM, period, profile }),
     staleTime: 10 * 60 * 1000,
@@ -315,10 +315,9 @@ export default function OptimizationPage() {
           </span>
         )}
         <span className="text-bloomberg-muted text-[10px]">{period}</span>
-        <button onClick={() => runFrontier()} disabled={pendingFrontier}
-          className="ml-auto bg-bloomberg-gold text-bloomberg-bg text-[10px] font-bold px-4 py-1 hover:opacity-90 disabled:opacity-50">
-          {pendingFrontier ? "COMPUTING…" : "RUN OPTIMIZATION"}
-        </button>
+        {pendingFrontier && (
+          <span className="ml-auto text-bloomberg-muted text-[10px] animate-pulse">Computing optimal weights…</span>
+        )}
       </div>
 
       {/* ── Motor 1 — Floor & Cap por Ticker ─────────────────────────────── */}
