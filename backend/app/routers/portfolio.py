@@ -123,7 +123,10 @@ def get_portfolio_history(
     )
     transactions = tx_res.data or []
 
-    end_str = str(date.today() + timedelta(days=1))
+    # Use today as exclusive end so the last bar is yesterday's confirmed close.
+    # Today's live value is already shown in the portfolio header; including
+    # today's incomplete intraday bar causes a misleading drop in the chart.
+    end_str = str(date.today())
 
     # ── Historical prices ──────────────────────────────────────────────────────
     yf_map = {yf_ticker(t): t for t in tickers}
