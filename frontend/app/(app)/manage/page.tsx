@@ -10,7 +10,8 @@ import type { Position, TransactionAction } from "@/lib/types";
 const CURRENCIES = ["USD", "EUR", "GBP", "COP", "CHF", "AUD"];
 const MARKETS = ["US", "LSE", "XETRA", "EURONEXT", "TSX", "ASX"];
 
-const initPositionForm = { ticker: "", name: "", shares: "", avg_cost_native: "" };
+const today = () => new Date().toISOString().split("T")[0];
+const initPositionForm = { ticker: "", name: "", shares: "", avg_cost_native: "", currency: "USD", date: today() };
 const initCashForm = { currency: "USD", amount: "", account_name: "" };
 
 type EditRow = { shares: string; avg_cost_native: string; name: string; currency: string };
@@ -68,7 +69,20 @@ export default function ManagePage() {
 
   const addPosMut = useMutation({
     mutationFn: upsertPosition,
-    onSuccess: () => {
+    onSuccess: (_, vars) => {
+      // Auto-register invested capital as a BUY transaction
+      if (vars.avg_cost_native && vars.shares > 0) {
+        auditMut.mutate({
+          ticker: vars.ticker,
+          date: posForm.date || today(),
+          action: "BUY" as TransactionAction,
+          quantity: vars.shares,
+          price_native: vars.avg_cost_native,
+          fee_native: 0,
+          currency: vars.currency || "USD",
+          comment: "Auto-registered from position entry",
+        } as Parameters<typeof createTransaction>[0]);
+      }
       qc.invalidateQueries({ queryKey: ["positions"] });
       qc.invalidateQueries({ queryKey: ["portfolio"] });
       qc.invalidateQueries({ queryKey: ["rebalancing"] });
@@ -127,18 +141,21 @@ export default function ManagePage() {
 
     await updateMut.mutateAsync({ ticker: pos.ticker, data: { shares: newShares, avg_cost_native: newAvg, name: row.name, currency: row.currency } });
 
-    // Log adjustment for audit trail
-    if (newShares !== pos.shares) {
+    // Register capital delta as BUY/SELL transaction
+    const deltaShares = newShares - pos.shares;
+    if (deltaShares !== 0) {
+      const price = newAvg ?? pos.avg_cost_native ?? 0;
       auditMut.mutate({
         ticker: pos.ticker,
         date: new Date().toISOString().split("T")[0],
-        action: "ADJUSTMENT" as TransactionAction,
-        quantity: newShares,
-        price_native: 0,
+        action: (deltaShares > 0 ? "BUY" : "SELL") as TransactionAction,
+        quantity: Math.abs(deltaShares),
+        price_native: price,
         fee_native: 0,
         currency: pos.currency,
         comment: `Shares: ${pos.shares} → ${newShares}${newAvg && newAvg !== pos.avg_cost_native ? ` | Avg cost: ${pos.avg_cost_native ?? "—"} → ${newAvg}` : ""}`,
       } as Parameters<typeof createTransaction>[0]);
+      qc.invalidateQueries({ queryKey: ["transactions"] });
     }
   }
 
@@ -200,7 +217,7 @@ export default function ManagePage() {
                 />
               </div>
               <div>
-                <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">Avg Cost (USD)</label>
+                <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">Avg Cost</label>
                 <input
                   type="number"
                   step="any"
@@ -209,7 +226,33 @@ export default function ManagePage() {
                   className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
                 />
               </div>
+              <div>
+                <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">Currency</label>
+                <select
+                  value={posForm.currency}
+                  onChange={(e) => setPosForm((p) => ({ ...p, currency: e.target.value }))}
+                  className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
+                >
+                  {CURRENCIES.map((c) => <option key={c}>{c}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">Purchase Date</label>
+                <input
+                  type="date"
+                  value={posForm.date}
+                  onChange={(e) => setPosForm((p) => ({ ...p, date: e.target.value }))}
+                  className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
+                />
+              </div>
             </div>
+            {posForm.shares && posForm.avg_cost_native && (
+              <p className="text-bloomberg-muted text-[10px] mb-2">
+                Capital invested: <span className="text-bloomberg-gold font-semibold">
+                  {posForm.currency} {(parseFloat(posForm.shares) * parseFloat(posForm.avg_cost_native)).toFixed(2)}
+                </span>
+              </p>
+            )}
             <div className="flex gap-2">
               <button
                 onClick={() =>
@@ -218,7 +261,7 @@ export default function ManagePage() {
                     name: posForm.name || posForm.ticker,
                     shares: parseFloat(posForm.shares) || 0,
                     avg_cost_native: posForm.avg_cost_native ? parseFloat(posForm.avg_cost_native) : undefined,
-                    currency: "USD",
+                    currency: posForm.currency,
                     market: "US",
                   })
                 }

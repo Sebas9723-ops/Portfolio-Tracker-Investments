@@ -8,6 +8,7 @@ export function usePortfolio() {
     queryFn: fetchPortfolio,
     refetchInterval: 60_000,
     staleTime: 55_000,
+    refetchOnWindowFocus: true,
   });
 }
 
