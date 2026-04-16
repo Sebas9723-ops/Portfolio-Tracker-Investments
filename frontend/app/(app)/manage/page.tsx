@@ -152,7 +152,7 @@ export default function ManagePage() {
 
     await updateMut.mutateAsync({ ticker: pos.ticker, data: { shares: newShares, avg_cost_native: newAvg, name: row.name, currency: row.currency } });
 
-    // Register capital delta as BUY/SELL transaction
+    // Register capital delta as BUY/SELL transaction + update cost_basis_usd
     const deltaShares = newShares - pos.shares;
     if (deltaShares !== 0) {
       const price = newAvg ?? pos.avg_cost_native ?? 0;
@@ -167,6 +167,12 @@ export default function ManagePage() {
         comment: `Shares: ${pos.shares} → ${newShares}${newAvg && newAvg !== pos.avg_cost_native ? ` | Avg cost: ${pos.avg_cost_native ?? "—"} → ${newAvg}` : ""}`,
       } as Parameters<typeof createTransaction>[0]);
       qc.invalidateQueries({ queryKey: ["transactions"] });
+
+      // Update cost_basis_usd: delta in USD using fx_rate from portfolio cache
+      const portfolioCache = qc.getQueryData<PortfolioSummary>(["portfolio"]);
+      const fxRate = portfolioCache?.rows?.find(r => r.ticker === pos.ticker)?.fx_rate ?? 1.0;
+      const newBasis = (cost_basis_usd ?? 0) + deltaShares * price * fxRate;
+      updateSettings({ cost_basis_usd: newBasis }).then((data) => setSettings(data));
     }
   }
 
