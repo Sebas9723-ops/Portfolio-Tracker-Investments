@@ -98,6 +98,7 @@ class BLRequest(BaseModel):
     risk_aversion: float = 3.0
     max_single_asset: float = 0.40
     period: str = "2y"
+    profile: str = "base"
 
 
 @router.post("/black-litterman")
@@ -114,12 +115,14 @@ def bl_optimization(body: BLRequest, user_id: str = Depends(get_user_id)):
             closes[t] = df[col].dropna()
 
     returns_df = pd.DataFrame(closes).dropna(how="all").ffill().pct_change().dropna()
+    per_ticker_bounds, _ = _load_profile_constraints(user_id, db, body.profile)
     weights = black_litterman(
         returns_df=returns_df,
         views=body.views,
         tau=body.tau,
         risk_aversion=body.risk_aversion,
         max_single_asset=body.max_single_asset,
+        per_ticker_bounds=per_ticker_bounds or None,
     )
     return {"weights": weights}
 

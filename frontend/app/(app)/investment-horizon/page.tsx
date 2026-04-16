@@ -1,6 +1,8 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { usePortfolio } from "@/lib/hooks/usePortfolio";
+import { useProfileStore } from "@/lib/store/profileStore";
+import { useSettingsStore } from "@/lib/store/settingsStore";
 import { fmtCurrency, fmtPct } from "@/lib/formatters";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
@@ -21,7 +23,6 @@ function monteCarlo(
     }
     return path;
   });
-  // Build percentile series by year
   const data = [];
   for (let y = 0; y <= years; y++) {
     const idx = y * 12;
@@ -39,16 +40,29 @@ function monteCarlo(
 export default function InvestmentHorizonPage() {
   const { data: portfolio } = usePortfolio();
   const initial = portfolio?.total_value_base ?? 10000;
-  const [monthly, setMonthly] = useState(500);
-  const [years, setYears] = useState(10);
-  const [ret, setRet] = useState(0.08);
-  const [vol, setVol] = useState(0.15);
-  const [goal, setGoal] = useState(100000);
+  const { targetReturn } = useProfileStore();
+  const { horizon_params, setSettings } = useSettingsStore();
+
+  // Initialize from persisted values, falling back to profileStore targetReturn
+  const [monthly, setMonthly] = useState(horizon_params?.monthly ?? 500);
+  const [years, setYears] = useState(horizon_params?.years ?? 10);
+  const [ret, setRet] = useState(targetReturn);
+  const [vol, setVol] = useState(horizon_params?.vol ?? 0.15);
+  const [goal, setGoal] = useState(horizon_params?.goal ?? 100000);
+
+  // Sync ret when targetReturn changes in profileStore
+  useEffect(() => {
+    setRet(targetReturn);
+  }, [targetReturn]);
+
+  // Persist horizon params on change
+  useEffect(() => {
+    setSettings({ horizon_params: { monthly, years, vol, goal } });
+  }, [monthly, years, vol, goal, setSettings]);
 
   const data = monteCarlo(initial, monthly, years, ret, vol, 1000);
   const base = data[data.length - 1];
 
-  // Proper success rate: count paths that hit goal (approximate via percentiles)
   const successRate = (() => {
     if (base.p10 >= goal) return 90;
     if (base.p50 >= goal) return 50 + Math.round(50 * (base.p50 - goal) / (base.p50 - base.p10) * -1 + 50);
@@ -56,11 +70,9 @@ export default function InvestmentHorizonPage() {
     return 5;
   })();
 
-  // Required monthly contribution to hit goal at P50
   const requiredMonthly = (() => {
     const months = years * 12;
     const mu = ret / 12;
-    // FV = PV*(1+mu)^n + PMT*((1+mu)^n - 1)/mu
     const growth = Math.pow(1 + mu, months);
     const pvComponent = initial * growth;
     const annuityFactor = mu > 0 ? (growth - 1) / mu : months;
@@ -94,6 +106,9 @@ export default function InvestmentHorizonPage() {
             </div>
           ))}
         </div>
+        <p className="text-bloomberg-muted text-[10px] mt-2">
+          Avg Annual Return pre-populated from your investor profile target ({fmtPct(targetReturn * 100)}). Modify to override.
+        </p>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">

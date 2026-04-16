@@ -1,11 +1,12 @@
 "use client";
-import { useState, useCallback, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchFrontier, fetchBlackLitterman } from "@/lib/api/analytics";
 import { fetchProfileOptimal } from "@/lib/api/profile";
 import { fetchSettings, saveTickerWeightRules, saveCombinationRanges } from "@/lib/api/settings";
 import { usePortfolio } from "@/lib/hooks/usePortfolio";
 import { useProfileStore } from "@/lib/store/profileStore";
+import { useSettingsStore } from "@/lib/store/settingsStore";
 import { fmtPct, fmtCurrency } from "@/lib/formatters";
 import {
   ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -96,6 +97,7 @@ export default function OptimizationPage() {
   const qc = useQueryClient();
   const { data: portfolio } = usePortfolio();
   const { profile } = useProfileStore();
+  const { bl_views: savedBlViews, setSettings } = useSettingsStore();
   const [maxSingle, setMaxSingle] = useState(0.40);
   const [nSim, setNSim] = useState(3000);
   const [period, setPeriod] = useState("2y");
@@ -138,11 +140,14 @@ export default function OptimizationPage() {
     staleTime: 5 * 60 * 1000,
   });
 
-  // Black-Litterman state
-  const [blViews, setBlViews] = useState<{ ticker: string; ret: string }[]>([]);
+  // Black-Litterman state — pre-populated from localStorage if available
+  const [blViews, setBlViews] = useState<{ ticker: string; ret: string }[]>(
+    () => savedBlViews?.[profile] ?? []
+  );
   const [blResult, setBlResult] = useState<Record<string, number> | null>(null);
   const [tau, setTau] = useState(0.05);
   const [riskAversion, setRiskAversion] = useState(3.0);
+  const [blViewsSaved, setBlViewsSaved] = useState(false);
 
   const { data: result, isFetching: pendingFrontier, refetch: runFrontier } = useQuery({
     queryKey: ["frontier", maxSingle, nSim, period, profile],
@@ -156,10 +161,17 @@ export default function OptimizationPage() {
       blViews.forEach(({ ticker, ret }) => {
         if (ticker && ret) views[ticker.toUpperCase()] = parseFloat(ret) / 100;
       });
-      return fetchBlackLitterman({ views, tau, risk_aversion: riskAversion, max_single_asset: maxSingle, period });
+      return fetchBlackLitterman({ views, tau, risk_aversion: riskAversion, max_single_asset: maxSingle, period, profile });
     },
     onSuccess: (data) => setBlResult(data.weights),
   });
+
+  function saveBlViews() {
+    const existing = savedBlViews ?? {};
+    setSettings({ bl_views: { ...existing, [profile]: blViews } });
+    setBlViewsSaved(true);
+    setTimeout(() => setBlViewsSaved(false), 2000);
+  }
 
   const rows = portfolio?.rows ?? [];
   const totalValue = portfolio?.total_value_base ?? 0;
@@ -175,6 +187,13 @@ export default function OptimizationPage() {
   };
 
   const activeProfile = (profile as ProfileKey) || "base";
+
+  // Reload BL views when active profile changes
+  useEffect(() => {
+    setBlViews(savedBlViews?.[profile] ?? []);
+    setBlViewsSaved(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile]);
 
   // ── Motor 1 helpers ───────────────────────────────────────────────────────
   const getFloorCap = (ticker: string): TickerFloorCap =>
@@ -733,10 +752,20 @@ export default function OptimizationPage() {
           </div>
         )}
 
-        <button onClick={() => runBL()} disabled={pendingBL}
-          className="bg-[#c084fc] text-bloomberg-bg text-xs font-bold px-6 py-1.5 hover:opacity-90 disabled:opacity-50">
-          {pendingBL ? "COMPUTING…" : "RUN BLACK-LITTERMAN"}
-        </button>
+        <div className="flex items-center gap-3">
+          <button onClick={() => runBL()} disabled={pendingBL}
+            className="bg-[#c084fc] text-bloomberg-bg text-xs font-bold px-6 py-1.5 hover:opacity-90 disabled:opacity-50">
+            {pendingBL ? "COMPUTING…" : "RUN BLACK-LITTERMAN"}
+          </button>
+          <button
+            onClick={saveBlViews}
+            disabled={blViews.length === 0}
+            className="flex items-center gap-1 border border-[#c084fc] text-[#c084fc] text-[10px] px-4 py-1.5 hover:bg-[#c084fc] hover:text-bloomberg-bg disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Save size={11} /> SAVE VIEWS
+          </button>
+          {blViewsSaved && <span className="text-green-600 text-[10px]">✓ Views saved</span>}
+        </div>
 
         {blResult && Object.keys(blResult).length > 0 && (
           <div className="mt-4">

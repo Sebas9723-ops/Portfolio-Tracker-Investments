@@ -126,7 +126,7 @@ export default function ProfilePage() {
     const tr = parseFloat(targetReturnInput) / 100;
     if (isNaN(tr) || tr <= 0 || tr > 1) return;
     setTargetReturn(tr);
-    mutation.mutate({ profile: "base", tr });
+    mutation.mutate({ profile: activeProfile as InvestorProfile, tr });
   }
 
   const activeProfile = data?.active_profile || localProfile;
@@ -205,36 +205,36 @@ export default function ProfilePage() {
         })}
       </div>
 
-      {/* Target return input (only for Base) */}
-      {activeProfile === "base" && (
-        <div className="bbg-card flex items-center gap-4">
-          <div>
-            <div className="text-xs font-semibold text-bloomberg-text mb-0.5">Retorno Objetivo Anual</div>
-            <div className="text-[11px] text-bloomberg-muted">
-              El optimizador minimiza la volatilidad alcanzando este retorno mínimo.
-            </div>
-          </div>
-          <div className="flex items-center gap-2 ml-auto">
-            <input
-              type="number"
-              min={1}
-              max={100}
-              step={1}
-              value={targetReturnInput}
-              onChange={(e) => setTargetReturnInput(e.target.value)}
-              className="w-20 border border-bloomberg-border rounded-lg px-3 py-1.5 text-sm text-bloomberg-text text-right outline-none focus:border-bloomberg-gold"
-            />
-            <span className="text-sm text-bloomberg-muted">%</span>
-            <button
-              onClick={handleTargetReturnSave}
-              disabled={mutation.isPending}
-              className="px-3 py-1.5 text-xs font-semibold bg-bloomberg-text text-white rounded-lg hover:opacity-80 transition-opacity disabled:opacity-40"
-            >
-              Guardar
-            </button>
+      {/* Target return input (all profiles — used by Horizon projections) */}
+      <div className="bbg-card flex items-center gap-4">
+        <div>
+          <div className="text-xs font-semibold text-bloomberg-text mb-0.5">Retorno Objetivo Anual</div>
+          <div className="text-[11px] text-bloomberg-muted">
+            {activeProfile === "base"
+              ? "El optimizador minimiza la volatilidad alcanzando este retorno mínimo."
+              : "Usado por el planificador de Horizon para proyecciones Monte Carlo."}
           </div>
         </div>
-      )}
+        <div className="flex items-center gap-2 ml-auto">
+          <input
+            type="number"
+            min={1}
+            max={100}
+            step={1}
+            value={targetReturnInput}
+            onChange={(e) => setTargetReturnInput(e.target.value)}
+            className="w-20 border border-bloomberg-border rounded-lg px-3 py-1.5 text-sm text-bloomberg-text text-right outline-none focus:border-bloomberg-gold"
+          />
+          <span className="text-sm text-bloomberg-muted">%</span>
+          <button
+            onClick={handleTargetReturnSave}
+            disabled={mutation.isPending}
+            className="px-3 py-1.5 text-xs font-semibold bg-bloomberg-text text-white rounded-lg hover:opacity-80 transition-opacity disabled:opacity-40"
+          >
+            Guardar
+          </button>
+        </div>
+      </div>
 
       {/* Active profile detail */}
       {isLoading && (

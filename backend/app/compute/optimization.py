@@ -35,7 +35,11 @@ def simulate_efficient_frontier(
     mu = returns_df.mean() * 252
     cov = returns_df.cov() * 252
 
-    # Build per-ticker upper bounds for simulation
+    # Build per-ticker bounds for simulation
+    lower_bounds = np.array([
+        per_ticker_bounds[t][0] if per_ticker_bounds and t in per_ticker_bounds else 0.0
+        for t in tickers
+    ])
     upper_bounds = np.array([
         per_ticker_bounds[t][1] if per_ticker_bounds and t in per_ticker_bounds else max_single_asset
         for t in tickers
@@ -49,7 +53,12 @@ def simulate_efficient_frontier(
     rng = np.random.default_rng(42)
     for _ in range(n_simulations):
         w = rng.dirichlet(np.ones(n))
-        w = np.clip(w, 0, upper_bounds)
+        w = np.clip(w, lower_bounds, upper_bounds)
+        if w.sum() == 0:
+            continue
+        w /= w.sum()
+        # Re-enforce bounds after normalization (floors may be violated after renorm)
+        w = np.clip(w, lower_bounds, upper_bounds)
         if w.sum() == 0:
             continue
         w /= w.sum()
@@ -109,6 +118,18 @@ def simulate_efficient_frontier(
 
     rp_weights = _risk_parity(cov.values, tickers)
 
+    # Exact Max Sharpe via scipy (overrides Monte Carlo best)
+    ms_row = optimize_max_sharpe(returns_df, risk_free_rate, max_single_asset, per_ticker_bounds, combination_constraints)
+    if ms_row:
+        w_arr = np.array([ms_row.get(t, 0.0) for t in tickers])
+        ms_ret = float(mu.values @ w_arr) * 100
+        ms_vol = float(np.sqrt(w_arr @ cov.values @ w_arr)) * 100
+        ms_shr = (ms_ret - risk_free_rate * 100) / ms_vol if ms_vol > 0 else 0
+        best_sharpe = FrontierPoint(
+            ret=round(ms_ret, 3), vol=round(ms_vol, 3),
+            sharpe=round(ms_shr, 4), weights={t: round(float(ms_row.get(t, 0)), 4) for t in tickers},
+        )
+
     # Exact Max Return via scipy (overrides Monte Carlo best)
     mr_row = optimize_max_return(returns_df, risk_free_rate, max_single_asset, per_ticker_bounds, combination_constraints)
     if mr_row:
@@ -160,6 +181,7 @@ def black_litterman(
     tau: float = 0.05,
     risk_aversion: float = 3.0,
     max_single_asset: float = 0.40,
+    per_ticker_bounds: Optional[dict[str, tuple[float, float]]] = None,
 ) -> dict[str, float]:
     """
     Black-Litterman optimization.
@@ -213,8 +235,8 @@ def black_litterman(
         v = float(np.sqrt(w @ cov @ w))
         return -(r - 0.045) / v if v > 0 else 0.0
 
-    w0 = np.ones(n) / n
-    bounds = [(0.0, max_single_asset)] * n
+    bounds = _build_bounds(tickers, max_single_asset, per_ticker_bounds)
+    w0 = _make_w0(n, bounds)
     constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
     try:
         res = minimize(neg_sharpe, w0, method="SLSQP", bounds=bounds, constraints=constraints,

@@ -13,7 +13,7 @@ const CURRENCIES = [
   { code: "AUD", label: "Australian Dollar" },
   { code: "COP", label: "Colombian Peso" },
 ];
-const BENCHMARKS = ["VOO", "IWDA.AS", "SPY", "QQQ", "IWM", "VTI"];
+const BENCHMARKS = ["VOO", "VWCE.DE", "IWDA.AS", "SPY", "QQQ", "IWM", "VTI"];
 const TC_MODELS = ["broker", "etoro", "degiro", "ib"];
 
 export default function SettingsPage() {

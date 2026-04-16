@@ -39,10 +39,11 @@ function fmt(v: number | null | undefined, digits = 3): string {
 export default function AnalyticsPage() {
   const [period, setPeriod] = useState("2y");
   const rolling_window = useSettingsStore((s) => s.rolling_window);
+  const preferred_benchmark = useSettingsStore((s) => s.preferred_benchmark);
 
   const { data, isLoading } = useQuery({
-    queryKey: ["analytics", period],
-    queryFn: () => fetchAnalytics(period),
+    queryKey: ["analytics", period, preferred_benchmark],
+    queryFn: () => fetchAnalytics(period, preferred_benchmark),
   });
 
   const { data: rollingFull } = useQuery({

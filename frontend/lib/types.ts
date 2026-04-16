@@ -244,6 +244,15 @@ export interface UserSettings {
   ticker_weight_rules: Record<string, Record<string, TickerFloorCap>>;
   // Motor 2: {profile: CombinationRange[]}
   combination_ranges: Record<string, CombinationRange[]>;
+  // Horizon planner persistent params
+  horizon_params?: {
+    monthly: number;
+    years: number;
+    vol: number;
+    goal: number;
+  };
+  // Black-Litterman views per profile
+  bl_views?: Record<string, { ticker: string; ret: string }[]>;
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────

@@ -37,11 +37,19 @@ def compute_var_cvar(
             period_days=1,
         )
     r = returns.dropna().values
+    if len(r) < 30:
+        return VaRResult(
+            confidence=confidence,
+            var_historical=0, var_parametric=0,
+            cvar_historical=0, cvar_parametric=0,
+            period_days=1,
+        )
     alpha = 1 - confidence
 
     # Historical
-    var_h = float(-np.percentile(r, alpha * 100)) * portfolio_value
-    losses = r[r < -np.percentile(r, alpha * 100)]
+    var_threshold = float(np.percentile(r, alpha * 100))  # e.g. -0.018 at 95%
+    var_h = -var_threshold * portfolio_value
+    losses = r[r < var_threshold]
     cvar_h = float(-losses.mean()) * portfolio_value if len(losses) > 0 else var_h
 
     # Parametric

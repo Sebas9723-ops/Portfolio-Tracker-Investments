@@ -69,5 +69,6 @@ export const fetchBlackLitterman = (body: {
   risk_aversion?: number;
   max_single_asset?: number;
   period?: string;
+  profile?: string;
 }) =>
   apiClient.post<{ weights: Record<string, number> }>("/api/optimization/black-litterman", body).then((r) => r.data);
