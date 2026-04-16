@@ -27,6 +27,7 @@ export default function PortfolioPage() {
 
   const qc = useQueryClient();
   const base_currency = useSettingsStore((s) => s.base_currency);
+  const cost_basis_usd = useSettingsStore((s) => s.cost_basis_usd);
   const ccy = portfolio?.base_currency || base_currency;
 
   const [showForm, setShowForm] = useState(false);
@@ -53,13 +54,13 @@ export default function PortfolioPage() {
 
   if (isLoading) return <div className="text-bloomberg-muted text-xs p-4">Loading…</div>;
 
-  // Current Return: (price gain + dividends) / invested capital — exact P&L since inception
+  // Current Return: (current value - cost basis) / cost basis
   const INCEPTION_DATE = "2026-03-26";
   const totalValue = portfolio?.total_value_base ?? 0;
   const invested = portfolio?.total_invested_base ?? 0;
-  const priceGain = portfolio?.total_unrealized_pnl ?? 0;
-  const currentReturnVal = invested > 0 ? priceGain : null;   // dividends not available on this page
-  const currentReturnPct = invested > 0 ? ((priceGain) / invested) * 100 : null;
+  const basis = cost_basis_usd ?? invested;
+  const currentReturnVal = basis > 0 ? totalValue - basis : null;
+  const currentReturnPct = basis > 0 ? ((totalValue - basis) / basis) * 100 : null;
 
   // Allocation pie data from portfolio
   const pieData = (portfolio?.rows ?? []).map((r) => ({ name: r.ticker, value: r.value_base }));
@@ -140,7 +141,7 @@ export default function PortfolioPage() {
           </div>
           <div className="text-right">
             <p className={`text-2xl font-bold ${currentReturnPct >= 0 ? "text-green-400" : "text-red-400"}`}>
-              {currentReturnPct >= 0 ? "+" : ""}{fmtPct(currentReturnPct)}
+              {currentReturnPct >= 0 ? "+" : "-"}{Math.abs(currentReturnPct).toFixed(2)}%
             </p>
             <p className={`text-xs mt-0.5 ${currentReturnVal >= 0 ? "text-green-400" : "text-red-400"}`}>
               {currentReturnVal >= 0 ? "+" : ""}{fmtCurrency(currentReturnVal, ccy)}

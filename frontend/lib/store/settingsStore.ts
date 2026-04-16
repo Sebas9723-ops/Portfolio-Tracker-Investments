@@ -4,6 +4,8 @@ import { persist } from "zustand/middleware";
 import type { UserSettings } from "@/lib/types";
 
 interface SettingsState extends UserSettings {
+  cost_basis_usd: number | null;
+  setCostBasis: (v: number | null) => void;
   setSettings: (s: Partial<UserSettings>) => void;
 }
 
@@ -26,7 +28,15 @@ export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
       ...defaults,
-      setSettings: (s) => set((prev) => ({ ...prev, ...s })),
+      cost_basis_usd: null,
+      setCostBasis: (v) => set({ cost_basis_usd: v }),
+      // Only merge UserSettings keys — never overwrites cost_basis_usd from backend sync
+      setSettings: (s) => set((prev) => {
+        const filtered = Object.fromEntries(
+          Object.entries(s).filter(([k]) => k in defaults)
+        );
+        return { ...prev, ...filtered };
+      }),
     }),
     { name: "settings-storage" }
   )

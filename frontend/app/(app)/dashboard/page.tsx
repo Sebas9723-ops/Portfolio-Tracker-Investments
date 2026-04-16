@@ -84,12 +84,16 @@ function Chg({ v, pct = false, className = "" }: { v: number | null | undefined;
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const [chartPeriod, setChartPeriod] = useState<Period>("Max");
+  const [editingBasis, setEditingBasis] = useState(false);
+  const [basisInput, setBasisInput] = useState("");
 
   const { data: portfolio, isLoading, isFetching } = usePortfolio();
   const { mutate: saveSnap, isPending: saving } = useSaveSnapshot();
   const { data: historyData, isLoading: historyLoading } = usePortfolioHistory();
   const { data: transactions } = useQuery({ queryKey: ["transactions"], queryFn: fetchTransactions });
   const base_currency = useSettingsStore((s) => s.base_currency);
+  const cost_basis_usd = useSettingsStore((s) => s.cost_basis_usd);
+  const setCostBasis = useSettingsStore((s) => s.setCostBasis);
 
   if (isLoading) {
     return <div className="flex items-center justify-center h-64 text-bloomberg-muted text-xs">Loading portfolio…</div>;
@@ -152,10 +156,13 @@ export default function DashboardPage() {
   const winners = portfolio.rows.filter((r) => (r.unrealized_pnl ?? 0) >= 0).length;
   const losers = portfolio.rows.length - winners;
 
-  // Current Return: (price gain + dividends) / invested capital — exact P&L since inception
+  // Current Return: (current value - cost basis) / cost basis
+  // cost_basis_usd is user-set (actual USD deployed, FX-correct at purchase time)
+  // falls back to total_invested_base if not set
   const INCEPTION_DATE = "2026-03-26";
-  const currentReturnVal = invested > 0 ? totalReturn : null;
-  const currentReturnPct = invested > 0 ? (totalReturn / invested) * 100 : null;
+  const basis = cost_basis_usd ?? invested;
+  const currentReturnVal = basis > 0 ? totalValue - basis : null;
+  const currentReturnPct = basis > 0 ? ((totalValue - basis) / basis) * 100 : null;
 
   return (
     <div className="space-y-4">
@@ -458,9 +465,37 @@ export default function DashboardPage() {
             {/* Capital */}
             <div>
               <p className="bbg-header">Capital</p>
-              <div className="flex justify-between text-xs border-b border-bloomberg-border/40 py-1.5">
-                <span className="text-bloomberg-muted">Invested capital</span>
-                <span className="text-bloomberg-text font-medium">{fmtCurrency(invested, ccy)}</span>
+              <div className="flex justify-between items-center text-xs border-b border-bloomberg-border/40 py-1.5">
+                <span className="text-bloomberg-muted">Cost basis</span>
+                {editingBasis ? (
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="number"
+                      step="any"
+                      value={basisInput}
+                      onChange={(e) => setBasisInput(e.target.value)}
+                      className="w-24 bg-bloomberg-bg border border-bloomberg-gold text-bloomberg-text px-2 py-0.5 text-xs text-right focus:outline-none"
+                      autoFocus
+                    />
+                    <button
+                      onClick={() => {
+                        const v = parseFloat(basisInput);
+                        if (!isNaN(v) && v > 0) setCostBasis(v);
+                        setEditingBasis(false);
+                      }}
+                      className="text-green-400 text-[10px] px-1 hover:opacity-80"
+                    >✓</button>
+                    <button onClick={() => setEditingBasis(false)} className="text-bloomberg-muted text-[10px] px-1">✕</button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => { setBasisInput(String(basis)); setEditingBasis(true); }}
+                    className="text-bloomberg-text font-medium hover:text-bloomberg-gold transition-colors"
+                    title="Click to edit cost basis"
+                  >
+                    {fmtCurrency(basis, ccy)} <span className="text-[9px] text-bloomberg-muted ml-0.5">✎</span>
+                  </button>
+                )}
               </div>
             </div>
 
@@ -523,7 +558,7 @@ export default function DashboardPage() {
                   </div>
                   <div className="text-right">
                     <span className={`font-bold text-sm ${currentReturnPct >= 0 ? "text-green-400" : "text-red-400"}`}>
-                      {currentReturnPct >= 0 ? "+" : ""}{fmtPct(currentReturnPct)}
+                      {currentReturnPct >= 0 ? "+" : "-"}{Math.abs(currentReturnPct).toFixed(2)}%
                     </span>
                     <span className={`block text-[10px] ${currentReturnVal >= 0 ? "text-green-400" : "text-red-400"}`}>
                       {currentReturnVal >= 0 ? "+" : ""}{fmtCurrency(currentReturnVal, ccy)}

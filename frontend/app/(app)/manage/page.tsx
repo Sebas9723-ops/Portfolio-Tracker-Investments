@@ -5,7 +5,8 @@ import { fetchPositions, upsertPosition, updatePosition, deletePosition } from "
 import { fetchTransactions, createTransaction, fetchCash, upsertCash, deleteCash } from "@/lib/api/transactions";
 import { fmtCurrency, fmtDate } from "@/lib/formatters";
 import { Pencil, Trash2, Plus, Check, X, AlertCircle } from "lucide-react";
-import type { Position, TransactionAction } from "@/lib/types";
+import type { Position, TransactionAction, PortfolioSummary } from "@/lib/types";
+import { useSettingsStore } from "@/lib/store/settingsStore";
 
 const CURRENCIES = ["USD", "EUR", "GBP", "COP", "CHF", "AUD"];
 const MARKETS = ["US", "LSE", "XETRA", "EURONEXT", "TSX", "ASX"];
@@ -18,6 +19,8 @@ type EditRow = { shares: string; avg_cost_native: string; name: string; currency
 
 export default function ManagePage() {
   const qc = useQueryClient();
+  const cost_basis_usd = useSettingsStore((s) => s.cost_basis_usd);
+  const setCostBasis = useSettingsStore((s) => s.setCostBasis);
 
   const { data: positions, isLoading: posLoading } = useQuery({
     queryKey: ["positions"],
@@ -70,6 +73,13 @@ export default function ManagePage() {
   const addPosMut = useMutation({
     mutationFn: upsertPosition,
     onSuccess: (_, vars) => {
+      // Auto-update cost basis using FX rate from portfolio cache
+      if (vars.avg_cost_native && vars.shares != null && vars.shares > 0) {
+        const portfolioCache = qc.getQueryData<PortfolioSummary>(["portfolio"]);
+        const fxRate = portfolioCache?.rows?.find(r => r.currency === (vars.currency || "USD"))?.fx_rate ?? 1.0;
+        const capitalUsd = vars.shares! * vars.avg_cost_native * fxRate;
+        setCostBasis((cost_basis_usd ?? 0) + capitalUsd);
+      }
       // Auto-register invested capital as a BUY transaction
       if (vars.avg_cost_native && vars.shares != null && vars.shares > 0) {
         auditMut.mutate({
