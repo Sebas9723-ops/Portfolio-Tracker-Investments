@@ -22,7 +22,9 @@ def update_settings(body: dict, user_id: str = Depends(get_user_id)):
     # Read existing first so we only overwrite fields that were explicitly sent
     res = db.table("user_settings").select("*").eq("user_id", user_id).maybe_single().execute()
     existing = {k: v for k, v in (res.data or {}).items() if k in UserSettings.model_fields}
-    merged = {**existing, **{k: v for k, v in body.items() if k in UserSettings.model_fields}}
+    # Motor 1 & 2 are write-protected here — only their dedicated endpoints may update them
+    PROTECTED = {"ticker_weight_rules", "combination_ranges"}
+    merged = {**existing, **{k: v for k, v in body.items() if k in UserSettings.model_fields and k not in PROTECTED}}
     merged["user_id"] = user_id
     db.table("user_settings").upsert(merged, on_conflict="user_id").execute()
     return UserSettings(**{k: v for k, v in merged.items() if k in UserSettings.model_fields})
