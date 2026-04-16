@@ -176,7 +176,7 @@ export default function OptimizationPage() {
 
   // ── Motor 1 helpers ───────────────────────────────────────────────────────
   const getFloorCap = (ticker: string): TickerFloorCap =>
-    allFloorCap[activeProfile]?.[ticker] ?? { floor: 0, cap: 100 };
+    allFloorCap[activeProfile]?.[ticker] ?? { floor: 0, cap: 1 };
 
   const setFloorCap = (ticker: string, field: "floor" | "cap", val: string) => {
     const num = parseFloat(val);
