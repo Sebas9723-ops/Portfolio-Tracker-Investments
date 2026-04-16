@@ -45,9 +45,24 @@ def suggestions(
 
     rows_dicts = [r.model_dump() for r in summary.rows]
 
+    # Load Motor 1 & Motor 2 constraints for the active profile
+    ticker_weight_rules = settings.get("ticker_weight_rules") or {}
+    combination_ranges = settings.get("combination_ranges") or {}
+    profile_key = investor_profile if investor_profile in ("conservative", "base", "aggressive") else None
+
+    per_ticker_bounds = None
+    combination_constraints = None
+    if profile_key:
+        profile_rules = ticker_weight_rules.get(profile_key, {})
+        per_ticker_bounds = {
+            ticker: (float(rule.get("floor", 0.0)), float(rule.get("cap", 1.0)))
+            for ticker, rule in profile_rules.items()
+            if isinstance(rule, dict)
+        } or None
+        combination_constraints = combination_ranges.get(profile_key, []) or None
+
     # Use profile-driven target weights when a recognized profile is active
-    profile_map = {"conservative": "conservative", "base": "base", "aggressive": "aggressive"}
-    if investor_profile in profile_map:
+    if profile_key:
         try:
             hist = get_historical_multi(tickers, period="2y")
             closes: dict[str, pd.Series] = {}
@@ -59,10 +74,12 @@ def suggestions(
             if not returns_df.empty:
                 target_weights = compute_profile_weights(
                     returns_df,
-                    profile_map[investor_profile],  # type: ignore[arg-type]
+                    profile_key,  # type: ignore[arg-type]
                     rfr,
                     target_return,
                     max_single,
+                    per_ticker_bounds,
+                    combination_constraints,
                 )
             else:
                 target_weights = compute_target_weights_from_drift(rows_dicts, threshold)
@@ -125,15 +142,21 @@ def required_for_max_sharpe(
     returns_df = pd.DataFrame(closes).dropna(how="all").ffill().pct_change().dropna()
     rfr = get_risk_free_rate()
 
-    # Apply per-ticker fixed-weight rules from user settings
-    rules = settings.get("ticker_weight_rules") or {}
-    per_ticker_bounds = {}
-    for ticker, rule in rules.items():
-        if isinstance(rule, dict) and rule.get("mode") == "fixed":
-            w = float(rule.get("weight", 0.0))
-            per_ticker_bounds[ticker] = (w, w)
+    # Load Motor 1 & Motor 2 constraints for the active profile
+    investor_profile = settings.get("investor_profile", "base")
+    profile_key = investor_profile if investor_profile in ("conservative", "base", "aggressive") else "base"
+    ticker_weight_rules = settings.get("ticker_weight_rules") or {}
+    combination_ranges_data = settings.get("combination_ranges") or {}
 
-    ms_weights = optimize_max_sharpe(returns_df, rfr, max_single_asset, per_ticker_bounds or None)
+    profile_rules = ticker_weight_rules.get(profile_key, {})
+    per_ticker_bounds = {
+        ticker: (float(rule.get("floor", 0.0)), float(rule.get("cap", 1.0)))
+        for ticker, rule in profile_rules.items()
+        if isinstance(rule, dict)
+    } or None
+    combination_constraints = combination_ranges_data.get(profile_key, []) or None
+
+    ms_weights = optimize_max_sharpe(returns_df, rfr, max_single_asset, per_ticker_bounds, combination_constraints)
 
     if not ms_weights:
         return {"required_contribution": 0, "max_sharpe_weights": {}, "buy_plan": {}}
