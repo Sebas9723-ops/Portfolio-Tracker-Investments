@@ -5,7 +5,7 @@ import { useProfileStore } from "@/lib/store/profileStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { fmtCurrency, fmtPct } from "@/lib/formatters";
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
 
 function monteCarlo(
@@ -41,21 +41,36 @@ export default function InvestmentHorizonPage() {
   const { data: portfolio } = usePortfolio();
   const initial = portfolio?.total_value_base ?? 10000;
   const { targetReturn } = useProfileStore();
-  const { horizon_params, setSettings } = useSettingsStore();
+  const { horizon_params, frontier_max_sharpe, setSettings } = useSettingsStore();
 
-  // Initialize from persisted values, falling back to profileStore targetReturn
+  // Priority: frontier_max_sharpe > profileStore.targetReturn > persisted horizon_params
+  const defaultRet = frontier_max_sharpe
+    ? frontier_max_sharpe.ret / 100
+    : targetReturn;
+  const defaultVol = frontier_max_sharpe
+    ? frontier_max_sharpe.vol / 100
+    : (horizon_params?.vol ?? 0.15);
+
   const [monthly, setMonthly] = useState(horizon_params?.monthly ?? 500);
   const [years, setYears] = useState(horizon_params?.years ?? 10);
-  const [ret, setRet] = useState(targetReturn);
-  const [vol, setVol] = useState(horizon_params?.vol ?? 0.15);
+  const [ret, setRet] = useState(defaultRet);
+  const [vol, setVol] = useState(defaultVol);
   const [goal, setGoal] = useState(horizon_params?.goal ?? 100000);
 
-  // Sync ret when targetReturn changes in profileStore
+  // When frontier updates (user runs optimization), sync ret + vol
   useEffect(() => {
-    setRet(targetReturn);
-  }, [targetReturn]);
+    if (!frontier_max_sharpe) return;
+    setRet(frontier_max_sharpe.ret / 100);
+    setVol(frontier_max_sharpe.vol / 100);
+  }, [frontier_max_sharpe]);
 
-  // Persist horizon params on change
+  // Fallback: sync targetReturn when no frontier result exists
+  useEffect(() => {
+    if (frontier_max_sharpe) return;
+    setRet(targetReturn);
+  }, [targetReturn, frontier_max_sharpe]);
+
+  // Persist monthly / years / vol / goal changes
   useEffect(() => {
     setSettings({ horizon_params: { monthly, years, vol, goal } });
   }, [monthly, years, vol, goal, setSettings]);
@@ -81,10 +96,29 @@ export default function InvestmentHorizonPage() {
   })();
 
   const ccy = portfolio?.base_currency ?? "USD";
+  const source = frontier_max_sharpe
+    ? `Frontier Max Sharpe (Sharpe ${frontier_max_sharpe.sharpe.toFixed(3)})`
+    : `Investor profile target (${fmtPct(targetReturn * 100)})`;
 
   return (
     <div className="space-y-4">
       <h1 className="text-bloomberg-gold text-xs font-bold uppercase tracking-widest">Investment Horizon</h1>
+
+      {/* Source banner */}
+      <div className="flex items-center gap-2 px-3 py-2 border border-bloomberg-border text-[10px]">
+        <span className="text-bloomberg-muted uppercase tracking-widest">Return &amp; Vol source:</span>
+        <span className={frontier_max_sharpe ? "text-bloomberg-gold font-semibold" : "text-bloomberg-muted"}>
+          {source}
+        </span>
+        {frontier_max_sharpe && (
+          <button
+            onClick={() => { setRet(targetReturn); setVol(horizon_params?.vol ?? 0.15); setSettings({ frontier_max_sharpe: undefined }); }}
+            className="ml-auto text-bloomberg-muted hover:text-bloomberg-red text-[10px]"
+          >
+            ✕ Clear frontier
+          </button>
+        )}
+      </div>
 
       <div className="bbg-card">
         <p className="bbg-header">Parameters</p>
@@ -106,9 +140,6 @@ export default function InvestmentHorizonPage() {
             </div>
           ))}
         </div>
-        <p className="text-bloomberg-muted text-[10px] mt-2">
-          Avg Annual Return pre-populated from your investor profile target ({fmtPct(targetReturn * 100)}). Modify to override.
-        </p>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">

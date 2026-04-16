@@ -99,8 +99,8 @@ export default function OptimizationPage() {
   const { profile } = useProfileStore();
   const { bl_views: savedBlViews, setSettings } = useSettingsStore();
   const [maxSingle, setMaxSingle] = useState(0.40);
-  const [nSim, setNSim] = useState(3000);
   const [period, setPeriod] = useState("2y");
+  const N_SIM = 12000;
 
   // ── Motor 1 state ─────────────────────────────────────────────────────────
   // {profile: {ticker: {floor, cap}}} — local edit state
@@ -150,10 +150,22 @@ export default function OptimizationPage() {
   const [blViewsSaved, setBlViewsSaved] = useState(false);
 
   const { data: result, isFetching: pendingFrontier, refetch: runFrontier } = useQuery({
-    queryKey: ["frontier", maxSingle, nSim, period, profile],
-    queryFn: () => fetchFrontier({ max_single_asset: maxSingle, n_simulations: nSim, period, profile }),
+    queryKey: ["frontier", maxSingle, N_SIM, period, profile],
+    queryFn: () => fetchFrontier({ max_single_asset: maxSingle, n_simulations: N_SIM, period, profile }),
     staleTime: 10 * 60 * 1000,
   });
+
+  // Persist Max Sharpe metrics to store so Contribution Planner can read them
+  useEffect(() => {
+    if (!result?.max_sharpe) return;
+    setSettings({
+      frontier_max_sharpe: {
+        ret: result.max_sharpe.ret,
+        vol: result.max_sharpe.vol,
+        sharpe: result.max_sharpe.sharpe,
+      },
+    });
+  }, [result, setSettings]);
 
   const { mutate: runBL, isPending: pendingBL } = useMutation({
     mutationFn: () => {
@@ -316,12 +328,11 @@ export default function OptimizationPage() {
               className="w-full accent-bloomberg-gold" />
           </div>
           <div>
-            <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">
-              Simulations: {nSim.toLocaleString()}
-            </label>
-            <input type="range" min={500} max={8000} step={500} value={nSim}
-              onChange={(e) => setNSim(parseInt(e.target.value))}
-              className="w-full accent-bloomberg-gold" />
+            <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">Simulations</label>
+            <div className="flex items-center h-[26px]">
+              <span className="text-bloomberg-gold text-xs font-bold">12,000</span>
+              <span className="text-bloomberg-muted text-[10px] ml-1.5">portfolios (fixed)</span>
+            </div>
           </div>
           <div>
             <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">Period</label>

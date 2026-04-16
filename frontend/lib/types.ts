@@ -253,6 +253,8 @@ export interface UserSettings {
   };
   // Black-Litterman views per profile
   bl_views?: Record<string, { ticker: string; ret: string }[]>;
+  // Last frontier Max Sharpe result — used by Contribution Planner
+  frontier_max_sharpe?: { ret: number; vol: number; sharpe: number };
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────

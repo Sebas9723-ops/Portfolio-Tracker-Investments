@@ -13,7 +13,7 @@ router = APIRouter(prefix="/api/optimization", tags=["optimization"])
 
 class OptimizationRequest(BaseModel):
     period: str = "2y"
-    n_simulations: int = 3000
+    n_simulations: int = 12000
     max_single_asset: float = 0.40
     min_bonds: float = 0.0
     min_gold: float = 0.0
