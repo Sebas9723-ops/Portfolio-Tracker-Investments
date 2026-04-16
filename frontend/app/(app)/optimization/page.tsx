@@ -24,9 +24,9 @@ const PROFILE_COLORS: Record<ProfileKey, string> = {
   aggressive: "#dc2626",
 };
 const PROFILE_LABELS: Record<ProfileKey, string> = {
-  conservative: "Conservador",
+  conservative: "Conservative",
   base: "Base",
-  aggressive: "Agresivo",
+  aggressive: "Aggressive",
 };
 
 const COLORS = { maxSharpe: "#f3a712", minVol: "#38b2ff", maxReturn: "#ff4b6e", riskParity: "#4dff4d", bl: "#c084fc", current: "#8a9bb5" }
@@ -311,14 +311,14 @@ export default function OptimizationPage() {
             className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold"
             style={{ color: PROFILE_COLORS[profile as ProfileKey], background: profile === "conservative" ? "#eff6ff" : profile === "base" ? "#f0fdf4" : "#fef2f2" }}
           >
-            Perfil: {PROFILE_LABELS[profile as ProfileKey]}
+            Profile: {PROFILE_LABELS[profile as ProfileKey]}
           </span>
         )}
       </div>
 
       {/* Controls */}
       <div className="bbg-card">
-        <p className="bbg-header">Constraints Globales</p>
+        <p className="bbg-header">Global Constraints</p>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-3">
           <div>
             <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">
@@ -352,20 +352,20 @@ export default function OptimizationPage() {
       {/* ── Motor 1 — Floor & Cap por Ticker ─────────────────────────────── */}
       <div className="bbg-card">
         <p className="bbg-header" style={{ color: "#f3a712" }}>
-          Motor 1 — Floor &amp; Cap por Ticker
+          Engine 1 — Floor &amp; Cap per Ticker
         </p>
         <p className="text-bloomberg-muted text-[10px] mb-3">
-          Define el rango mínimo (floor) y máximo (cap) de peso para cada activo. Se aplica al perfil activo.
+          Define the minimum (floor) and maximum (cap) weight for each asset. Applied to the active profile.
         </p>
 
         <div className="mb-3">
           <span className="text-[10px] px-3 py-1 border" style={{ borderColor: PROFILE_COLORS[activeProfile], color: PROFILE_COLORS[activeProfile] }}>
-            Perfil activo: {PROFILE_LABELS[activeProfile]}
+            Active profile: {PROFILE_LABELS[activeProfile]}
           </span>
         </div>
 
         {rows.length === 0 ? (
-          <p className="text-bloomberg-muted text-[10px]">No hay posiciones cargadas.</p>
+          <p className="text-bloomberg-muted text-[10px]">No positions loaded.</p>
         ) : (
           <table className="bbg-table mb-3">
             <thead>
@@ -417,9 +417,9 @@ export default function OptimizationPage() {
             className="flex items-center gap-1 bg-bloomberg-gold text-bloomberg-bg text-xs font-bold px-5 py-1.5 hover:opacity-90 disabled:opacity-50"
           >
             <Save size={11} />
-            {savingM1 ? "GUARDANDO…" : "GUARDAR MOTOR 1"}
+            {savingM1 ? "SAVING…" : "SAVE ENGINE 1"}
           </button>
-          {m1Saved && <span className="text-green-600 text-[10px]">✓ Guardado</span>}
+          {m1Saved && <span className="text-green-600 text-[10px]">✓ Saved</span>}
           {m1Error && <span className="text-red-400 text-[10px]">✗ {m1Error}</span>}
         </div>
       </div>
@@ -427,15 +427,15 @@ export default function OptimizationPage() {
       {/* ── Motor 2 — Rangos de Combinaciones ────────────────────────────── */}
       <div className="bbg-card">
         <p className="bbg-header" style={{ color: "#38b2ff" }}>
-          Motor 2 — Rangos de Combinaciones
+          Engine 2 — Combination Ranges
         </p>
         <p className="text-bloomberg-muted text-[10px] mb-3">
-          Define rangos para la suma de pesos de grupos de activos (ej. VOO + VWCE entre 40% y 58%). Se aplica al perfil activo.
+          Define weight-sum ranges for asset groups (e.g. VOO + VWCE between 40% and 58%). Applied to the active profile.
         </p>
 
         <div className="mb-3">
           <span className="text-[10px] px-3 py-1 border" style={{ borderColor: PROFILE_COLORS[activeProfile], color: PROFILE_COLORS[activeProfile] }}>
-            Perfil activo: {PROFILE_LABELS[activeProfile]}
+            Active profile: {PROFILE_LABELS[activeProfile]}
           </span>
         </div>
 
@@ -470,11 +470,11 @@ export default function OptimizationPage() {
 
         {/* Add new rule */}
         <div className="border border-bloomberg-border p-3 mb-3 space-y-3">
-          <p className="text-bloomberg-muted text-[10px] uppercase">Nueva regla</p>
+          <p className="text-bloomberg-muted text-[10px] uppercase">New rule</p>
 
           {/* Ticker selector */}
           <div>
-            <p className="text-bloomberg-muted text-[10px] mb-1">Activos (selecciona ≥ 2):</p>
+            <p className="text-bloomberg-muted text-[10px] mb-1">Assets (select ≥ 2):</p>
             <div className="flex flex-wrap gap-1">
               {rows.map((r) => (
                 <button
@@ -509,7 +509,7 @@ export default function OptimizationPage() {
                   onChange={(e) => setNewComboMinEnabled(e.target.checked)}
                   className="accent-[#38b2ff]"
                 />
-                <span className="text-[#38b2ff] font-bold">≥</span> Mínimo %
+                <span className="text-[#38b2ff] font-bold">≥</span> Minimum %
               </label>
               <input
                 type="number"
@@ -532,7 +532,7 @@ export default function OptimizationPage() {
                   onChange={(e) => setNewComboMaxEnabled(e.target.checked)}
                   className="accent-[#38b2ff]"
                 />
-                <span className="text-[#38b2ff] font-bold">≤</span> Máximo %
+                <span className="text-[#38b2ff] font-bold">≤</span> Maximum %
               </label>
               <input
                 type="number"
@@ -551,7 +551,7 @@ export default function OptimizationPage() {
               disabled={newComboTickers.length < 2 || (!newComboMinEnabled && !newComboMaxEnabled)}
               className="flex items-center gap-1 border border-[#38b2ff] text-[#38b2ff] text-[10px] px-3 py-1.5 hover:bg-[#38b2ff] hover:text-bloomberg-bg disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              <Plus size={11} /> Agregar
+              <Plus size={11} /> Add
             </button>
           </div>
         </div>
@@ -563,9 +563,9 @@ export default function OptimizationPage() {
             className="flex items-center gap-1 bg-[#38b2ff] text-bloomberg-bg text-xs font-bold px-5 py-1.5 hover:opacity-90 disabled:opacity-50"
           >
             <Save size={11} />
-            {savingM2 ? "GUARDANDO…" : "GUARDAR MOTOR 2"}
+            {savingM2 ? "SAVING…" : "SAVE ENGINE 2"}
           </button>
-          {m2Saved && <span className="text-green-600 text-[10px]">✓ Guardado</span>}
+          {m2Saved && <span className="text-green-600 text-[10px]">✓ Saved</span>}
         </div>
       </div>
 

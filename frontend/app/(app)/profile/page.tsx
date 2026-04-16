@@ -16,8 +16,8 @@ const PROFILES: {
 }[] = [
   {
     key: "conservative",
-    label: "Conservador",
-    subtitle: "Máximo Sharpe Ratio",
+    label: "Conservative",
+    subtitle: "Maximum Sharpe Ratio",
     icon: Shield,
     color: "#2563eb",
     bg: "#eff6ff",
@@ -25,15 +25,15 @@ const PROFILES: {
   {
     key: "base",
     label: "Base",
-    subtitle: "Retorno objetivo ajustable",
+    subtitle: "Adjustable target return",
     icon: Target,
     color: "#16a34a",
     bg: "#f0fdf4",
   },
   {
     key: "aggressive",
-    label: "Agresivo",
-    subtitle: "Máximo Retorno",
+    label: "Aggressive",
+    subtitle: "Maximum Return",
     icon: TrendingUp,
     color: "#dc2626",
     bg: "#fef2f2",
@@ -41,9 +41,9 @@ const PROFILES: {
 ];
 
 const LABELS: Record<InvestorProfile, string> = {
-  conservative: "Conservador",
+  conservative: "Conservative",
   base: "Base",
-  aggressive: "Agresivo",
+  aggressive: "Aggressive",
 };
 
 function MetricCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
@@ -136,9 +136,9 @@ export default function ProfilePage() {
   return (
     <div className="p-6 space-y-6 max-w-4xl">
       <div>
-        <h1 className="text-lg font-bold text-bloomberg-text">Perfil de Inversionista</h1>
+        <h1 className="text-lg font-bold text-bloomberg-text">Investor Profile</h1>
         <p className="text-xs text-bloomberg-muted mt-1">
-          El perfil seleccionado define los pesos objetivo para rebalanceos y optimización.
+          The selected profile defines the target weights for rebalancing and optimization.
         </p>
       </div>
 
@@ -175,7 +175,7 @@ export default function ProfilePage() {
               {pd && (
                 <div className="mt-3 pt-3 border-t border-bloomberg-border grid grid-cols-2 gap-1">
                   <div>
-                    <div className="text-[10px] text-bloomberg-muted">Retorno</div>
+                    <div className="text-[10px] text-bloomberg-muted">Return</div>
                     <div className="text-xs font-semibold text-bloomberg-text">
                       {pd.metrics.ann_return?.toFixed(1)}%
                     </div>
@@ -208,11 +208,11 @@ export default function ProfilePage() {
       {/* Target return input (all profiles — used by Horizon projections) */}
       <div className="bbg-card flex items-center gap-4">
         <div>
-          <div className="text-xs font-semibold text-bloomberg-text mb-0.5">Retorno Objetivo Anual</div>
+          <div className="text-xs font-semibold text-bloomberg-text mb-0.5">Target Annual Return</div>
           <div className="text-[11px] text-bloomberg-muted">
             {activeProfile === "base"
-              ? "El optimizador minimiza la volatilidad alcanzando este retorno mínimo."
-              : "Usado por el planificador de Horizon para proyecciones Monte Carlo."}
+              ? "The optimizer minimizes volatility while achieving this minimum return."
+              : "Used by the Horizon planner for Monte Carlo projections."}
           </div>
         </div>
         <div className="flex items-center gap-2 ml-auto">
@@ -231,37 +231,37 @@ export default function ProfilePage() {
             disabled={mutation.isPending}
             className="px-3 py-1.5 text-xs font-semibold bg-bloomberg-text text-white rounded-lg hover:opacity-80 transition-opacity disabled:opacity-40"
           >
-            Guardar
+            Save
           </button>
         </div>
       </div>
 
       {/* Active profile detail */}
       {isLoading && (
-        <div className="bbg-card text-center text-bloomberg-muted text-sm py-8">Calculando pesos óptimos…</div>
+        <div className="bbg-card text-center text-bloomberg-muted text-sm py-8">Computing optimal weights…</div>
       )}
 
       {!isLoading && activeData && currentData && (
         <div className="grid grid-cols-4 gap-4">
           <MetricCard
-            label="Retorno Anual"
+            label="Annual Return"
             value={`${activeData.metrics.ann_return?.toFixed(1)}%`}
-            sub={`Actual: ${currentData.metrics.ann_return?.toFixed(1)}%`}
+            sub={`Current: ${currentData.metrics.ann_return?.toFixed(1)}%`}
           />
           <MetricCard
-            label="Volatilidad"
+            label="Volatility"
             value={`${activeData.metrics.ann_vol?.toFixed(1)}%`}
-            sub={`Actual: ${currentData.metrics.ann_vol?.toFixed(1)}%`}
+            sub={`Current: ${currentData.metrics.ann_vol?.toFixed(1)}%`}
           />
           <MetricCard
             label="Sharpe Ratio"
             value={activeData.metrics.sharpe?.toFixed(2) ?? "—"}
-            sub={`Actual: ${currentData.metrics.sharpe?.toFixed(2)}`}
+            sub={`Current: ${currentData.metrics.sharpe?.toFixed(2)}`}
           />
           <MetricCard
             label="Max Drawdown"
             value={`${activeData.metrics.max_drawdown?.toFixed(1)}%`}
-            sub={`Actual: ${currentData.metrics.max_drawdown?.toFixed(1)}%`}
+            sub={`Current: ${currentData.metrics.max_drawdown?.toFixed(1)}%`}
           />
         </div>
       )}
@@ -270,19 +270,19 @@ export default function ProfilePage() {
       {!isLoading && activeData && currentData && (
         <div className="bbg-card">
           <div className="bbg-header">
-            Pesos — {LABELS[activeProfile as InvestorProfile] ?? activeProfile} vs Actual
+            Weights — {LABELS[activeProfile as InvestorProfile] ?? activeProfile} vs Current
           </div>
           <div className="space-y-2">
             <div className="flex items-center gap-3 text-[10px] text-bloomberg-muted mb-3">
               <span className="w-14 shrink-0" />
               <span className="flex-1">
                 <span className="inline-block w-3 h-3 rounded-full bg-bloomberg-gold opacity-30 mr-1" />
-                Actual
+                Current
                 <span className="inline-block w-3 h-3 rounded-full bg-bloomberg-gold ml-3 mr-1 opacity-85" />
-                Óptimo
+                Optimal
               </span>
-              <span className="w-12 text-right">Óptimo</span>
-              <span className="w-14 text-right">Diferencia</span>
+              <span className="w-12 text-right">Optimal</span>
+              <span className="w-14 text-right">Difference</span>
             </div>
             {Object.entries(activeData.weights)
               .sort((a, b) => b[1] - a[1])
@@ -301,13 +301,13 @@ export default function ProfilePage() {
       {/* Profile comparison table */}
       {!isLoading && data?.profiles && (
         <div className="bbg-card">
-          <div className="bbg-header">Comparación de Perfiles</div>
+          <div className="bbg-header">Profile Comparison</div>
           <table className="bbg-table">
             <thead>
               <tr>
-                <th>Perfil</th>
-                <th className="text-right">Retorno</th>
-                <th className="text-right">Volatilidad</th>
+                <th>Profile</th>
+                <th className="text-right">Return</th>
+                <th className="text-right">Volatility</th>
                 <th className="text-right">Sharpe</th>
                 <th className="text-right">Max DD</th>
               </tr>
@@ -322,7 +322,7 @@ export default function ProfilePage() {
                       {LABELS[key]}
                       {isA && (
                         <span className="ml-2 text-[10px] bg-bloomberg-text text-white px-1.5 py-0.5 rounded-full">
-                          Activo
+                          Active
                         </span>
                       )}
                     </td>
@@ -338,7 +338,7 @@ export default function ProfilePage() {
               {/* Current portfolio row */}
               {currentData && (
                 <tr className="border-t-2 border-bloomberg-border">
-                  <td className="font-medium text-bloomberg-muted">Portafolio Actual</td>
+                  <td className="font-medium text-bloomberg-muted">Current Portfolio</td>
                   <td className="text-right text-green-600 font-medium">
                     {currentData.metrics.ann_return?.toFixed(1)}%
                   </td>

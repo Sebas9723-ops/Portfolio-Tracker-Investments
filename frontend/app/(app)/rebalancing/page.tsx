@@ -13,9 +13,9 @@ import {
 import type { TickerFloorCap, CombinationRange } from "@/lib/types";
 
 const PROFILE_LABELS: Record<string, { label: string; color: string; bg: string }> = {
-  conservative: { label: "Conservador", color: "#2563eb", bg: "#eff6ff" },
-  base:         { label: "Base",        color: "#16a34a", bg: "#f0fdf4" },
-  aggressive:   { label: "Agresivo",    color: "#dc2626", bg: "#fef2f2" },
+  conservative: { label: "Conservative", color: "#2563eb", bg: "#eff6ff" },
+  base:         { label: "Base",         color: "#16a34a", bg: "#f0fdf4" },
+  aggressive:   { label: "Aggressive",   color: "#dc2626", bg: "#fef2f2" },
 };
 
 function ProfileBadge() {
@@ -27,7 +27,7 @@ function ProfileBadge() {
       className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold"
       style={{ color: info.color, background: info.bg }}
     >
-      Perfil: {info.label}
+      Profile: {info.label}
     </span>
   );
 }

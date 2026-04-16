@@ -72,10 +72,10 @@ export default function SettingsPage() {
 
       {/* ── Currency selector ─────────────────────────────────────────────── */}
       <div className="bbg-card">
-        <p className="bbg-header">Moneda Base del Portfolio</p>
+        <p className="bbg-header">Portfolio Base Currency</p>
         <p className="text-bloomberg-muted text-[10px] mb-3">
-          Todo el portfolio, analytics y rebalancing se muestran en esta moneda.
-          Al cambiar y guardar, la app se actualiza automáticamente.
+          All portfolio values, analytics and rebalancing are displayed in this currency.
+          Changes take effect immediately after saving.
         </p>
         <div className="flex flex-wrap gap-2">
           {CURRENCIES.map(({ code, label }) => (
@@ -128,7 +128,7 @@ export default function SettingsPage() {
         </button>
         {saved && (
           <span className="text-green-600 text-xs">
-            ✓ Guardado — la app se actualizó con la nueva configuración
+            ✓ Saved — settings updated successfully
           </span>
         )}
       </div>

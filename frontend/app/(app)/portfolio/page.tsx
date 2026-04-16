@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchPositions, upsertPosition, deletePosition } from "@/lib/api/portfolio";
 import { fetchCash } from "@/lib/api/transactions";
 import { fetchAnalytics, fetchRebalancing, fetchFxExposure } from "@/lib/api/analytics";
-import { usePortfolio } from "@/lib/hooks/usePortfolio";
+import { usePortfolio, usePortfolioHistory } from "@/lib/hooks/usePortfolio";
 import { fmtCurrency, fmtPct, colorClass } from "@/lib/formatters";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { Plus, Trash2 } from "lucide-react";
@@ -21,6 +21,7 @@ export default function PortfolioPage() {
   const { data: positions, isLoading } = useQuery({ queryKey: ["positions"], queryFn: fetchPositions });
   const { data: cash } = useQuery({ queryKey: ["cash"], queryFn: fetchCash });
   const { data: portfolio } = usePortfolio();
+  const { data: historyData } = usePortfolioHistory();
   const { data: rebalancing } = useQuery({ queryKey: ["rebalancing", 0, "broker"], queryFn: () => fetchRebalancing({}) });
   const { data: analytics } = useQuery({ queryKey: ["analytics", "1y"], queryFn: () => fetchAnalytics("1y") });
   const { data: fx } = useQuery({ queryKey: ["fxexposure"], queryFn: fetchFxExposure });
@@ -52,6 +53,14 @@ export default function PortfolioPage() {
   });
 
   if (isLoading) return <div className="text-bloomberg-muted text-xs p-4">Loading…</div>;
+
+  // Current Return since start date (rolling 1-year window)
+  const START_DATE = "2026-03-02";
+  const totalValue = portfolio?.total_value_base ?? 0;
+  const allHistory = (historyData ?? []).slice().sort((a, b) => a.date.localeCompare(b.date));
+  const startEntry = allHistory.find((d) => d.date >= START_DATE);
+  const currentReturnVal = startEntry ? totalValue - startEntry.value : null;
+  const currentReturnPct = startEntry && startEntry.value > 0 ? ((totalValue - startEntry.value) / startEntry.value) * 100 : null;
 
   // Allocation pie data from portfolio
   const pieData = (portfolio?.rows ?? []).map((r) => ({ name: r.ticker, value: r.value_base }));
@@ -119,6 +128,24 @@ export default function PortfolioPage() {
             <button onClick={() => setShowForm(false)} className="text-bloomberg-muted text-xs px-3 py-1 border border-bloomberg-border hover:text-bloomberg-text">
               CANCEL
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Current Return metric */}
+      {currentReturnPct != null && currentReturnVal != null && (
+        <div className="bbg-card flex items-center justify-between">
+          <div>
+            <p className="text-bloomberg-muted text-[10px] uppercase tracking-widest mb-0.5">Current Return</p>
+            <p className="text-[11px] text-bloomberg-muted">since {START_DATE} (1-year rolling)</p>
+          </div>
+          <div className="text-right">
+            <p className={`text-2xl font-bold ${currentReturnPct >= 0 ? "text-green-400" : "text-red-400"}`}>
+              {currentReturnPct >= 0 ? "+" : ""}{fmtPct(currentReturnPct)}
+            </p>
+            <p className={`text-xs mt-0.5 ${currentReturnVal >= 0 ? "text-green-400" : "text-red-400"}`}>
+              {currentReturnVal >= 0 ? "+" : ""}{fmtCurrency(currentReturnVal, ccy)}
+            </p>
           </div>
         </div>
       )}

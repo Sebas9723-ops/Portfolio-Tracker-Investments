@@ -34,14 +34,14 @@ const NAV = [
   { label: "Sector Heatmap",  href: "/sector-heatmap",     icon: Grid },
   { label: "Yield Curve",     href: "/yield-curve",        icon: LineChart },
   null,
-  { label: "Perfil",          href: "/profile",            icon: UserCircle },
+  { label: "Profile",          href: "/profile",            icon: UserCircle },
   { label: "Settings",        href: "/settings",           icon: Settings },
 ];
 
 const PROFILES: { key: InvestorProfile; label: string; short: string; color: string }[] = [
-  { key: "conservative", label: "Conservador", short: "C", color: "#2563eb" },
-  { key: "base",         label: "Base",        short: "B", color: "#16a34a" },
-  { key: "aggressive",   label: "Agresivo",    short: "A", color: "#dc2626" },
+  { key: "conservative", label: "Conservative", short: "C", color: "#2563eb" },
+  { key: "base",         label: "Base",         short: "B", color: "#16a34a" },
+  { key: "aggressive",   label: "Aggressive",   short: "A", color: "#dc2626" },
 ];
 
 function ProfileSwitcher() {

@@ -152,6 +152,12 @@ export default function DashboardPage() {
   const winners = portfolio.rows.filter((r) => (r.unrealized_pnl ?? 0) >= 0).length;
   const losers = portfolio.rows.length - winners;
 
+  // Current Return: real return since start date (rolling 1-year window)
+  const START_DATE = "2026-03-02";
+  const startEntry = allHistory.find((d) => d.date >= START_DATE);
+  const currentReturnVal = startEntry ? totalValue - startEntry.value : null;
+  const currentReturnPct = startEntry && startEntry.value > 0 ? ((totalValue - startEntry.value) / startEntry.value) * 100 : null;
+
   return (
     <div className="space-y-4">
       {/* Top bar */}
@@ -507,6 +513,26 @@ export default function DashboardPage() {
                 </div>
               )}
             </div>
+
+            {/* Current Return (since start date, rolling 1-year) */}
+            {currentReturnPct != null && currentReturnVal != null && (
+              <div className="border-t border-bloomberg-border pt-2">
+                <div className="flex justify-between items-center text-xs">
+                  <div>
+                    <span className="text-bloomberg-muted font-medium">Current return</span>
+                    <span className="block text-[9px] text-bloomberg-muted">since {START_DATE}</span>
+                  </div>
+                  <div className="text-right">
+                    <span className={`font-bold text-sm ${currentReturnPct >= 0 ? "text-green-400" : "text-red-400"}`}>
+                      {currentReturnPct >= 0 ? "+" : ""}{fmtPct(currentReturnPct)}
+                    </span>
+                    <span className={`block text-[10px] ${currentReturnVal >= 0 ? "text-green-400" : "text-red-400"}`}>
+                      {currentReturnVal >= 0 ? "+" : ""}{fmtCurrency(currentReturnVal, ccy)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Day change */}
             <div className="border-t border-bloomberg-border pt-2">
