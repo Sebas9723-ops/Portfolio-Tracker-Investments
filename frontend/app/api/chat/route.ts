@@ -1,5 +1,6 @@
+export const runtime = "nodejs";
+
 import { NextRequest, NextResponse } from "next/server";
-import Groq from "groq-sdk";
 
 export async function POST(req: NextRequest) {
   try {
@@ -9,17 +10,28 @@ export async function POST(req: NextRequest) {
     }
 
     const { messages } = await req.json();
-    const groq = new Groq({ apiKey });
 
-    const completion = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
-      messages,
-      temperature: 0.3,
-      max_tokens: 1024,
-      stream: false,
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "llama-3.3-70b-versatile",
+        messages,
+        temperature: 0.3,
+        max_tokens: 1024,
+      }),
     });
 
-    const content = completion.choices[0]?.message?.content ?? "";
+    if (!res.ok) {
+      const err = await res.text();
+      return NextResponse.json({ error: `Groq API error: ${err}` }, { status: res.status });
+    }
+
+    const data = await res.json();
+    const content = data.choices?.[0]?.message?.content ?? "";
     return NextResponse.json({ content });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
