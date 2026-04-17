@@ -150,8 +150,8 @@ export function ChatPanel({
             <Bot size={14} className="text-[#f3a712]" />
           </div>
           <div>
-            <p className="text-[13px] font-semibold text-slate-800 leading-none">Portfolio AI</p>
-            <p className="text-[10px] text-slate-400 mt-0.5">Llama 3.3 70B</p>
+            <p className="text-[13px] font-semibold text-slate-800 leading-none">Advisory Team</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">PM · HF · Risk — Llama 3.3 70B</p>
           </div>
         </div>
         <div className="flex items-center gap-1">
