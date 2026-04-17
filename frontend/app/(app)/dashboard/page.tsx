@@ -122,10 +122,10 @@ export default function DashboardPage() {
   const dayChangePct = totalValue > 0 ? (dayChange / (totalValue - dayChange)) * 100 : 0;
 
   // Chart data — from automatic history (historical prices × shares)
-  // Exclude today: market may be open / bar is incomplete
-  const today = new Date().toISOString().split("T")[0];
+  // Exclude today (local time): market may be open / bar is incomplete
+  const localToday = new Date().toLocaleDateString("en-CA"); // "YYYY-MM-DD" in local tz
   const allHistory = (historyData ?? [])
-    .filter((d) => d.date < today)
+    .filter((d) => d.date < localToday)
     .slice()
     .sort((a, b) => a.date.localeCompare(b.date));
   const chartData = filterHistory(allHistory, chartPeriod);
