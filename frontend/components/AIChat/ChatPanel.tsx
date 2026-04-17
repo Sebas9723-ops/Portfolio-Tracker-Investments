@@ -83,7 +83,6 @@ interface ChatPanelProps {
   messages: ChatMessage[];
   streaming: boolean;
   streamingContent: string;
-  isConfigured: boolean;
   alerts: ProactiveAlert[];
   onSend: (msg: string) => void;
   onClear: () => void;
@@ -93,7 +92,7 @@ interface ChatPanelProps {
 // ── Panel ───────────────────────────────────────────────────────────────────
 
 export function ChatPanel({
-  messages, streaming, streamingContent, isConfigured,
+  messages, streaming, streamingContent,
   alerts, onSend, onClear, onClose,
 }: ChatPanelProps) {
   const [input, setInput] = useState("");
@@ -123,7 +122,7 @@ export function ChatPanel({
 
   const handleSend = () => {
     const trimmed = input.trim();
-    if (!trimmed || streaming || !isConfigured) return;
+    if (!trimmed || streaming) return;
     onSend(trimmed);
     setInput("");
     if (textareaRef.current) textareaRef.current.style.height = "auto";
@@ -173,12 +172,6 @@ export function ChatPanel({
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 bg-slate-50/50">
-        {!isConfigured && (
-          <div className="text-center text-[11px] text-slate-400 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mx-2">
-            Set <code className="font-mono bg-amber-100 px-1 rounded">NEXT_PUBLIC_GROQ_API_KEY</code> in your <code className="font-mono">.env.local</code> to enable AI
-          </div>
-        )}
-
         {/* Alert messages */}
         {messages.length === 0 && alerts.map((alert) => (
           <div key={alert.id} className={`text-[11px] px-3 py-2 rounded-lg border ${
@@ -232,8 +225,8 @@ export function ChatPanel({
             {chips.map((chip) => (
               <button
                 key={chip.label}
-                onClick={() => isConfigured && onSend(chip.prompt)}
-                disabled={!isConfigured}
+                onClick={() => onSend(chip.prompt)}
+                disabled={false}
                 className="shrink-0 px-2.5 py-1 text-[10px] bg-slate-100 hover:bg-[#f3a712]/15 hover:text-[#f3a712] text-slate-600 rounded-full transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 {chip.label}
@@ -253,13 +246,13 @@ export function ChatPanel({
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
             placeholder="Ask about your portfolio..."
-            disabled={!isConfigured || streaming}
+            disabled={streaming}
             className="flex-1 resize-none bg-slate-100 rounded-xl px-3 py-2 text-[12px] text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#f3a712]/30 disabled:opacity-50 leading-relaxed"
             style={{ maxHeight: 72, minHeight: 36 }}
           />
           <button
             onClick={handleSend}
-            disabled={!input.trim() || streaming || !isConfigured}
+            disabled={!input.trim() || streaming}
             className="w-8 h-8 shrink-0 flex items-center justify-center rounded-xl bg-[#f3a712] text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[#f3a712]/90 transition-colors"
           >
             <Send size={13} />

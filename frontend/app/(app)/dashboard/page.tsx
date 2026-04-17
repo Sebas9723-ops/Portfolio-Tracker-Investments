@@ -159,7 +159,7 @@ export default function DashboardPage() {
   const { mutate: saveSnap, isPending: saving } = useSaveSnapshot();
   const { data: historyData, isLoading: historyLoading } = usePortfolioHistory();
   const { data: transactions } = useQuery({ queryKey: ["transactions"], queryFn: fetchTransactions });
-  const { data: breakdown } = useQuery({ queryKey: ["portfolioBreakdown"], queryFn: fetchPortfolioBreakdown });
+  const { data: breakdown } = useQuery({ queryKey: ["portfolioBreakdown"], queryFn: fetchPortfolioBreakdown, staleTime: 60 * 60 * 1000 });
   const qc = useQueryClient();
   const base_currency = useSettingsStore((s) => s.base_currency);
   const cost_basis_usd = useSettingsStore((s) => s.cost_basis_usd);

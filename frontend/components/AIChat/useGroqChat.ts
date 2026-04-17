@@ -63,22 +63,28 @@ export function useGroqChat() {
           signal: abortRef.current.signal,
         });
 
-        const data = await res.json();
-
-        if (!res.ok || data.error) {
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
           throw new Error(data.error ?? `HTTP ${res.status}`);
         }
 
-        const assistantMsg: ChatMessage = { role: "assistant", content: data.content };
-        setMessages((prev) => [...prev, assistantMsg].slice(-MAX_HISTORY));
+        const reader = res.body!.getReader();
+        const decoder = new TextDecoder();
+        let fullContent = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = decoder.decode(value, { stream: true });
+          fullContent += chunk;
+          setStreamingContent(fullContent);
+        }
+
+        setMessages((prev) => [...prev, { role: "assistant" as const, content: fullContent }].slice(-MAX_HISTORY));
       } catch (err: unknown) {
         if ((err as Error)?.name !== "AbortError") {
           const detail = err instanceof Error ? err.message : "Unknown error";
-          const errMsg: ChatMessage = {
-            role: "assistant",
-            content: `⚠️ ${detail}`,
-          };
-          setMessages((prev) => [...prev, errMsg]);
+          setMessages((prev) => [...prev, { role: "assistant", content: `⚠️ ${detail}` }]);
         }
       } finally {
         setStreaming(false);

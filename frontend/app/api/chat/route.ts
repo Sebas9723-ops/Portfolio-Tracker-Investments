@@ -22,6 +22,7 @@ export async function POST(req: NextRequest) {
         messages,
         temperature: 0.3,
         max_tokens: 1024,
+        stream: true,
       }),
     });
 
@@ -30,9 +31,36 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Groq API error: ${err}` }, { status: res.status });
     }
 
-    const data = await res.json();
-    const content = data.choices?.[0]?.message?.content ?? "";
-    return NextResponse.json({ content });
+    // Stream SSE → plain text chunks to client
+    const encoder = new TextEncoder();
+    const readable = new ReadableStream({
+      async start(controller) {
+        const reader = res.body!.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const lines = buf.split("\n");
+          buf = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const payload = line.slice(6).trim();
+            if (payload === "[DONE]") { controller.close(); return; }
+            try {
+              const delta = JSON.parse(payload).choices?.[0]?.delta?.content ?? "";
+              if (delta) controller.enqueue(encoder.encode(delta));
+            } catch { /* skip malformed */ }
+          }
+        }
+        controller.close();
+      },
+    });
+
+    return new Response(readable, {
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });

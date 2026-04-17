@@ -405,10 +405,39 @@ _SECTOR_LABELS: dict[str, str] = {
 }
 
 
+def _fetch_etf_breakdown(ticker: str) -> tuple[str, dict, dict]:
+    """Fetch sector + region data for a single ETF. Runs in thread pool."""
+    import yfinance as yf
+    cache_key = f"etf_breakdown:{ticker}"
+    cached = cache.get(cache_key)
+    if cached:
+        return ticker, cached["sector_weights"], cached["info"]
+
+    yft = yf_ticker(ticker)
+    yf_obj = yf.Ticker(yft)
+
+    sector_weights: dict[str, float] = {}
+    try:
+        fd = yf_obj.funds_data
+        for key, pct in fd.sector_weightings.items():
+            label = _SECTOR_LABELS.get(key, key.replace("_", " ").title())
+            sector_weights[label] = float(pct)
+    except Exception:
+        sector_weights = {}
+
+    try:
+        info = yf_obj.info or {}
+    except Exception:
+        info = {}
+
+    cache.set(cache_key, {"sector_weights": sector_weights, "info": info}, ttl=3600)
+    return ticker, sector_weights, info
+
+
 @router.get("/breakdown")
 def get_portfolio_breakdown(user_id: str = Depends(get_user_id)):
     """Sector and region breakdown weighted by current portfolio value."""
-    import yfinance as yf
+    from concurrent.futures import ThreadPoolExecutor
 
     db = get_admin_client()
     settings = _get_settings_for_user(user_id)
@@ -433,29 +462,26 @@ def get_portfolio_breakdown(user_id: str = Depends(get_user_id)):
     if total == 0:
         return {"sectors": {}, "regions": {}}
 
+    # Fetch all ETF data in parallel
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(_fetch_etf_breakdown, [r.ticker for r in summary.rows]))
+
+    etf_data = {ticker: (sw, info) for ticker, sw, info in results}
+
     sectors: dict[str, float] = {}
     regions: dict[str, float] = {}
 
     for row in summary.rows:
         w = row.value_base / total
         ticker = row.ticker
-        yft = yf_ticker(ticker)
-        yf_obj = yf.Ticker(yft)
+        sector_weights, info = etf_data.get(ticker, ({}, {}))
 
-        # ── Sectors ──────────────────────────────────────────────────────────
-        try:
-            fd = yf_obj.funds_data
-            for key, pct in fd.sector_weightings.items():
-                label = _SECTOR_LABELS.get(key, key.replace("_", " ").title())
-                sectors[label] = sectors.get(label, 0) + float(pct) * w * 100
-        except Exception:
+        if sector_weights:
+            for label, pct in sector_weights.items():
+                sectors[label] = sectors.get(label, 0) + pct * w * 100
+        else:
             sectors["Other/Commodity"] = sectors.get("Other/Commodity", 0) + w * 100
 
-        # ── Regions ───────────────────────────────────────────────────────────
-        try:
-            info = yf_obj.info or {}
-        except Exception:
-            info = {}
         region_alloc = _infer_regions(ticker, info)
         for region, pct in region_alloc.items():
             regions[region] = regions.get(region, 0) + pct * w * 100

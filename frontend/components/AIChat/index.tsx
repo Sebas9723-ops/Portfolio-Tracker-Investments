@@ -62,7 +62,6 @@ export function AIChatWidget() {
             messages={messages}
             streaming={streaming}
             streamingContent={streamingContent}
-            isConfigured={isConfigured}
             alerts={alerts}
             onSend={send}
             onClear={clear}
