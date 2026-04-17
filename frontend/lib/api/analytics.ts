@@ -65,6 +65,11 @@ export const fetchRequiredForMaxSharpe = (params?: { period?: string; max_single
     }>("/api/rebalancing/required-for-max-sharpe", { params })
     .then((r) => r.data);
 
+export const fetchPortfolioBreakdown = () =>
+  apiClient
+    .get<{ sectors: Record<string, number>; regions: Record<string, number> }>("/api/portfolio/breakdown")
+    .then((r) => r.data);
+
 export const fetchBlackLitterman = (body: {
   views: Record<string, number>;
   tau?: number;

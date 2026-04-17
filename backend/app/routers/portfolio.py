@@ -307,3 +307,84 @@ def save_snapshot(body: SnapshotCreate, user_id: str = Depends(get_user_id)):
     }
     res = db.table("portfolio_snapshots").upsert(row, on_conflict="user_id,snapshot_date").execute()
     return res.data[0] if res.data else row
+
+
+# ── ETF region hardcoded map ──────────────────────────────────────────────────
+_REGION_MAP: dict[str, dict[str, float]] = {
+    "VOO":     {"North America": 1.0},
+    "QQQM":    {"North America": 1.0},
+    "VWCE.DE": {"North America": 0.62, "Europe": 0.18, "Pacific": 0.12, "Emerging Markets": 0.08},
+    "8RMY.DE": {"Emerging Markets": 1.0},
+    "IGLN.L":  {"Gold": 1.0},
+    "ZPRX.DE": {"Europe": 1.0},
+}
+
+_SECTOR_LABELS: dict[str, str] = {
+    "realestate":             "Real Estate",
+    "consumer_cyclical":      "Consumer Cyclical",
+    "basic_materials":        "Basic Materials",
+    "consumer_defensive":     "Consumer Defensive",
+    "technology":             "Technology",
+    "communication_services": "Communication Services",
+    "financial_services":     "Financial Services",
+    "utilities":              "Utilities",
+    "industrials":            "Industrials",
+    "energy":                 "Energy",
+    "healthcare":             "Healthcare",
+}
+
+
+@router.get("/breakdown")
+def get_portfolio_breakdown(user_id: str = Depends(get_user_id)):
+    """Sector and region breakdown weighted by current portfolio value."""
+    import yfinance as yf
+
+    db = get_admin_client()
+    settings = _get_settings_for_user(user_id)
+    base_currency = settings.get("base_currency", "USD")
+
+    pos_res = db.table("positions").select("*").eq("user_id", user_id).execute()
+    positions = pos_res.data or []
+    if not positions:
+        return {"sectors": {}, "regions": {}}
+
+    tx_res = db.table("transactions").select("*").eq("user_id", user_id).execute()
+    transactions = tx_res.data or []
+    tickers = [p["ticker"] for p in positions]
+    quotes = get_quotes(tickers)
+    exchange_currencies = [get_native_currency(t) for t in tickers]
+    pos_currencies = [p.get("currency") or get_native_currency(p["ticker"]) for p in positions]
+    currencies = list(set(exchange_currencies + pos_currencies))
+    fx_rates = get_fx_rates(currencies, base=base_currency)
+    summary = build_portfolio(positions, quotes, fx_rates, base_currency, transactions)
+
+    total = summary.total_value_base
+    if total == 0:
+        return {"sectors": {}, "regions": {}}
+
+    sectors: dict[str, float] = {}
+    regions: dict[str, float] = {}
+
+    for row in summary.rows:
+        w = row.value_base / total
+        ticker = row.ticker
+
+        # ── Sectors ──────────────────────────────────────────────────────────
+        try:
+            yft = yf_ticker(ticker)
+            fd = yf.Ticker(yft).funds_data
+            for key, pct in fd.sector_weightings.items():
+                label = _SECTOR_LABELS.get(key, key.replace("_", " ").title())
+                sectors[label] = sectors.get(label, 0) + float(pct) * w * 100
+        except Exception:
+            sectors["Other/Commodity"] = sectors.get("Other/Commodity", 0) + w * 100
+
+        # ── Regions ───────────────────────────────────────────────────────────
+        region_alloc = _REGION_MAP.get(ticker, {"Other": 1.0})
+        for region, pct in region_alloc.items():
+            regions[region] = regions.get(region, 0) + pct * w * 100
+
+    sectors = {k: round(v, 2) for k, v in sorted(sectors.items(), key=lambda x: -x[1]) if v > 0.1}
+    regions = {k: round(v, 2) for k, v in sorted(regions.items(), key=lambda x: -x[1]) if v > 0.1}
+
+    return {"sectors": sectors, "regions": regions}

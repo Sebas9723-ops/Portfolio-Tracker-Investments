@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { usePortfolio, useSnapshots, useSaveSnapshot, usePortfolioHistory } from "@/lib/hooks/usePortfolio";
 import { fetchTransactions } from "@/lib/api/transactions";
+import { fetchPortfolioBreakdown } from "@/lib/api/analytics";
 import { updateSettings } from "@/lib/api/settings";
 import { fmtCurrency, fmtPct, fmtDate } from "@/lib/formatters";
 import { useSettingsStore } from "@/lib/store/settingsStore";
@@ -152,11 +153,13 @@ export default function DashboardPage() {
   const [chartPeriod, setChartPeriod] = useState<Period>("Max");
   const [editingBasis, setEditingBasis] = useState(false);
   const [basisInput, setBasisInput] = useState("");
+  const [donutView, setDonutView] = useState<"weights" | "sectors" | "regions">("weights");
 
   const { data: portfolio, isLoading, isFetching } = usePortfolio();
   const { mutate: saveSnap, isPending: saving } = useSaveSnapshot();
   const { data: historyData, isLoading: historyLoading } = usePortfolioHistory();
   const { data: transactions } = useQuery({ queryKey: ["transactions"], queryFn: fetchTransactions });
+  const { data: breakdown } = useQuery({ queryKey: ["portfolioBreakdown"], queryFn: fetchPortfolioBreakdown });
   const qc = useQueryClient();
   const base_currency = useSettingsStore((s) => s.base_currency);
   const cost_basis_usd = useSettingsStore((s) => s.cost_basis_usd);
@@ -422,47 +425,77 @@ export default function DashboardPage() {
 
           {/* Allocation donut */}
           <div className="bbg-card">
-            <p className="bbg-header">Allocation</p>
-            <div className="relative">
-              <ResponsiveContainer width="100%" height={260}>
-                <PieChart>
-                  <Pie
-                    data={pieData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={82}
-                    outerRadius={115}
-                    paddingAngle={2}
-                    dataKey="value"
-                    labelLine={false}
-                    label={({ cx, cy }) => <DonutCenter cx={cx} cy={cy} value={totalValue} ccy={ccy} />}
-                  >
-                    {pieData.map((_, i) => (
-                      <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{ background: "#111820", border: "1px solid #1e2535", fontSize: 11 }}
-                    formatter={(v: number, name: string) => [`${fmtCurrency(v, ccy)} (${((v / totalValue) * 100).toFixed(1)}%)`, name]}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-            {/* Legend */}
-            <div className="space-y-1 mt-1">
-              {portfolio.rows
-                .slice()
-                .sort((a, b) => b.weight - a.weight)
-                .map((r, i) => (
-                  <div key={r.ticker} className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }} />
-                      <span className="text-bloomberg-muted text-[10px]">{r.ticker}</span>
-                    </div>
-                    <span className="text-bloomberg-muted text-[10px]">{r.weight.toFixed(1)}%</span>
-                  </div>
+            <div className="flex items-center justify-between mb-2">
+              <p className="bbg-header mb-0">Allocation</p>
+              <div className="flex gap-1">
+                {(["weights", "sectors", "regions"] as const).map((v) => (
+                  <button key={v} onClick={() => setDonutView(v)}
+                    className={`text-[9px] px-2 py-0.5 border capitalize ${donutView === v ? "border-bloomberg-gold text-bloomberg-gold" : "border-bloomberg-border text-bloomberg-muted"}`}>
+                    {v}
+                  </button>
                 ))}
+              </div>
             </div>
+            {(() => {
+              const data =
+                donutView === "weights"
+                  ? pieData
+                  : donutView === "sectors"
+                  ? Object.entries(breakdown?.sectors ?? {}).map(([name, value]) => ({ name, value }))
+                  : Object.entries(breakdown?.regions ?? {}).map(([name, value]) => ({ name, value }));
+              const total = data.reduce((s, d) => s + d.value, 0);
+              return (
+                <>
+                  <div className="relative">
+                    <ResponsiveContainer width="100%" height={260}>
+                      <PieChart>
+                        <Pie
+                          data={data}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={82}
+                          outerRadius={115}
+                          paddingAngle={2}
+                          dataKey="value"
+                          labelLine={false}
+                          label={donutView === "weights"
+                            ? ({ cx, cy }) => <DonutCenter cx={cx} cy={cy} value={totalValue} ccy={ccy} />
+                            : undefined}
+                        >
+                          {data.map((_, i) => (
+                            <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip
+                          contentStyle={{ background: "#111820", border: "1px solid #1e2535", fontSize: 11 }}
+                          formatter={(v: number, name: string) =>
+                            donutView === "weights"
+                              ? [`${fmtCurrency(v, ccy)} (${((v / totalValue) * 100).toFixed(1)}%)`, name]
+                              : [`${v.toFixed(1)}%`, name]
+                          }
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="space-y-1 mt-1">
+                    {data
+                      .slice()
+                      .sort((a, b) => b.value - a.value)
+                      .map((d, i) => (
+                        <div key={d.name} className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }} />
+                            <span className="text-bloomberg-muted text-[10px]">{d.name}</span>
+                          </div>
+                          <span className="text-bloomberg-muted text-[10px]">
+                            {donutView === "weights" ? `${((d.value / totalValue) * 100).toFixed(1)}%` : `${d.value.toFixed(1)}%`}
+                          </span>
+                        </div>
+                      ))}
+                  </div>
+                </>
+              );
+            })()}
           </div>
 
           {/* Capital & Performance */}
