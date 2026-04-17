@@ -309,15 +309,86 @@ def save_snapshot(body: SnapshotCreate, user_id: str = Depends(get_user_id)):
     return res.data[0] if res.data else row
 
 
-# ── ETF region hardcoded map ──────────────────────────────────────────────────
-_REGION_MAP: dict[str, dict[str, float]] = {
-    "VOO":     {"North America": 1.0},
-    "QQQM":    {"North America": 1.0},
-    "VWCE.DE": {"North America": 0.62, "Europe": 0.18, "Pacific": 0.12, "Emerging Markets": 0.08},
-    "8RMY.DE": {"Emerging Markets": 1.0},
-    "IGLN.L":  {"Gold": 1.0},
-    "ZPRX.DE": {"Europe": 1.0},
+# ── ETF region override map (explicit overrides, takes priority) ──────────────
+_REGION_OVERRIDES: dict[str, dict[str, float]] = {
+    "VWCE.DE": {"North America": 0.62, "Europe": 0.18, "Pacific": 0.11, "Emerging Markets": 0.09},
 }
+
+# ── Category → region inference ───────────────────────────────────────────────
+_CATEGORY_REGION: dict[str, dict[str, float]] = {
+    # US categories
+    "large blend":              {"North America": 1.0},
+    "large growth":             {"North America": 1.0},
+    "large value":              {"North America": 1.0},
+    "mid-cap blend":            {"North America": 1.0},
+    "mid-cap growth":           {"North America": 1.0},
+    "small blend":              {"North America": 1.0},
+    "small growth":             {"North America": 1.0},
+    "technology":               {"North America": 1.0},
+    # Global
+    "world stock":              {"North America": 0.62, "Europe": 0.18, "Pacific": 0.11, "Emerging Markets": 0.09},
+    "foreign large blend":      {"Europe": 0.45, "Pacific": 0.30, "Emerging Markets": 0.25},
+    "foreign large growth":     {"Europe": 0.45, "Pacific": 0.30, "Emerging Markets": 0.25},
+    # Emerging
+    "diversified emerging mkts":{"Emerging Markets": 1.0},
+    "china region":             {"Emerging Markets": 1.0},
+    "india equity":             {"Emerging Markets": 1.0},
+    "latin america stock":      {"Emerging Markets": 1.0},
+    # Regional
+    "europe stock":             {"Europe": 1.0},
+    "eurozone stock":           {"Europe": 1.0},
+    "japan stock":              {"Pacific": 1.0},
+    "pacific/asia stock":       {"Pacific": 0.70, "Emerging Markets": 0.30},
+    # Commodities
+    "precious metals":          {"Gold": 1.0},
+    "commodities broad basket": {"Commodities": 1.0},
+}
+
+# Keywords to match in longName (checked in order, first match wins)
+_NAME_KEYWORDS: list[tuple[list[str], dict[str, float]]] = [
+    (["gold", "silver", "precious", "physical gold", "physical silver"],
+     {"Gold": 1.0}),
+    (["commodity", "commodities"],
+     {"Commodities": 1.0}),
+    (["all-world", "all world", "acwi", "global equity", "world etf", "ftse global"],
+     {"North America": 0.62, "Europe": 0.18, "Pacific": 0.11, "Emerging Markets": 0.09}),
+    (["emerging market", "emerging mkts", "msci em ", "msci emerging"],
+     {"Emerging Markets": 1.0}),
+    (["europe small", "european small", "msci europe", "stoxx europe", "euro stoxx",
+      "ftse europe", "spdr europe", "european defence", "european defense"],
+     {"Europe": 1.0}),
+    (["s&p 500", "s&p500", "nasdaq 100", "nasdaq-100", "dow jones", "russell 2000",
+      "russell 1000", "us equity", "us stock"],
+     {"North America": 1.0}),
+    (["japan", "nikkei", "topix"],
+     {"Pacific": 1.0}),
+    (["asia pacific", "asia-pacific"],
+     {"Pacific": 0.70, "Emerging Markets": 0.30}),
+    (["china", "hong kong", "india", "brazil", "latam", "latin america"],
+     {"Emerging Markets": 1.0}),
+]
+
+
+def _infer_regions(ticker: str, info: dict) -> dict[str, float]:
+    """Infer region allocation from yfinance info (category + longName)."""
+    # 1. Explicit override
+    if ticker in _REGION_OVERRIDES:
+        return _REGION_OVERRIDES[ticker]
+
+    # 2. Category match
+    category = (info.get("category") or "").lower().strip()
+    if category and category in _CATEGORY_REGION:
+        return _CATEGORY_REGION[category]
+
+    # 3. longName keyword match
+    name = (info.get("longName") or info.get("shortName") or "").lower()
+    for keywords, regions in _NAME_KEYWORDS:
+        if any(kw in name for kw in keywords):
+            return regions
+
+    # 4. quoteType fallback — ETF with no match → assume broad US/global
+    return {"North America": 1.0}
+
 
 _SECTOR_LABELS: dict[str, str] = {
     "realestate":             "Real Estate",
@@ -368,11 +439,12 @@ def get_portfolio_breakdown(user_id: str = Depends(get_user_id)):
     for row in summary.rows:
         w = row.value_base / total
         ticker = row.ticker
+        yft = yf_ticker(ticker)
+        yf_obj = yf.Ticker(yft)
 
         # ── Sectors ──────────────────────────────────────────────────────────
         try:
-            yft = yf_ticker(ticker)
-            fd = yf.Ticker(yft).funds_data
+            fd = yf_obj.funds_data
             for key, pct in fd.sector_weightings.items():
                 label = _SECTOR_LABELS.get(key, key.replace("_", " ").title())
                 sectors[label] = sectors.get(label, 0) + float(pct) * w * 100
@@ -380,7 +452,11 @@ def get_portfolio_breakdown(user_id: str = Depends(get_user_id)):
             sectors["Other/Commodity"] = sectors.get("Other/Commodity", 0) + w * 100
 
         # ── Regions ───────────────────────────────────────────────────────────
-        region_alloc = _REGION_MAP.get(ticker, {"Other": 1.0})
+        try:
+            info = yf_obj.info or {}
+        except Exception:
+            info = {}
+        region_alloc = _infer_regions(ticker, info)
         for region, pct in region_alloc.items():
             regions[region] = regions.get(region, 0) + pct * w * 100
 
