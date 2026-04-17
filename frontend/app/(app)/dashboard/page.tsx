@@ -103,7 +103,27 @@ export default function DashboardPage() {
   });
 
   if (isLoading) {
-    return <div className="flex items-center justify-center h-64 text-bloomberg-muted text-xs">Loading portfolio…</div>;
+    return (
+      <div className="space-y-4 animate-pulse">
+        <div className="h-5 w-40 bg-bloomberg-border/40 rounded" />
+        <div className="bbg-card space-y-3">
+          <div className="h-10 w-48 bg-bloomberg-border/40 rounded" />
+          <div className="h-40 bg-bloomberg-border/30 rounded" />
+        </div>
+        <div className="bbg-card space-y-2">
+          {[1,2,3].map((i) => (
+            <div key={i} className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-full bg-bloomberg-border/40" />
+              <div className="flex-1 space-y-1">
+                <div className="h-3 w-32 bg-bloomberg-border/40 rounded" />
+                <div className="h-2 w-20 bg-bloomberg-border/30 rounded" />
+              </div>
+              <div className="h-3 w-16 bg-bloomberg-border/40 rounded" />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
   }
   if (!portfolio || portfolio.rows.length === 0) {
     return (
@@ -237,8 +257,8 @@ export default function DashboardPage() {
             </div>
 
             {historyLoading ? (
-              <div className="flex items-center justify-center h-40 text-bloomberg-muted text-xs mt-3">
-                Loading history…
+              <div className="mt-3 h-40 rounded overflow-hidden">
+                <div className="w-full h-full bg-bloomberg-border/30 animate-pulse rounded" />
               </div>
             ) : chartData.length > 1 ? (
               <div className="mt-3">

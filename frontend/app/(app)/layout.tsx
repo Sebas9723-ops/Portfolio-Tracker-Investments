@@ -8,12 +8,16 @@ import { fetchSettings } from "@/lib/api/settings";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
 import { BottomNav } from "@/components/layout/BottomNav";
+import { ServerBanner } from "@/components/layout/ServerBanner";
+import { useKeepAlive } from "@/lib/hooks/useKeepAlive";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 const VALID_PROFILES = new Set(["conservative", "base", "aggressive"]);
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const router = useRouter();
+  useKeepAlive();
   const setSettings = useSettingsStore((s) => s.setSettings);
   const setProfile = useProfileStore((s) => s.setProfile);
   const [hydrated, setHydrated] = useState(false);
@@ -49,11 +53,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         <TopBar onMenuClick={() => setSidebarOpen(true)} />
         {/* Extra bottom padding on mobile so content isn't behind BottomNav */}
         <main className="flex-1 overflow-y-auto p-3 sm:p-4 pb-20 lg:pb-4">
-          {children}
+          <ErrorBoundary>{children}</ErrorBoundary>
         </main>
       </div>
 
       <BottomNav onMenuClick={() => setSidebarOpen(true)} />
+      <ServerBanner />
     </div>
   );
 }

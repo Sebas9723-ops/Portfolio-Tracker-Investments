@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchTechnicals } from "@/lib/api/settings";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine,
@@ -41,6 +42,7 @@ export default function TechnicalsPage() {
   });
 
   return (
+    <ErrorBoundary>
     <div className="space-y-4">
       <div className="flex items-center gap-3">
         <h1 className="text-bloomberg-gold text-xs font-bold uppercase tracking-widest">Technicals</h1>
@@ -123,5 +125,6 @@ export default function TechnicalsPage() {
         </div>
       )}
     </div>
+    </ErrorBoundary>
   );
 }

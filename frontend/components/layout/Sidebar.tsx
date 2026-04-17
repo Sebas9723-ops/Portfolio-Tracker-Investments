@@ -13,6 +13,9 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { updateProfile } from "@/lib/api/profile";
 import { cn } from "@/lib/utils";
 
+// Only Core and Analysis pages are prefetched on hover
+const PREFETCH_GROUPS = new Set(["Core", "Analysis"]);
+
 const NAV_GROUPS = [
   {
     label: "Core",
@@ -156,6 +159,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
                   key={item.href}
                   href={item.href}
                   onClick={onClose}
+                  prefetch={PREFETCH_GROUPS.has(group.label)}
                   className={cn(
                     "flex items-center gap-2 px-3 py-1.5 text-xs transition-colors rounded-lg mx-1",
                     pathname === item.href
