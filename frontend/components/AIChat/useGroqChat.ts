@@ -1,7 +1,7 @@
 "use client";
 import { useState, useCallback, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { groqClient, GROQ_MODEL, isGroqConfigured } from "@/lib/groq";
+import { getGroqClient, GROQ_MODEL, isGroqConfigured } from "@/lib/groq";
 import { buildSystemPrompt } from "./systemPrompt";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import type { PortfolioSummary, AnalyticsResponse, RebalancingRow } from "@/lib/types";
@@ -52,7 +52,7 @@ export function useGroqChat() {
       try {
         const systemPrompt = getSystemPrompt();
 
-        const stream = await groqClient.chat.completions.create({
+        const stream = await getGroqClient().chat.completions.create({
           model: GROQ_MODEL,
           messages: [
             { role: "system", content: systemPrompt },
