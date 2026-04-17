@@ -8,9 +8,9 @@ import { fmtCurrency, fmtPct, fmtDate } from "@/lib/formatters";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
-  AreaChart, Area, XAxis, YAxis, CartesianGrid,
-  BarChart, Bar,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid,
 } from "recharts";
+import { PortfolioLWChart } from "@/components/charts/PortfolioLWChart";
 import { Save, RefreshCw, TrendingUp, TrendingDown } from "lucide-react";
 import Link from "next/link";
 
@@ -236,31 +236,9 @@ export default function DashboardPage() {
                 Loading history…
               </div>
             ) : chartData.length > 1 ? (
-              <ResponsiveContainer width="100%" height={200}>
-                <AreaChart data={chartData} margin={{ top: 10, right: 0, bottom: 0, left: 0 }}>
-                  <defs>
-                    <linearGradient id="heroGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#f3a712" stopOpacity={0.25} />
-                      <stop offset="95%" stopColor="#f3a712" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e2535" />
-                  <XAxis dataKey="date" tick={{ fontSize: 9, fill: "#8a9bb5" }} tickLine={false} interval="preserveStartEnd" />
-                  <YAxis
-                    tick={{ fontSize: 9, fill: "#8a9bb5" }}
-                    tickLine={false}
-                    axisLine={false}
-                    width={64}
-                    tickFormatter={(v) => fmtCurrency(v, ccy, true)}
-                    domain={["auto", "auto"]}
-                  />
-                  <Tooltip
-                    contentStyle={{ background: "#111820", border: "1px solid #1e2535", fontSize: 11 }}
-                    formatter={(v: number) => [fmtCurrency(v, ccy), "Value"]}
-                  />
-                  <Area type="monotone" dataKey="value" stroke="#f3a712" strokeWidth={2} fill="url(#heroGrad)" dot={false} />
-                </AreaChart>
-              </ResponsiveContainer>
+              <div className="mt-3">
+                <PortfolioLWChart data={chartData} />
+              </div>
             ) : (
               <div className="flex items-center justify-center h-40 text-bloomberg-muted text-xs border border-dashed border-bloomberg-border mt-3">
                 No price data available for selected period

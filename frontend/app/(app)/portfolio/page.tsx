@@ -9,9 +9,10 @@ import { fmtCurrency, fmtPct, colorClass } from "@/lib/formatters";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { Plus, Trash2 } from "lucide-react";
 import type { Position } from "@/lib/types";
+import { BarChart as TremorBarChart } from "@tremor/react";
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend,
-  BarChart, Bar, XAxis, YAxis, CartesianGrid,
+  XAxis, YAxis, CartesianGrid,
   LineChart, Line,
 } from "recharts";
 
@@ -68,8 +69,8 @@ export default function PortfolioPage() {
   // Weight vs Target from rebalancing
   const weightData = (rebalancing ?? []).map((r) => ({
     ticker: r.ticker,
-    current: parseFloat(r.current_weight.toFixed(2)),
-    target: parseFloat(r.target_weight.toFixed(2)),
+    "Current%": parseFloat((r.current_weight * 100).toFixed(2)),
+    "Target%": parseFloat((r.target_weight * 100).toFixed(2)),
   }));
 
   // Performance vs benchmark from analytics
@@ -224,19 +225,15 @@ export default function PortfolioPage() {
         {weightData.length > 0 && (
           <div className="bbg-card">
             <p className="bbg-header">Weight vs Target</p>
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={weightData} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e2535" />
-                <XAxis dataKey="ticker" tick={{ fontSize: 9, fill: "#f3a712" }} tickLine={false} />
-                <YAxis tick={{ fontSize: 9, fill: "#8a9bb5" }} tickLine={false} axisLine={false}
-                  tickFormatter={(v) => `${v}%`} width={30} />
-                <Tooltip contentStyle={{ background: "#111820", border: "1px solid #1e2535", fontSize: 11 }}
-                  formatter={(v: number) => `${v.toFixed(2)}%`} />
-                <Legend iconSize={8} wrapperStyle={{ fontSize: 10 }} />
-                <Bar dataKey="current" fill="#f3a712" barSize={10} name="Current%" />
-                <Bar dataKey="target" fill="#38b2ff" barSize={10} name="Target%" />
-              </BarChart>
-            </ResponsiveContainer>
+            <TremorBarChart
+              data={weightData}
+              index="ticker"
+              categories={["Current%", "Target%"]}
+              colors={["amber", "blue"]}
+              valueFormatter={(v) => `${v.toFixed(1)}%`}
+              showLegend
+              className="h-44 mt-2"
+            />
           </div>
         )}
       </div>

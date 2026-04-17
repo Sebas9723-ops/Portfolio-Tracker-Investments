@@ -8,10 +8,7 @@ import { usePortfolio } from "@/lib/hooks/usePortfolio";
 import { useProfileStore } from "@/lib/store/profileStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { fmtPct, fmtCurrency } from "@/lib/formatters";
-import {
-  ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, ReferenceDot,
-} from "recharts";
+import { FrontierCanvas } from "@/components/charts/FrontierCanvas";
 import type { OptimizationResult, FrontierPoint, TickerFloorCap, CombinationRange } from "@/lib/types";
 import { Plus, Trash2, Save } from "lucide-react";
 
@@ -189,15 +186,6 @@ export default function OptimizationPage() {
   const rows = portfolio?.rows ?? [];
   const totalValue = portfolio?.total_value_base ?? 0;
   const ccy = portfolio?.base_currency ?? "USD";
-
-  const minSharpe = result ? Math.min(...result.frontier.map((p) => p.sharpe)) : 0;
-  const maxSharpe = result ? Math.max(...result.frontier.map((p) => p.sharpe)) : 1;
-
-  const CustomDot = (props: { payload?: FrontierPoint; cx?: number; cy?: number }) => {
-    const { cx, cy, payload } = props;
-    if (!payload || !cx || !cy) return null;
-    return <circle cx={cx} cy={cy} r={2.5} fill={sharpeToColor(payload.sharpe, minSharpe, maxSharpe)} opacity={0.75} />;
-  };
 
   const activeProfile = (profile as ProfileKey) || "base";
 
@@ -587,50 +575,17 @@ export default function OptimizationPage() {
                 </div>
               )}
             </div>
-            <ResponsiveContainer width="100%" height={300}>
-              <ScatterChart margin={{ top: 10, right: 20, bottom: 20, left: 20 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                <XAxis dataKey="vol" name="Volatility %" type="number" domain={["auto", "auto"]}
-                  tick={{ fontSize: 10, fill: "#94a3b8" }} tickLine={false}
-                  label={{ value: "Volatility (%)", position: "insideBottom", offset: -10, fontSize: 10, fill: "#64748b" }} />
-                <YAxis dataKey="ret" name="Return %" type="number" domain={["auto", "auto"]}
-                  tick={{ fontSize: 10, fill: "#94a3b8" }} tickLine={false} axisLine={false} width={40}
-                  label={{ value: "Return (%)", angle: -90, position: "insideLeft", fontSize: 10, fill: "#64748b" }} />
-                <Tooltip cursor={false}
-                  contentStyle={{ background: "#fff", border: "1px solid #e2e8f0", fontSize: 11 }}
-                  formatter={(v: number) => `${v.toFixed(2)}%`} />
-                <Scatter data={result.frontier} shape={<CustomDot />} />
-                <ReferenceDot x={result.max_sharpe.vol} y={result.max_sharpe.ret} r={7}
-                  fill={COLORS.maxSharpe} stroke="#fff"
-                  label={{ value: "★ Max Sharpe", position: "top", fontSize: 9, fill: COLORS.maxSharpe }} />
-                <ReferenceDot x={result.min_vol.vol} y={result.min_vol.ret} r={7}
-                  fill={COLORS.minVol} stroke="#fff"
-                  label={{ value: "★ Min Vol", position: "top", fontSize: 9, fill: COLORS.minVol }} />
-                <ReferenceDot x={result.max_return.vol} y={result.max_return.ret} r={7}
-                  fill={COLORS.maxReturn} stroke="#fff"
-                  label={{ value: "★ Max Return", position: "top", fontSize: 9, fill: COLORS.maxReturn }} />
-                {result.current_metrics.volatility != null && (
-                  <ReferenceDot x={result.current_metrics.volatility} y={result.current_metrics.return} r={7}
-                    fill={COLORS.current} stroke="#fff"
-                    label={{ value: "● Current", position: "top", fontSize: 9, fill: COLORS.current }} />
-                )}
-                {profileData?.profiles?.[profile]?.metrics && (
-                  <ReferenceDot
-                    x={profileData.profiles[profile].metrics.ann_vol}
-                    y={profileData.profiles[profile].metrics.ann_return}
-                    r={8}
-                    fill={PROFILE_COLORS[profile as ProfileKey] ?? "#888"}
-                    stroke="#fff"
-                    strokeWidth={2}
-                  />
-                )}
-              </ScatterChart>
-            </ResponsiveContainer>
-            <div className="flex items-center gap-2 mt-2 justify-end text-[10px] text-bloomberg-muted">
-              <span>Low Sharpe</span>
-              <div className="w-24 h-2 rounded" style={{ background: "linear-gradient(to right, rgb(220,38,38), rgb(22,163,74))" }} />
-              <span>High Sharpe</span>
-            </div>
+            <FrontierCanvas
+              frontier={result.frontier}
+              maxSharpe={result.max_sharpe}
+              minVol={result.min_vol}
+              maxReturn={result.max_return}
+              currentMetrics={result.current_metrics as { volatility: number | null; return: number; sharpe: number | null }}
+              profileMetrics={profileData?.profiles?.[profile]?.metrics}
+              profileColor={PROFILE_COLORS[activeProfile]}
+              sharpeToColor={sharpeToColor}
+              colors={COLORS}
+            />
           </div>
 
           {/* Weights + Shares tables */}

@@ -4,9 +4,7 @@ import { usePortfolio } from "@/lib/hooks/usePortfolio";
 import { useProfileStore } from "@/lib/store/profileStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { fmtCurrency, fmtPct } from "@/lib/formatters";
-import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-} from "recharts";
+import { HorizonLWChart } from "@/components/charts/HorizonLWChart";
 
 // Profile → which frontier point to use
 const PROFILE_FRONTIER_KEY = {
@@ -210,32 +208,7 @@ export default function InvestmentHorizonPage() {
 
       <div className="bbg-card">
         <p className="bbg-header">Monte Carlo Projection ({years}y)</p>
-        <ResponsiveContainer width="100%" height={260}>
-          <AreaChart data={data} margin={{ top: 5, right: 10, bottom: 5, left: 20 }}>
-            <defs>
-              <linearGradient id="bull" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#4dff4d" stopOpacity={0.2} />
-                <stop offset="95%" stopColor="#4dff4d" stopOpacity={0} />
-              </linearGradient>
-              <linearGradient id="bear" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#ff4d4d" stopOpacity={0.15} />
-                <stop offset="95%" stopColor="#ff4d4d" stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="#1e2535" />
-            <XAxis dataKey="year" tick={{ fontSize: 9, fill: "#8a9bb5" }} tickLine={false}
-              tickFormatter={(v) => `Y${v}`} />
-            <YAxis tick={{ fontSize: 9, fill: "#8a9bb5" }} tickLine={false} axisLine={false}
-              tickFormatter={(v) => fmtCurrency(v, ccy, true)} width={65} />
-            <Tooltip
-              contentStyle={{ background: "#111820", border: "1px solid #1e2535", fontSize: 10 }}
-              formatter={(v: number) => fmtCurrency(v, ccy)}
-            />
-            <Area type="monotone" dataKey="p90" fill="url(#bull)" stroke="#4dff4d" strokeWidth={1} name="Bull (P90)" dot={false} />
-            <Area type="monotone" dataKey="p50" fill="none" stroke="#f3a712" strokeWidth={2} name="Base (P50)" dot={false} />
-            <Area type="monotone" dataKey="p10" fill="url(#bear)" stroke="#ff4d4d" strokeWidth={1} name="Bear (P10)" dot={false} />
-          </AreaChart>
-        </ResponsiveContainer>
+        <HorizonLWChart data={data} ccy={ccy} />
       </div>
     </div>
   );

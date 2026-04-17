@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAnalytics, fetchRollingMetrics, fetchExtendedAnalytics, fetchVolRegime } from "@/lib/api/analytics";
 import { useSettingsStore } from "@/lib/store/settingsStore";
-import { MetricCard } from "@/components/shared/MetricCard";
+import { Card, Metric, Text, BadgeDelta } from "@tremor/react";
 import { fmtPct, fmtDate, MONTHS_SHORT } from "@/lib/formatters";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
@@ -108,16 +108,25 @@ export default function AnalyticsPage() {
 
       {/* ── Core Metrics ── */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <MetricCard label="TWR" value={metrics.twr != null ? fmtPct(metrics.twr) : "—"} deltaPositive={(metrics.twr ?? 0) >= 0} />
-        <MetricCard label="Ann. Return" value={metrics.annualized_return != null ? fmtPct(metrics.annualized_return) : "—"} deltaPositive={(metrics.annualized_return ?? 0) >= 0} />
-        <MetricCard label="Sharpe" value={metrics.sharpe?.toFixed(3) ?? "—"} />
-        <MetricCard label="Sortino" value={metrics.sortino?.toFixed(3) ?? "—"} />
-        <MetricCard label="Max DD" value={metrics.max_drawdown != null ? fmtPct(metrics.max_drawdown) : "—"} deltaPositive={false} />
-        <MetricCard label="Volatility" value={metrics.annualized_vol != null ? fmtPct(metrics.annualized_vol) : "—"} />
-        <MetricCard label="Alpha" value={metrics.alpha != null ? fmtPct(metrics.alpha) : "—"} deltaPositive={(metrics.alpha ?? 0) >= 0} sub={`vs ${metrics.benchmark_ticker}`} />
-        <MetricCard label="Beta" value={metrics.beta?.toFixed(3) ?? "—"} />
-        <MetricCard label="Calmar" value={metrics.calmar?.toFixed(3) ?? "—"} />
-        <MetricCard label="Info Ratio" value={metrics.information_ratio?.toFixed(3) ?? "—"} />
+        {[
+          { label: "TWR",         value: metrics.twr != null ? fmtPct(metrics.twr) : "—",                                  delta: metrics.twr != null ? ((metrics.twr ?? 0) >= 0 ? "increase" : "decrease") : undefined },
+          { label: "Ann. Return", value: metrics.annualized_return != null ? fmtPct(metrics.annualized_return) : "—",       delta: metrics.annualized_return != null ? ((metrics.annualized_return ?? 0) >= 0 ? "increase" : "decrease") : undefined },
+          { label: "Sharpe",      value: metrics.sharpe?.toFixed(3) ?? "—",                                                 delta: undefined },
+          { label: "Sortino",     value: metrics.sortino?.toFixed(3) ?? "—",                                                delta: undefined },
+          { label: "Max DD",      value: metrics.max_drawdown != null ? fmtPct(metrics.max_drawdown) : "—",                 delta: "decrease" as const },
+          { label: "Volatility",  value: metrics.annualized_vol != null ? fmtPct(metrics.annualized_vol) : "—",             delta: undefined },
+          { label: "Alpha",       value: metrics.alpha != null ? fmtPct(metrics.alpha) : "—",                               delta: metrics.alpha != null ? ((metrics.alpha ?? 0) >= 0 ? "increase" : "decrease") : undefined, sub: `vs ${metrics.benchmark_ticker}` },
+          { label: "Beta",        value: metrics.beta?.toFixed(3) ?? "—",                                                   delta: undefined },
+          { label: "Calmar",      value: metrics.calmar?.toFixed(3) ?? "—",                                                 delta: undefined },
+          { label: "Info Ratio",  value: metrics.information_ratio?.toFixed(3) ?? "—",                                      delta: undefined },
+        ].map(({ label, value, delta, sub }) => (
+          <Card key={label} className="p-3 shadow-card rounded-xl border-slate-200">
+            <Text className="text-[10px] uppercase tracking-widest text-slate-500">{label}</Text>
+            <Metric className="text-base font-semibold text-slate-900 mt-0.5">{value}</Metric>
+            {delta && <BadgeDelta deltaType={delta as "increase" | "decrease"} className="mt-1" size="xs" />}
+            {sub && <Text className="text-[10px] text-slate-400 mt-0.5">{sub}</Text>}
+          </Card>
+        ))}
       </div>
 
       {/* ── Extended Ratios ── */}
