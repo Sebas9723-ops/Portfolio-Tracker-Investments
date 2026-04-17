@@ -27,7 +27,6 @@ export function useGroqChat() {
     const portfolio = qc.getQueryData<PortfolioSummary>(["portfolio"]);
     const analytics = qc.getQueryData<AnalyticsResponse>(["analytics", "2y"]);
     const rebalancing = qc.getQueryData<RebalancingRow[]>(["rebalancing", 0, "broker"]);
-
     return buildSystemPrompt({
       portfolio: portfolio ?? null,
       metrics: analytics?.metrics ?? null,
@@ -64,27 +63,20 @@ export function useGroqChat() {
           signal: abortRef.current.signal,
         });
 
-        if (!res.ok) throw new Error(`API error ${res.status}`);
+        const data = await res.json();
 
-        const reader = res.body!.getReader();
-        const decoder = new TextDecoder();
-        let fullContent = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          const delta = decoder.decode(value, { stream: true });
-          fullContent += delta;
-          setStreamingContent(fullContent);
+        if (!res.ok || data.error) {
+          throw new Error(data.error ?? `HTTP ${res.status}`);
         }
 
-        const assistantMsg: ChatMessage = { role: "assistant", content: fullContent };
+        const assistantMsg: ChatMessage = { role: "assistant", content: data.content };
         setMessages((prev) => [...prev, assistantMsg].slice(-MAX_HISTORY));
       } catch (err: unknown) {
         if ((err as Error)?.name !== "AbortError") {
+          const detail = err instanceof Error ? err.message : "Unknown error";
           const errMsg: ChatMessage = {
             role: "assistant",
-            content: "⚠️ Error connecting to the advisory service. Please try again.",
+            content: `⚠️ ${detail}`,
           };
           setMessages((prev) => [...prev, errMsg]);
         }
