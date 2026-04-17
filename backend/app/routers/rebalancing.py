@@ -1,14 +1,11 @@
 from fastapi import APIRouter, Depends, Query
 from app.auth.dependencies import get_user_id
-from app.db.supabase_client import get_admin_client
-from app.services.market_data import get_quotes, get_risk_free_rate, get_historical_multi
-from app.services.fx_service import get_fx_rates
-from app.compute.portfolio_builder import build_portfolio
+from app.services.market_data import get_risk_free_rate, get_historical_multi
 from app.compute.rebalancing import build_rebalancing_table, compute_target_weights_from_drift
 from app.compute.optimization import optimize_max_sharpe
 from app.compute.profile import compute_profile_weights, compute_profile_metrics
-from app.services.exchange_classifier import get_native_currency
 from app.models.analytics import RebalancingRow
+from app.services.portfolio_service import load_portfolio_data
 import pandas as pd
 
 router = APIRouter(prefix="/api/rebalancing", tags=["rebalancing"])
@@ -20,28 +17,15 @@ def suggestions(
     tc_model: str = Query(default="broker"),
     user_id: str = Depends(get_user_id),
 ):
-    db = get_admin_client()
-    settings_res = db.table("user_settings").select("*").eq("user_id", user_id).maybe_single().execute()
-    settings = settings_res.data or {}
-    base_currency = settings.get("base_currency", "USD")
+    summary, tickers, settings = load_portfolio_data(user_id)
+    if not tickers:
+        return []
+
     threshold = float(settings.get("rebalancing_threshold", 0.05))
     investor_profile = settings.get("investor_profile", "balanced")
     target_return = float(settings.get("target_return", 0.08))
     rfr = float(settings.get("risk_free_rate", 0.045))
     max_single = float(settings.get("max_single_asset", 0.40))
-
-    pos_res = db.table("positions").select("*").eq("user_id", user_id).execute()
-    positions = pos_res.data or []
-    if not positions:
-        return []
-
-    tickers = [p["ticker"] for p in positions if float(p.get("shares", 0)) > 0]
-    quotes = get_quotes(tickers)
-    currencies = list(set(get_native_currency(t) for t in tickers))
-    fx_rates = get_fx_rates(currencies, base=base_currency)
-
-    tx_res = db.table("transactions").select("*").eq("user_id", user_id).execute()
-    summary = build_portfolio(positions, quotes, fx_rates, base_currency, tx_res.data or [])
 
     rows_dicts = [r.model_dump() for r in summary.rows]
 
@@ -113,23 +97,9 @@ def required_for_max_sharpe(
       - max_sharpe_weights: {ticker: weight}
       - buy_plan: {ticker: {buy_value, buy_pct_of_contribution}}
     """
-    db = get_admin_client()
-    settings_res = db.table("user_settings").select("*").eq("user_id", user_id).maybe_single().execute()
-    settings = settings_res.data or {}
-    base_currency = settings.get("base_currency", "USD")
-
-    pos_res = db.table("positions").select("*").eq("user_id", user_id).execute()
-    positions = pos_res.data or []
-    if not positions:
+    summary, tickers, settings = load_portfolio_data(user_id)
+    if not tickers:
         return {"required_contribution": 0, "max_sharpe_weights": {}, "buy_plan": {}}
-
-    tickers = [p["ticker"] for p in positions if float(p.get("shares", 0)) > 0]
-    quotes = get_quotes(tickers)
-    currencies = list(set(get_native_currency(t) for t in tickers))
-    fx_rates = get_fx_rates(currencies, base=base_currency)
-
-    tx_res = db.table("transactions").select("*").eq("user_id", user_id).execute()
-    summary = build_portfolio(positions, quotes, fx_rates, base_currency, tx_res.data or [])
 
     # Get Max Sharpe weights
     hist = get_historical_multi(tickers, period=period)

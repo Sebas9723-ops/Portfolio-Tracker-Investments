@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useCallback, memo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchPositions, upsertPosition, deletePosition } from "@/lib/api/portfolio";
 import { fetchCash } from "@/lib/api/transactions";
@@ -18,13 +18,49 @@ import {
 
 const COLORS = ["#f3a712", "#4dff4d", "#ff4d4d", "#38b2ff", "#c084fc", "#fb923c", "#34d399"];
 
+interface PortfolioRow {
+  ticker: string; name: string; price_native: number; currency: string;
+  change_pct_1d: number; shares: number; value_base: number;
+  unrealized_pnl: number | null; unrealized_pnl_pct: number | null;
+  weight: number; data_source: string;
+}
+
+const PositionRow = memo(function PositionRow({
+  row, ccy, onDelete,
+}: { row: PortfolioRow; ccy: string; onDelete: (ticker: string) => void }) {
+  return (
+    <tr key={row.ticker}>
+      <td className="text-bloomberg-gold font-medium">{row.ticker}</td>
+      <td className="text-bloomberg-muted hidden sm:table-cell max-w-[120px] truncate">{row.name}</td>
+      <td className="text-right hidden md:table-cell">{fmtCurrency(row.price_native, row.currency)}</td>
+      <td className={`text-right ${colorClass(row.change_pct_1d)}`}>{fmtPct(row.change_pct_1d)}</td>
+      <td className="text-right text-bloomberg-muted hidden sm:table-cell">{row.shares.toFixed(4)}</td>
+      <td className="text-right">{fmtCurrency(row.value_base, ccy)}</td>
+      <td className={`text-right hidden sm:table-cell ${colorClass(row.unrealized_pnl)}`}>
+        {row.unrealized_pnl != null ? fmtCurrency(row.unrealized_pnl, ccy) : "—"}
+      </td>
+      <td className={`text-right ${colorClass(row.unrealized_pnl_pct)}`}>{fmtPct(row.unrealized_pnl_pct)}</td>
+      <td className="text-right text-bloomberg-muted hidden md:table-cell">{row.weight.toFixed(1)}%</td>
+      <td className="text-bloomberg-muted text-[10px] hidden lg:table-cell">{row.data_source}</td>
+      <td>
+        <button
+          onClick={() => { if (confirm(`Delete ${row.ticker}?`)) onDelete(row.ticker); }}
+          className="text-bloomberg-muted hover:text-bloomberg-red"
+        >
+          <Trash2 size={11} />
+        </button>
+      </td>
+    </tr>
+  );
+});
+
 export default function PortfolioPage() {
-  const { data: positions, isLoading } = useQuery({ queryKey: ["positions"], queryFn: fetchPositions });
-  const { data: cash } = useQuery({ queryKey: ["cash"], queryFn: fetchCash });
+  const { data: positions, isLoading } = useQuery({ queryKey: ["positions"], queryFn: fetchPositions, staleTime: 5 * 60 * 1000 });
+  const { data: cash } = useQuery({ queryKey: ["cash"], queryFn: fetchCash, staleTime: 5 * 60 * 1000 });
   const { data: portfolio } = usePortfolio();
-  const { data: rebalancing } = useQuery({ queryKey: ["rebalancing", 0, "broker"], queryFn: () => fetchRebalancing({}) });
-  const { data: analytics } = useQuery({ queryKey: ["analytics", "1y"], queryFn: () => fetchAnalytics("1y") });
-  const { data: fx } = useQuery({ queryKey: ["fxexposure"], queryFn: fetchFxExposure });
+  const { data: rebalancing } = useQuery({ queryKey: ["rebalancing", 0, "broker"], queryFn: () => fetchRebalancing({}), staleTime: 5 * 60 * 1000 });
+  const { data: analytics } = useQuery({ queryKey: ["analytics", "1y"], queryFn: () => fetchAnalytics("1y"), staleTime: 5 * 60 * 1000 });
+  const { data: fx } = useQuery({ queryKey: ["fxexposure"], queryFn: fetchFxExposure, staleTime: 5 * 60 * 1000 });
 
   const qc = useQueryClient();
   const base_currency = useSettingsStore((s) => s.base_currency);
@@ -40,6 +76,11 @@ export default function PortfolioPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["positions"] });
       qc.invalidateQueries({ queryKey: ["portfolio"] });
+      qc.invalidateQueries({ queryKey: ["cash"] });
+      qc.invalidateQueries({ queryKey: ["rebalancing"] });
+      qc.invalidateQueries({ queryKey: ["analytics"] });
+      qc.invalidateQueries({ queryKey: ["fxexposure"] });
+      qc.invalidateQueries({ queryKey: ["portfolioBreakdown"] });
       setShowForm(false);
       setForm({ ticker: "", name: "", shares: "", avg_cost_native: "", currency: "USD" });
     },
@@ -50,8 +91,15 @@ export default function PortfolioPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["positions"] });
       qc.invalidateQueries({ queryKey: ["portfolio"] });
+      qc.invalidateQueries({ queryKey: ["cash"] });
+      qc.invalidateQueries({ queryKey: ["rebalancing"] });
+      qc.invalidateQueries({ queryKey: ["analytics"] });
+      qc.invalidateQueries({ queryKey: ["fxexposure"] });
+      qc.invalidateQueries({ queryKey: ["portfolioBreakdown"] });
     },
   });
+
+  const handleDelete = useCallback((ticker: string) => delMutation.mutate(ticker), [delMutation]);
 
   if (isLoading) return <div className="text-bloomberg-muted text-xs p-4">Loading…</div>;
 
@@ -174,26 +222,7 @@ export default function PortfolioPage() {
               </thead>
               <tbody>
                 {portfolio.rows.map((row) => (
-                  <tr key={row.ticker}>
-                    <td className="text-bloomberg-gold font-medium">{row.ticker}</td>
-                    <td className="text-bloomberg-muted hidden sm:table-cell max-w-[120px] truncate">{row.name}</td>
-                    <td className="text-right hidden md:table-cell">{fmtCurrency(row.price_native, row.currency)}</td>
-                    <td className={`text-right ${colorClass(row.change_pct_1d)}`}>{fmtPct(row.change_pct_1d)}</td>
-                    <td className="text-right text-bloomberg-muted hidden sm:table-cell">{row.shares.toFixed(4)}</td>
-                    <td className="text-right">{fmtCurrency(row.value_base, ccy)}</td>
-                    <td className={`text-right hidden sm:table-cell ${colorClass(row.unrealized_pnl)}`}>
-                      {row.unrealized_pnl != null ? fmtCurrency(row.unrealized_pnl, ccy) : "—"}
-                    </td>
-                    <td className={`text-right ${colorClass(row.unrealized_pnl_pct)}`}>{fmtPct(row.unrealized_pnl_pct)}</td>
-                    <td className="text-right text-bloomberg-muted hidden md:table-cell">{row.weight.toFixed(1)}%</td>
-                    <td className="text-bloomberg-muted text-[10px] hidden lg:table-cell">{row.data_source}</td>
-                    <td>
-                      <button onClick={() => { if (confirm(`Delete ${row.ticker}?`)) delMutation.mutate(row.ticker); }}
-                        className="text-bloomberg-muted hover:text-bloomberg-red">
-                        <Trash2 size={11} />
-                      </button>
-                    </td>
-                  </tr>
+                  <PositionRow key={row.ticker} row={row} ccy={ccy} onDelete={handleDelete} />
                 ))}
               </tbody>
             </table>

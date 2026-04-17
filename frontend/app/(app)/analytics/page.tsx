@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAnalytics, fetchRollingMetrics, fetchExtendedAnalytics, fetchVolRegime } from "@/lib/api/analytics";
 import { useSettingsStore } from "@/lib/store/settingsStore";
@@ -44,21 +44,25 @@ export default function AnalyticsPage() {
   const { data, isLoading } = useQuery({
     queryKey: ["analytics", period, preferred_benchmark],
     queryFn: () => fetchAnalytics(period, preferred_benchmark),
+    staleTime: 5 * 60 * 1000,
   });
 
   const { data: rollingFull } = useQuery({
     queryKey: ["rolling-full", period, rolling_window],
     queryFn: () => fetchRollingMetrics(rolling_window, period),
+    staleTime: 5 * 60 * 1000,
   });
 
   const { data: extended } = useQuery({
     queryKey: ["extended-analytics", period],
     queryFn: () => fetchExtendedAnalytics(period),
+    staleTime: 5 * 60 * 1000,
   });
 
   const { data: volRegime } = useQuery({
     queryKey: ["vol-regime", period],
     queryFn: () => fetchVolRegime(period, 21),
+    staleTime: 5 * 60 * 1000,
   });
 
   if (isLoading) return <div className="text-bloomberg-muted text-xs p-4">Computing analytics…</div>;
@@ -85,9 +89,9 @@ export default function AnalyticsPage() {
   const lowThr = volRegime?.low_threshold ?? 0;
   const highThr = volRegime?.high_threshold ?? 0;
 
-  const highVolRanges = getRegimeRanges(vrSeries, "high");
+  const highVolRanges = useMemo(() => getRegimeRanges(vrSeries, "high"), [vrSeries]);
   // Downsample vol-regime series to reduce chart points
-  const vrChart = vrSeries.filter((_, i) => i % 2 === 0);
+  const vrChart = useMemo(() => vrSeries.filter((_, i) => i % 2 === 0), [vrSeries]);
 
   return (
     <div className="space-y-4">

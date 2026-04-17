@@ -18,6 +18,7 @@ export default function TechnicalsPage() {
   const { data, isLoading } = useQuery({
     queryKey: ["technicals", ticker, period],
     queryFn: () => fetchTechnicals(ticker, period),
+    staleTime: 5 * 60 * 1000,
     enabled: !!ticker,
   });
 

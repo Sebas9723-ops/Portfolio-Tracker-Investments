@@ -12,11 +12,11 @@ _lock = Lock()
 
 # TTLs in seconds
 TTL_QUOTES = 60
-TTL_HISTORICAL = 900
+TTL_HISTORICAL = 3600
 TTL_FX = 300
 TTL_FUNDAMENTALS = 3600
 TTL_RFR = 86400
-TTL_FRONTIER = 900
+TTL_FRONTIER = 3600
 
 
 def get(key: str) -> Optional[Any]:

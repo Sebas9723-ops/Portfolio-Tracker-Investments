@@ -11,7 +11,7 @@ const ACTIONS: TransactionAction[] = ["BUY", "SELL", "DIVIDEND", "SPLIT", "FEE"]
 const initForm = { ticker: "", date: new Date().toISOString().split("T")[0], action: "BUY" as TransactionAction, quantity: "", price_native: "", fee_native: "0", currency: "USD", comment: "" };
 
 export default function TransactionsPage() {
-  const { data: transactions, isLoading } = useQuery({ queryKey: ["transactions"], queryFn: fetchTransactions });
+  const { data: transactions, isLoading } = useQuery({ queryKey: ["transactions"], queryFn: fetchTransactions, staleTime: 5 * 60 * 1000 });
   const qc = useQueryClient();
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(initForm);

@@ -13,6 +13,7 @@ export default function NewsPage() {
     queryKey: ["news", tickers.slice(0, 5).sort().join(",")],
     queryFn: () => fetchNews(tickers.slice(0, 5)),
     enabled: tickers.length > 0,
+    staleTime: 5 * 60 * 1000,
     refetchInterval: 300_000, // 5 min
   });
 

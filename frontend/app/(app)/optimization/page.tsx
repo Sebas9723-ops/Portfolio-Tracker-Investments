@@ -159,7 +159,7 @@ export default function OptimizationPage() {
   const { data: result, isFetching: pendingFrontier } = useQuery({
     queryKey: ["frontier", maxSingle, N_SIM, period, profile],
     queryFn: () => fetchFrontier({ max_single_asset: maxSingle, n_simulations: N_SIM, period, profile }),
-    staleTime: 0,
+    staleTime: 10 * 60 * 1000,
   });
 
   // Persist all three frontier reference points so Contribution Planner can

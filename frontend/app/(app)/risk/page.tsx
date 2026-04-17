@@ -15,11 +15,11 @@ const COLORS = ["#f3a712", "#4dff4d", "#38b2ff", "#ff4d4d", "#c084fc", "#fb923c"
 export default function RiskPage() {
   const { openWith } = useAIChat();
   const [confidence, setConfidence] = useState(0.95);
-  const { data: varData, isLoading: varLoading } = useQuery({ queryKey: ["var", confidence], queryFn: () => fetchVaR(confidence) });
-  const { data: stress } = useQuery({ queryKey: ["stress"], queryFn: fetchStressTest });
-  const { data: corr } = useQuery({ queryKey: ["correlation"], queryFn: () => fetchCorrelation() });
-  const { data: budget } = useQuery({ queryKey: ["riskbudget"], queryFn: () => fetchRiskBudget() });
-  const { data: fx } = useQuery({ queryKey: ["fxexposure"], queryFn: fetchFxExposure });
+  const { data: varData, isLoading: varLoading } = useQuery({ queryKey: ["var", confidence], queryFn: () => fetchVaR(confidence), staleTime: 5 * 60 * 1000 });
+  const { data: stress } = useQuery({ queryKey: ["stress"], queryFn: fetchStressTest, staleTime: 5 * 60 * 1000 });
+  const { data: corr } = useQuery({ queryKey: ["correlation"], queryFn: () => fetchCorrelation(), staleTime: 5 * 60 * 1000 });
+  const { data: budget } = useQuery({ queryKey: ["riskbudget"], queryFn: () => fetchRiskBudget(), staleTime: 5 * 60 * 1000 });
+  const { data: fx } = useQuery({ queryKey: ["fxexposure"], queryFn: fetchFxExposure, staleTime: 5 * 60 * 1000 });
 
   return (
     <div className="space-y-4">
