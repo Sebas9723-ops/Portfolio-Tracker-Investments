@@ -75,15 +75,16 @@ export default function TechnicalsPage() {
             <ComposedChart data={chartData} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1e2535" />
               <XAxis dataKey="date" tick={{ fontSize: 9, fill: "#8a9bb5" }} tickLine={false} interval="preserveStartEnd" />
-              <YAxis tick={{ fontSize: 9, fill: "#8a9bb5" }} tickLine={false} axisLine={false} width={45} />
+              <YAxis yAxisId="price" tick={{ fontSize: 9, fill: "#8a9bb5" }} tickLine={false} axisLine={false} width={45} />
+              <YAxis yAxisId="vol" orientation="right" hide />
               <Tooltip contentStyle={{ background: "#111820", border: "1px solid #1e2535", fontSize: 10 }} />
               <Bar dataKey="volume" fill="#1e2535" yAxisId="vol" opacity={0.5} />
-              <Line type="monotone" dataKey="close" stroke="#d4dde8" strokeWidth={1.5} dot={false} name="Close" />
-              <Line type="monotone" dataKey="sma20" stroke="#f3a712" strokeWidth={1} dot={false} name="SMA20" />
-              <Line type="monotone" dataKey="sma50" stroke="#38b2ff" strokeWidth={1} dot={false} name="SMA50" strokeDasharray="3 3" />
-              <Line type="monotone" dataKey="sma200" stroke="#c084fc" strokeWidth={1} dot={false} name="SMA200" strokeDasharray="5 5" />
-              <Line type="monotone" dataKey="bb_upper" stroke="#ff4d4d" strokeWidth={0.5} dot={false} name="BB Upper" strokeDasharray="2 2" />
-              <Line type="monotone" dataKey="bb_lower" stroke="#4dff4d" strokeWidth={0.5} dot={false} name="BB Lower" strokeDasharray="2 2" />
+              <Line yAxisId="price" type="monotone" dataKey="close" stroke="#d4dde8" strokeWidth={1.5} dot={false} name="Close" />
+              <Line yAxisId="price" type="monotone" dataKey="sma20" stroke="#f3a712" strokeWidth={1} dot={false} name="SMA20" />
+              <Line yAxisId="price" type="monotone" dataKey="sma50" stroke="#38b2ff" strokeWidth={1} dot={false} name="SMA50" strokeDasharray="3 3" />
+              <Line yAxisId="price" type="monotone" dataKey="sma200" stroke="#c084fc" strokeWidth={1} dot={false} name="SMA200" strokeDasharray="5 5" />
+              <Line yAxisId="price" type="monotone" dataKey="bb_upper" stroke="#ff4d4d" strokeWidth={0.5} dot={false} name="BB Upper" strokeDasharray="2 2" />
+              <Line yAxisId="price" type="monotone" dataKey="bb_lower" stroke="#4dff4d" strokeWidth={0.5} dot={false} name="BB Lower" strokeDasharray="2 2" />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
