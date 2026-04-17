@@ -7,6 +7,7 @@ import { useSettingsStore } from "@/lib/store/settingsStore";
 import { fetchSettings } from "@/lib/api/settings";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
+import { BottomNav } from "@/components/layout/BottomNav";
 
 const VALID_PROFILES = new Set(["conservative", "base", "aggressive"]);
 
@@ -16,6 +17,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const setSettings = useSettingsStore((s) => s.setSettings);
   const setProfile = useProfileStore((s) => s.setProfile);
   const [hydrated, setHydrated] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
     useProfileStore.persist.rehydrate();
@@ -23,17 +25,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (hydrated && !isAuthenticated) {
-      router.push("/login");
-    }
+    if (hydrated && !isAuthenticated) router.push("/login");
   }, [hydrated, isAuthenticated, router]);
 
-  // Bootstrap settings from DB on every app load — syncs both stores to DB truth.
   useEffect(() => {
     if (hydrated && isAuthenticated) {
       fetchSettings().then((data) => {
         setSettings(data);
-        // Sync profileStore so it always matches investor_profile in DB
         if (data.investor_profile && VALID_PROFILES.has(data.investor_profile)) {
           setProfile(data.investor_profile as InvestorProfile);
         }
@@ -45,11 +43,17 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <Sidebar />
-      <div className="flex flex-col flex-1 overflow-hidden">
-        <TopBar />
-        <main className="flex-1 overflow-y-auto p-4">{children}</main>
+      <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+
+      <div className="flex flex-col flex-1 overflow-hidden min-w-0">
+        <TopBar onMenuClick={() => setSidebarOpen(true)} />
+        {/* Extra bottom padding on mobile so content isn't behind BottomNav */}
+        <main className="flex-1 overflow-y-auto p-3 sm:p-4 pb-20 lg:pb-4">
+          {children}
+        </main>
       </div>
+
+      <BottomNav onMenuClick={() => setSidebarOpen(true)} />
     </div>
   );
 }

@@ -1,30 +1,44 @@
 "use client";
+import { Menu, RefreshCw } from "lucide-react";
 import { useMarketQuotes } from "@/lib/hooks/useMarketQuotes";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { fmtCurrency, fmtPct, colorClass } from "@/lib/formatters";
-import { RefreshCw } from "lucide-react";
 
 const WATCH_TICKERS = ["VOO", "QQQM", "^GSPC", "^VIX"];
 const LABELS: Record<string, string> = {
   "VOO": "S&P500 ETF", "QQQM": "NASDAQ ETF", "^GSPC": "S&P500", "^VIX": "VIX",
 };
 
-export function TopBar() {
+interface TopBarProps {
+  onMenuClick: () => void;
+}
+
+export function TopBar({ onMenuClick }: TopBarProps) {
   const { data: quotes, isFetching } = useMarketQuotes(WATCH_TICKERS);
   const base_currency = useSettingsStore((s) => s.base_currency);
 
   return (
     <header
-      className="h-9 flex items-center justify-between px-4 shrink-0 text-xs bg-white"
+      className="h-9 flex items-center justify-between px-3 shrink-0 text-xs bg-white"
       style={{ borderBottom: "1px solid #e2e8f0" }}
     >
-      {/* Market watch strip */}
-      <div className="flex items-center gap-6">
+      {/* Hamburger — only on mobile/tablet */}
+      <button
+        onClick={onMenuClick}
+        className="lg:hidden flex items-center justify-center w-7 h-7 text-bloomberg-muted hover:text-bloomberg-text mr-2 shrink-0"
+        aria-label="Open menu"
+      >
+        <Menu size={16} />
+      </button>
+
+      {/* Market watch strip — scrollable on small screens */}
+      <div className="flex items-center gap-4 overflow-x-auto flex-1 min-w-0 scrollbar-none">
         {WATCH_TICKERS.map((t) => {
           const q = quotes?.[t];
           return (
-            <span key={t} className="flex items-center gap-1.5">
-              <span className="text-bloomberg-muted">{LABELS[t] || t}</span>
+            <span key={t} className="flex items-center gap-1 shrink-0">
+              <span className="text-bloomberg-muted hidden sm:inline">{LABELS[t] || t}</span>
+              <span className="text-bloomberg-muted sm:hidden">{t.replace("^", "")}</span>
               {q ? (
                 <>
                   <span className="text-bloomberg-text font-medium">{fmtCurrency(q.price)}</span>
@@ -38,17 +52,16 @@ export function TopBar() {
         })}
       </div>
 
-      {/* Status + currency indicator */}
-      <div className="flex items-center gap-3 text-bloomberg-muted">
-        {isFetching && <RefreshCw size={11} className="animate-spin text-bloomberg-muted" />}
+      {/* Status + currency */}
+      <div className="flex items-center gap-2 text-bloomberg-muted shrink-0 ml-2">
+        {isFetching && <RefreshCw size={11} className="animate-spin" />}
         <span
           className="text-[10px] font-bold px-2 py-0.5 border"
           style={{ borderColor: "#f3a712", color: "#f3a712" }}
-          title="Moneda base del portfolio"
         >
           {base_currency}
         </span>
-        <span className="text-bloomberg-text-dim">
+        <span className="text-bloomberg-text-dim hidden sm:inline">
           {new Date().toLocaleTimeString("en-US", { hour12: false })}
         </span>
       </div>
