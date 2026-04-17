@@ -103,7 +103,7 @@ export default function SettingsPage() {
       {/* ── General settings ──────────────────────────────────────────────── */}
       <div className="bbg-card space-y-4">
         <p className="bbg-header">Portfolio Settings</p>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {field("Preferred Benchmark", "preferred_benchmark", "text", BENCHMARKS)}
           {field("Broker / TC Model", "tc_model", "text", TC_MODELS)}
           {field("Investor Profile", "investor_profile", "text", ["conservative", "base", "aggressive"])}
@@ -112,7 +112,7 @@ export default function SettingsPage() {
 
       <div className="bbg-card space-y-4">
         <p className="bbg-header">Risk Parameters</p>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {field("Risk-Free Rate (decimal)", "risk_free_rate", "number")}
           {field("Rolling Window (days)", "rolling_window", "number")}
           {field("Rebalancing Threshold", "rebalancing_threshold", "number")}

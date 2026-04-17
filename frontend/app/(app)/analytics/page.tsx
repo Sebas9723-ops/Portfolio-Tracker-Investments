@@ -358,7 +358,9 @@ export default function AnalyticsPage() {
               <thead>
                 <tr>
                   <th className="text-left">Year</th>
-                  {MONTHS_SHORT.map((m) => <th key={m}>{m}</th>)}
+                  {MONTHS_SHORT.map((m, i) => (
+                    <th key={m} className={i % 3 !== 0 ? "hidden sm:table-cell" : ""}>{m}</th>
+                  ))}
                   <th>Full Yr</th>
                 </tr>
               </thead>
@@ -373,7 +375,7 @@ export default function AnalyticsPage() {
                         const m = yearData.find((d) => d.month === i + 1);
                         const v = m?.portfolio_return;
                         return (
-                          <td key={i} className={v == null ? "muted" : v >= 0 ? "positive" : "negative"}>
+                          <td key={i} className={`${v == null ? "muted" : v >= 0 ? "positive" : "negative"}${i % 3 !== 0 ? " hidden sm:table-cell" : ""}`}>
                             {v != null ? `${v.toFixed(1)}%` : "—"}
                           </td>
                         );

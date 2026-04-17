@@ -61,7 +61,7 @@ export default function TransactionsPage() {
                 <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">{field}</label>
                 <input
                   type={["date"].includes(field) ? "date" : ["quantity", "price_native", "fee_native"].includes(field) ? "number" : "text"}
-                  className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
+                  className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-2 sm:py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
                   value={(form as Record<string, string>)[field]}
                   onChange={(e) => setForm((f) => ({ ...f, [field]: e.target.value }))}
                   step="any"
@@ -71,7 +71,7 @@ export default function TransactionsPage() {
             <div>
               <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">Action</label>
               <select
-                className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
+                className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-2 sm:py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
                 value={form.action}
                 onChange={(e) => setForm((f) => ({ ...f, action: e.target.value as TransactionAction }))}
               >
@@ -111,9 +111,13 @@ export default function TransactionsPage() {
               <thead>
                 <tr>
                   <th>Date</th><th>Ticker</th><th>Action</th>
-                  <th className="text-right">Qty</th><th className="text-right">Price</th>
-                  <th className="text-right">Fee</th><th className="text-right">Total</th>
-                  <th>CCY</th><th>Comment</th><th></th>
+                  <th className="text-right hidden sm:table-cell">Qty</th>
+                  <th className="text-right hidden sm:table-cell">Price</th>
+                  <th className="text-right hidden md:table-cell">Fee</th>
+                  <th className="text-right">Total</th>
+                  <th className="hidden md:table-cell">CCY</th>
+                  <th className="hidden lg:table-cell">Comment</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
@@ -126,14 +130,14 @@ export default function TransactionsPage() {
                       <td className={tx.action === "BUY" ? "positive" : tx.action === "SELL" ? "negative" : "muted"}>
                         {tx.action}
                       </td>
-                      <td className="text-right">{tx.quantity.toFixed(4)}</td>
-                      <td className="text-right">{fmtCurrency(tx.price_native, tx.currency)}</td>
-                      <td className="text-right text-bloomberg-muted">{fmtCurrency(tx.fee_native, tx.currency)}</td>
+                      <td className="text-right hidden sm:table-cell">{tx.quantity.toFixed(4)}</td>
+                      <td className="text-right hidden sm:table-cell">{fmtCurrency(tx.price_native, tx.currency)}</td>
+                      <td className="text-right text-bloomberg-muted hidden md:table-cell">{fmtCurrency(tx.fee_native, tx.currency)}</td>
                       <td className={`text-right ${colorClass(tx.action === "SELL" ? 1 : -1)}`}>
                         {fmtCurrency(tx.action === "SELL" ? total : -total, tx.currency)}
                       </td>
-                      <td className="text-bloomberg-muted">{tx.currency}</td>
-                      <td className="text-bloomberg-muted text-[10px]">{tx.comment || "—"}</td>
+                      <td className="text-bloomberg-muted hidden md:table-cell">{tx.currency}</td>
+                      <td className="text-bloomberg-muted text-[10px] hidden lg:table-cell">{tx.comment || "—"}</td>
                       <td>
                         <button onClick={() => { if (confirm("Delete?")) delMut.mutate(tx.id); }}
                           className="text-bloomberg-muted hover:text-bloomberg-red">

@@ -67,20 +67,26 @@ html, body {
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  padding: 8px 12px;
+  padding: 6px 8px;
   border-bottom: 1px solid var(--border);
   text-align: left;
   white-space: nowrap;
 }
 .bbg-table td {
-  padding: 9px 12px;
+  padding: 7px 8px;
   border-bottom: 1px solid #f1f5f9;
-  font-size: 12.5px;
+  font-size: 12px;
   white-space: nowrap;
   color: var(--text);
 }
 .bbg-table tr:last-child td { border-bottom: none; }
 .bbg-table tr:hover td { background: #f8fafc; }
+
+/* Desktop: restore comfortable padding */
+@media (min-width: 640px) {
+  .bbg-table th { padding: 8px 12px; }
+  .bbg-table td { padding: 9px 12px; font-size: 12.5px; }
+}
 
 /* ── Helpers ───────────────────────────────────────────────────────────────── */
 .positive { color: var(--green); }

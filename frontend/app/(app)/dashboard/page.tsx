@@ -93,16 +93,16 @@ const PositionRow = memo(function PositionRow({ row, ccy }: { row: PortfolioRow;
   const totalBuyIn = row.avg_cost_native != null ? row.avg_cost_native * row.shares : null;
   return (
     <tr className="border-b border-bloomberg-border/40 hover:bg-bloomberg-card transition-colors">
-      <td className="py-3 pr-4">
-        <div className="flex items-center gap-2.5">
+      <td className="py-2.5 pr-3">
+        <div className="flex items-center gap-2">
           <TickerBadge ticker={row.ticker} />
           <div className="min-w-0">
-            <p className="text-bloomberg-text font-medium truncate max-w-[180px]">{row.name}</p>
-            <p className="text-bloomberg-muted text-[10px]">{row.ticker} · {row.shares.toFixed(3)} shares</p>
+            <p className="text-bloomberg-text font-medium truncate max-w-[100px] sm:max-w-[160px] md:max-w-[200px]">{row.name}</p>
+            <p className="text-bloomberg-muted text-[10px]">{row.ticker} · {row.shares.toFixed(3)}</p>
           </div>
         </div>
       </td>
-      <td className="py-3 text-right">
+      <td className="py-2.5 text-right hidden sm:table-cell">
         {totalBuyIn != null ? (
           <>
             <p className="text-bloomberg-text">{fmtCurrency(totalBuyIn, row.currency)}</p>
@@ -112,7 +112,7 @@ const PositionRow = memo(function PositionRow({ row, ccy }: { row: PortfolioRow;
           <span className="text-bloomberg-muted">—</span>
         )}
       </td>
-      <td className="py-3 text-right">
+      <td className="py-2.5 text-right">
         <p className="text-bloomberg-text font-medium">{fmtCurrency(row.value_base, ccy)}</p>
         <p className="text-bloomberg-muted text-[10px]">
           {fmtCurrency(row.price_native, row.currency)}
@@ -123,7 +123,7 @@ const PositionRow = memo(function PositionRow({ row, ccy }: { row: PortfolioRow;
           )}
         </p>
       </td>
-      <td className="py-3 text-right">
+      <td className="py-2.5 text-right">
         {row.unrealized_pnl != null ? (
           <>
             <p className={row.unrealized_pnl >= 0 ? "text-green-400 font-medium" : "text-red-400 font-medium"}>
@@ -137,7 +137,7 @@ const PositionRow = memo(function PositionRow({ row, ccy }: { row: PortfolioRow;
           <span className="text-bloomberg-muted">—</span>
         )}
       </td>
-      <td className="py-3 text-right">
+      <td className="py-2.5 text-right hidden md:table-cell">
         <p className="text-bloomberg-muted">{row.weight.toFixed(1)}%</p>
         <div className="w-12 h-0.5 bg-bloomberg-border ml-auto mt-1 rounded">
           <div className="h-0.5 rounded" style={{ width: `${Math.min(row.weight, 100)}%`, backgroundColor: tickerBadgeColor(row.ticker) }} />
@@ -278,10 +278,10 @@ export default function DashboardPage() {
       </div>
 
       {/* Two-column layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
 
         {/* ── LEFT COLUMN ── */}
-        <div className="lg:col-span-2 space-y-4">
+        <div className="md:col-span-2 space-y-4">
 
           {/* Hero: Value + Chart */}
           <div className="bbg-card">
@@ -354,10 +354,10 @@ export default function DashboardPage() {
                 <thead>
                   <tr className="border-b border-bloomberg-border">
                     <th className="text-left pb-2 text-bloomberg-muted text-[10px] font-normal">Title</th>
-                    <th className="text-right pb-2 text-bloomberg-muted text-[10px] font-normal">Buy In</th>
+                    <th className="text-right pb-2 text-bloomberg-muted text-[10px] font-normal hidden sm:table-cell">Buy In</th>
                     <th className="text-right pb-2 text-bloomberg-muted text-[10px] font-normal">Position</th>
                     <th className="text-right pb-2 text-bloomberg-muted text-[10px] font-normal">P/L</th>
-                    <th className="text-right pb-2 text-bloomberg-muted text-[10px] font-normal">Weight</th>
+                    <th className="text-right pb-2 text-bloomberg-muted text-[10px] font-normal hidden md:table-cell">Weight</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -381,7 +381,7 @@ export default function DashboardPage() {
               </Link>
             </div>
 
-            <div className="grid grid-cols-4 gap-2 mb-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
               {[
                 { label: "Total Received", value: fmtCurrency(totalDivReceived, ccy) },
                 { label: "Yield TTM", value: divYieldTTM > 0 ? fmtPct(divYieldTTM) : "—" },

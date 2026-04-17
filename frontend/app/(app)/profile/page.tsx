@@ -134,7 +134,7 @@ export default function ProfilePage() {
   const currentData = data?.current;
 
   return (
-    <div className="p-6 space-y-6 max-w-4xl">
+    <div className="space-y-4 sm:space-y-6 max-w-4xl">
       <div>
         <h1 className="text-lg font-bold text-bloomberg-text">Investor Profile</h1>
         <p className="text-xs text-bloomberg-muted mt-1">
@@ -143,7 +143,7 @@ export default function ProfilePage() {
       </div>
 
       {/* Profile selector */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {PROFILES.map((p) => {
           const isActive = activeProfile === p.key;
           const pd = data?.profiles?.[p.key];
@@ -242,7 +242,7 @@ export default function ProfilePage() {
       )}
 
       {!isLoading && activeData && currentData && (
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           <MetricCard
             label="Annual Return"
             value={`${activeData.metrics.ann_return?.toFixed(1)}%`}

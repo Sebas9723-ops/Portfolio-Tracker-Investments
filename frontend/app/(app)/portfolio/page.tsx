@@ -160,15 +160,15 @@ export default function PortfolioPage() {
               <thead>
                 <tr>
                   <th>Ticker</th>
-                  <th>Name</th>
-                  <th className="text-right">Price</th>
+                  <th className="hidden sm:table-cell">Name</th>
+                  <th className="text-right hidden md:table-cell">Price</th>
                   <th className="text-right">1D%</th>
-                  <th className="text-right">Shares</th>
+                  <th className="text-right hidden sm:table-cell">Shares</th>
                   <th className="text-right">Value</th>
-                  <th className="text-right">P&L</th>
+                  <th className="text-right hidden sm:table-cell">P&L</th>
                   <th className="text-right">P&L%</th>
-                  <th className="text-right">Weight%</th>
-                  <th>Src</th>
+                  <th className="text-right hidden md:table-cell">Weight%</th>
+                  <th className="hidden lg:table-cell">Src</th>
                   <th></th>
                 </tr>
               </thead>
@@ -176,17 +176,17 @@ export default function PortfolioPage() {
                 {portfolio.rows.map((row) => (
                   <tr key={row.ticker}>
                     <td className="text-bloomberg-gold font-medium">{row.ticker}</td>
-                    <td className="text-bloomberg-muted">{row.name}</td>
-                    <td className="text-right">{fmtCurrency(row.price_native, row.currency)}</td>
+                    <td className="text-bloomberg-muted hidden sm:table-cell max-w-[120px] truncate">{row.name}</td>
+                    <td className="text-right hidden md:table-cell">{fmtCurrency(row.price_native, row.currency)}</td>
                     <td className={`text-right ${colorClass(row.change_pct_1d)}`}>{fmtPct(row.change_pct_1d)}</td>
-                    <td className="text-right text-bloomberg-muted">{row.shares.toFixed(4)}</td>
+                    <td className="text-right text-bloomberg-muted hidden sm:table-cell">{row.shares.toFixed(4)}</td>
                     <td className="text-right">{fmtCurrency(row.value_base, ccy)}</td>
-                    <td className={`text-right ${colorClass(row.unrealized_pnl)}`}>
+                    <td className={`text-right hidden sm:table-cell ${colorClass(row.unrealized_pnl)}`}>
                       {row.unrealized_pnl != null ? fmtCurrency(row.unrealized_pnl, ccy) : "—"}
                     </td>
                     <td className={`text-right ${colorClass(row.unrealized_pnl_pct)}`}>{fmtPct(row.unrealized_pnl_pct)}</td>
-                    <td className="text-right text-bloomberg-muted">{row.weight.toFixed(1)}%</td>
-                    <td className="text-bloomberg-muted text-[10px]">{row.data_source}</td>
+                    <td className="text-right text-bloomberg-muted hidden md:table-cell">{row.weight.toFixed(1)}%</td>
+                    <td className="text-bloomberg-muted text-[10px] hidden lg:table-cell">{row.data_source}</td>
                     <td>
                       <button onClick={() => { if (confirm(`Delete ${row.ticker}?`)) delMutation.mutate(row.ticker); }}
                         className="text-bloomberg-muted hover:text-bloomberg-red">

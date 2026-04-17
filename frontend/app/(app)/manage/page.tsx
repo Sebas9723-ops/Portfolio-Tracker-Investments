@@ -211,7 +211,7 @@ export default function ManagePage() {
                   type="text"
                   value={posForm.ticker}
                   onChange={(e) => setPosForm((p) => ({ ...p, ticker: e.target.value.toUpperCase() }))}
-                  className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
+                  className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-2 sm:py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
                 />
               </div>
               <div>
@@ -220,7 +220,7 @@ export default function ManagePage() {
                   type="text"
                   value={posForm.name}
                   onChange={(e) => setPosForm((p) => ({ ...p, name: e.target.value }))}
-                  className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
+                  className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-2 sm:py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
                 />
               </div>
               <div>
@@ -230,7 +230,7 @@ export default function ManagePage() {
                   step="any"
                   value={posForm.shares}
                   onChange={(e) => setPosForm((p) => ({ ...p, shares: e.target.value }))}
-                  className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
+                  className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-2 sm:py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
                 />
               </div>
               <div>
@@ -240,7 +240,7 @@ export default function ManagePage() {
                   step="any"
                   value={posForm.avg_cost_native}
                   onChange={(e) => setPosForm((p) => ({ ...p, avg_cost_native: e.target.value }))}
-                  className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
+                  className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-2 sm:py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
                 />
               </div>
               <div>
@@ -248,7 +248,7 @@ export default function ManagePage() {
                 <select
                   value={posForm.currency}
                   onChange={(e) => setPosForm((p) => ({ ...p, currency: e.target.value }))}
-                  className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
+                  className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-2 sm:py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
                 >
                   {CURRENCIES.map((c) => <option key={c}>{c}</option>)}
                 </select>
@@ -259,7 +259,7 @@ export default function ManagePage() {
                   type="date"
                   value={posForm.date}
                   onChange={(e) => setPosForm((p) => ({ ...p, date: e.target.value }))}
-                  className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
+                  className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-2 sm:py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
                 />
               </div>
             </div>
@@ -302,11 +302,11 @@ export default function ManagePage() {
               <thead>
                 <tr>
                   <th>Ticker</th>
-                  <th>Name</th>
+                  <th className="hidden sm:table-cell">Name</th>
                   <th className="text-right">Shares</th>
-                  <th className="text-right">Avg Cost (USD)</th>
-                  <th>CCY</th>
-                  <th>Market</th>
+                  <th className="text-right hidden sm:table-cell">Avg Cost (USD)</th>
+                  <th className="hidden md:table-cell">CCY</th>
+                  <th className="hidden md:table-cell">Market</th>
                   <th className="text-center">Actions</th>
                 </tr>
               </thead>
@@ -318,12 +318,12 @@ export default function ManagePage() {
                   return (
                     <tr key={pos.ticker} className={isEditing ? "bg-bloomberg-card" : ""}>
                       <td className="text-bloomberg-gold font-medium">{pos.ticker}</td>
-                      <td>
+                      <td className="hidden sm:table-cell">
                         {isEditing ? (
                           <input
                             value={row.name}
                             onChange={(e) => setEditing((ed) => ({ ...ed, [pos.ticker]: { ...ed[pos.ticker], name: e.target.value } }))}
-                            className="bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-0.5 text-xs w-32 focus:outline-none focus:border-bloomberg-gold"
+                            className="bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1.5 sm:py-0.5 text-xs w-full sm:w-32 focus:outline-none focus:border-bloomberg-gold"
                           />
                         ) : (
                           <span className="text-bloomberg-muted">{pos.name}</span>
@@ -336,20 +336,20 @@ export default function ManagePage() {
                             step="any"
                             value={row.shares}
                             onChange={(e) => setEditing((ed) => ({ ...ed, [pos.ticker]: { ...ed[pos.ticker], shares: e.target.value } }))}
-                            className="bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-0.5 text-xs w-28 text-right focus:outline-none focus:border-bloomberg-gold"
+                            className="bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1.5 sm:py-0.5 text-xs w-20 sm:w-28 text-right focus:outline-none focus:border-bloomberg-gold"
                           />
                         ) : (
                           <span>{pos.shares.toFixed(4)}</span>
                         )}
                       </td>
-                      <td className="text-right">
+                      <td className="text-right hidden sm:table-cell">
                         {isEditing ? (
                           <input
                             type="number"
                             step="any"
                             value={row.avg_cost_native}
                             onChange={(e) => setEditing((ed) => ({ ...ed, [pos.ticker]: { ...ed[pos.ticker], avg_cost_native: e.target.value } }))}
-                            className="bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-0.5 text-xs w-28 text-right focus:outline-none focus:border-bloomberg-gold"
+                            className="bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1.5 sm:py-0.5 text-xs w-full sm:w-28 text-right focus:outline-none focus:border-bloomberg-gold"
                           />
                         ) : (
                           <span className="text-bloomberg-muted">
@@ -357,12 +357,12 @@ export default function ManagePage() {
                           </span>
                         )}
                       </td>
-                      <td>
+                      <td className="hidden md:table-cell">
                         {isEditing ? (
                           <select
                             value={row.currency}
                             onChange={(e) => setEditing((ed) => ({ ...ed, [pos.ticker]: { ...ed[pos.ticker], currency: e.target.value } }))}
-                            className="bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-1 py-0.5 text-xs"
+                            className="bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-1 py-1.5 sm:py-0.5 text-xs"
                           >
                             {CURRENCIES.map((c) => <option key={c}>{c}</option>)}
                           </select>
@@ -370,7 +370,7 @@ export default function ManagePage() {
                           <span className="text-bloomberg-muted">{pos.currency}</span>
                         )}
                       </td>
-                      <td className="text-bloomberg-muted">{pos.market}</td>
+                      <td className="text-bloomberg-muted hidden md:table-cell">{pos.market}</td>
                       <td className="text-center">
                         <div className="flex items-center justify-center gap-2">
                           {isEditing ? (
