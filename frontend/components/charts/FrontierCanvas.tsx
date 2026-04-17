@@ -31,7 +31,6 @@ interface Props {
   currentMetrics: CurrentMetrics;
   profileMetrics?: ProfileMetrics;
   profileColor?: string;
-  sharpeToColor: (s: number, min: number, max: number) => string;
   colors: Record<string, string>;
 }
 
@@ -40,7 +39,7 @@ const HEIGHT = 300;
 
 export function FrontierCanvas({
   frontier, maxSharpe, minVol, maxReturn, currentMetrics,
-  profileMetrics, profileColor, sharpeToColor, colors,
+  profileMetrics, profileColor, colors,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -74,30 +73,69 @@ export function FrontierCanvas({
   const xScale = useMemo(() => scaleLinear({ domain: [xMin, xMax], range: [0, innerW] }), [xMin, xMax, innerW]);
   const yScale = useMemo(() => scaleLinear({ domain: [yMin, yMax], range: [innerH, 0] }), [yMin, yMax, innerH]);
 
-  // Draw dots to canvas
+  // Draw dots via worker — offloads color computation + pixel mapping off main thread
+  const [renderProgress, setRenderProgress] = useState(0);
+  const workerRef = useRef<Worker | null>(null);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !frontier.length || innerW <= 0) return;
+
     const dpr = window.devicePixelRatio || 1;
     canvas.width = width * dpr;
     canvas.height = HEIGHT * dpr;
     canvas.style.width = `${width}px`;
     canvas.style.height = `${HEIGHT}px`;
-    const ctx = canvas.getContext("2d")!;
-    ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, width, HEIGHT);
 
-    ctx.globalAlpha = 0.75;
-    for (const p of frontier) {
-      const cx = MARGIN.left + (xScale(p.vol) ?? 0);
-      const cy = MARGIN.top + (yScale(p.ret) ?? 0);
-      ctx.beginPath();
-      ctx.arc(cx, cy, 2.5, 0, Math.PI * 2);
-      ctx.fillStyle = sharpeToColor(p.sharpe, minSharpe, maxSharpeVal);
-      ctx.fill();
-    }
-    ctx.globalAlpha = 1;
-  }, [frontier, width, innerW, xScale, yScale, minSharpe, maxSharpeVal, sharpeToColor]);
+    // Terminate previous worker if still running
+    workerRef.current?.terminate();
+    setRenderProgress(0);
+
+    const worker = new Worker("/workers/frontier.worker.js");
+    workerRef.current = worker;
+
+    worker.onmessage = (e) => {
+      if (e.data.type === "progress") {
+        setRenderProgress(e.data.pct);
+        return;
+      }
+      if (e.data.type === "done") {
+        setRenderProgress(100);
+        const result: Float32Array = e.data.data;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        ctx.clearRect(0, 0, width * dpr, HEIGHT * dpr);
+        ctx.save();
+        ctx.scale(dpr, dpr);
+        ctx.globalAlpha = 0.75;
+        const n = result.length / 5;
+        for (let i = 0; i < n; i++) {
+          const cx = result[i * 5];
+          const cy = result[i * 5 + 1];
+          const r  = result[i * 5 + 2];
+          const g  = result[i * 5 + 3];
+          const b  = result[i * 5 + 4];
+          ctx.beginPath();
+          ctx.arc(cx, cy, 2.5, 0, Math.PI * 2);
+          ctx.fillStyle = `rgb(${r},${g},${b})`;
+          ctx.fill();
+        }
+        ctx.restore();
+        worker.terminate();
+      }
+    };
+
+    worker.postMessage({
+      frontier,
+      xMin, xMax, yMin, yMax,
+      innerW, innerH,
+      margin: MARGIN,
+      minSharpe,
+      maxSharpe: maxSharpeVal,
+    });
+
+    return () => { worker.terminate(); };
+  }, [frontier, width, innerW, innerH, xMin, xMax, yMin, yMax, minSharpe, maxSharpeVal]);
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent<SVGSVGElement>) => {
@@ -141,6 +179,11 @@ export function FrontierCanvas({
   return (
     <div ref={containerRef} className="relative w-full" style={{ height: HEIGHT }}>
       <canvas ref={canvasRef} className="absolute top-0 left-0 pointer-events-none" />
+      {renderProgress > 0 && renderProgress < 100 && (
+        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 text-[9px] text-bloomberg-muted">
+          Rendering… {renderProgress}%
+        </div>
+      )}
 
       <svg
         width={width}

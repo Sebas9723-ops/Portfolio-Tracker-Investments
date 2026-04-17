@@ -1,5 +1,6 @@
 "use client";
-import { useState } from "react";
+import { useState, memo } from "react";
+import dynamic from "next/dynamic";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { usePortfolio, useSnapshots, useSaveSnapshot, usePortfolioHistory } from "@/lib/hooks/usePortfolio";
 import { fetchTransactions } from "@/lib/api/transactions";
@@ -10,9 +11,14 @@ import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
 } from "recharts";
-import { PortfolioLWChart } from "@/components/charts/PortfolioLWChart";
 import { Save, RefreshCw, TrendingUp, TrendingDown } from "lucide-react";
 import Link from "next/link";
+import type { PortfolioRow } from "@/lib/types";
+
+const PortfolioLWChart = dynamic(
+  () => import("@/components/charts/PortfolioLWChart").then((m) => ({ default: m.PortfolioLWChart })),
+  { ssr: false, loading: () => <div className="h-40 bg-bloomberg-border/30 animate-pulse rounded" /> }
+);
 
 // ── Colors ────────────────────────────────────────────────────────────────────
 const PIE_COLORS = ["#f3a712", "#38b2ff", "#4dff4d", "#c084fc", "#fb923c", "#34d399", "#ff6b6b", "#60a5fa"];
@@ -81,6 +87,65 @@ function Chg({ v, pct = false, className = "" }: { v: number | null | undefined;
     </span>
   );
 }
+
+// ── Memoized positions row ────────────────────────────────────────────────────
+const PositionRow = memo(function PositionRow({ row, ccy }: { row: PortfolioRow; ccy: string }) {
+  const totalBuyIn = row.avg_cost_native != null ? row.avg_cost_native * row.shares : null;
+  return (
+    <tr className="border-b border-bloomberg-border/40 hover:bg-bloomberg-card transition-colors">
+      <td className="py-3 pr-4">
+        <div className="flex items-center gap-2.5">
+          <TickerBadge ticker={row.ticker} />
+          <div className="min-w-0">
+            <p className="text-bloomberg-text font-medium truncate max-w-[180px]">{row.name}</p>
+            <p className="text-bloomberg-muted text-[10px]">{row.ticker} · {row.shares.toFixed(3)} shares</p>
+          </div>
+        </div>
+      </td>
+      <td className="py-3 text-right">
+        {totalBuyIn != null ? (
+          <>
+            <p className="text-bloomberg-text">{fmtCurrency(totalBuyIn, row.currency)}</p>
+            <p className="text-bloomberg-muted text-[10px]">{fmtCurrency(row.avg_cost_native!, row.currency)} avg</p>
+          </>
+        ) : (
+          <span className="text-bloomberg-muted">—</span>
+        )}
+      </td>
+      <td className="py-3 text-right">
+        <p className="text-bloomberg-text font-medium">{fmtCurrency(row.value_base, ccy)}</p>
+        <p className="text-bloomberg-muted text-[10px]">
+          {fmtCurrency(row.price_native, row.currency)}
+          {row.change_pct_1d != null && (
+            <span className={row.change_pct_1d >= 0 ? " text-green-400" : " text-red-400"}>
+              {" "}{fmtPct(row.change_pct_1d)}
+            </span>
+          )}
+        </p>
+      </td>
+      <td className="py-3 text-right">
+        {row.unrealized_pnl != null ? (
+          <>
+            <p className={row.unrealized_pnl >= 0 ? "text-green-400 font-medium" : "text-red-400 font-medium"}>
+              {row.unrealized_pnl >= 0 ? "+" : ""}{fmtCurrency(row.unrealized_pnl, ccy)}
+            </p>
+            <p className={`text-[10px] ${row.unrealized_pnl_pct != null && row.unrealized_pnl_pct >= 0 ? "text-green-400" : "text-red-400"}`}>
+              {fmtPct(row.unrealized_pnl_pct)}
+            </p>
+          </>
+        ) : (
+          <span className="text-bloomberg-muted">—</span>
+        )}
+      </td>
+      <td className="py-3 text-right">
+        <p className="text-bloomberg-muted">{row.weight.toFixed(1)}%</p>
+        <div className="w-12 h-0.5 bg-bloomberg-border ml-auto mt-1 rounded">
+          <div className="h-0.5 rounded" style={{ width: `${Math.min(row.weight, 100)}%`, backgroundColor: tickerBadgeColor(row.ticker) }} />
+        </div>
+      </td>
+    </tr>
+  );
+});
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
@@ -299,75 +364,9 @@ export default function DashboardPage() {
                   {portfolio.rows
                     .slice()
                     .sort((a, b) => b.value_base - a.value_base)
-                    .map((row) => {
-                      const totalBuyIn = row.avg_cost_native != null ? row.avg_cost_native * row.shares : null;
-                      return (
-                        <tr key={row.ticker} className="border-b border-bloomberg-border/40 hover:bg-bloomberg-card transition-colors">
-                          {/* Badge + name */}
-                          <td className="py-3 pr-4">
-                            <div className="flex items-center gap-2.5">
-                              <TickerBadge ticker={row.ticker} />
-                              <div className="min-w-0">
-                                <p className="text-bloomberg-text font-medium truncate max-w-[180px]">{row.name}</p>
-                                <p className="text-bloomberg-muted text-[10px]">
-                                  {row.ticker} · {row.shares.toFixed(3)} shares
-                                </p>
-                              </div>
-                            </div>
-                          </td>
-                          {/* Buy in */}
-                          <td className="py-3 text-right">
-                            {totalBuyIn != null ? (
-                              <>
-                                <p className="text-bloomberg-text">{fmtCurrency(totalBuyIn, row.currency)}</p>
-                                <p className="text-bloomberg-muted text-[10px]">
-                                  {fmtCurrency(row.avg_cost_native!, row.currency)} avg
-                                </p>
-                              </>
-                            ) : (
-                              <span className="text-bloomberg-muted">—</span>
-                            )}
-                          </td>
-                          {/* Position */}
-                          <td className="py-3 text-right">
-                            <p className="text-bloomberg-text font-medium">{fmtCurrency(row.value_base, ccy)}</p>
-                            <p className="text-bloomberg-muted text-[10px]">
-                              {fmtCurrency(row.price_native, row.currency)}
-                              {row.change_pct_1d != null && (
-                                <span className={row.change_pct_1d >= 0 ? " text-green-400" : " text-red-400"}>
-                                  {" "}{fmtPct(row.change_pct_1d)}
-                                </span>
-                              )}
-                            </p>
-                          </td>
-                          {/* P/L */}
-                          <td className="py-3 text-right">
-                            {row.unrealized_pnl != null ? (
-                              <>
-                                <p className={row.unrealized_pnl >= 0 ? "text-green-400 font-medium" : "text-red-400 font-medium"}>
-                                  {row.unrealized_pnl >= 0 ? "+" : ""}{fmtCurrency(row.unrealized_pnl, ccy)}
-                                </p>
-                                <p className={`text-[10px] ${row.unrealized_pnl_pct != null && row.unrealized_pnl_pct >= 0 ? "text-green-400" : "text-red-400"}`}>
-                                  {fmtPct(row.unrealized_pnl_pct)}
-                                </p>
-                              </>
-                            ) : (
-                              <span className="text-bloomberg-muted">—</span>
-                            )}
-                          </td>
-                          {/* Weight */}
-                          <td className="py-3 text-right">
-                            <p className="text-bloomberg-muted">{row.weight.toFixed(1)}%</p>
-                            <div className="w-12 h-0.5 bg-bloomberg-border ml-auto mt-1 rounded">
-                              <div
-                                className="h-0.5 rounded"
-                                style={{ width: `${Math.min(row.weight, 100)}%`, backgroundColor: tickerBadgeColor(row.ticker) }}
-                              />
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
+                    .map((row) => (
+                      <PositionRow key={row.ticker} row={row} ccy={ccy} />
+                    ))}
                 </tbody>
               </table>
             </div>

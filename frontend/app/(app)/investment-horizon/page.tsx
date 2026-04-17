@@ -1,10 +1,17 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
+import dynamic from "next/dynamic";
 import { usePortfolio } from "@/lib/hooks/usePortfolio";
 import { useProfileStore } from "@/lib/store/profileStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { fmtCurrency, fmtPct } from "@/lib/formatters";
-import { HorizonLWChart } from "@/components/charts/HorizonLWChart";
+
+const HorizonLWChart = dynamic(
+  () => import("@/components/charts/HorizonLWChart").then((m) => ({ default: m.HorizonLWChart })),
+  { ssr: false, loading: () => <div className="h-40 bg-bloomberg-border/30 animate-pulse rounded" /> }
+);
+
+type MCPoint = { year: number; p10: number; p50: number; p90: number };
 
 // Profile → which frontier point to use
 const PROFILE_FRONTIER_KEY = {
@@ -19,40 +26,13 @@ const PROFILE_FRONTIER_LABEL = {
   aggressive:   "Max Return",
 } as const;
 
-function monteCarlo(
-  initial: number, monthly: number, years: number,
-  avgReturn: number, volatility: number, nPaths = 1000,
-) {
-  const months = years * 12;
-  const mu = avgReturn / 12;
-  const sigma = volatility / Math.sqrt(12);
-  const paths: number[][] = Array.from({ length: nPaths }, () => {
-    const path = [initial];
-    for (let m = 0; m < months; m++) {
-      const r = mu + sigma * (Math.random() + Math.random() + Math.random() - 1.5) * Math.sqrt(2 / 3);
-      path.push(path[path.length - 1] * (1 + r) + monthly);
-    }
-    return path;
-  });
-  const data = [];
-  for (let y = 0; y <= years; y++) {
-    const idx = y * 12;
-    const vals = paths.map((p) => p[idx]).sort((a, b) => a - b);
-    data.push({
-      year: y,
-      p10: vals[Math.floor(0.10 * nPaths)],
-      p50: vals[Math.floor(0.50 * nPaths)],
-      p90: vals[Math.floor(0.90 * nPaths)],
-    });
-  }
-  return data;
-}
-
 export default function InvestmentHorizonPage() {
   const { data: portfolio } = usePortfolio();
   const initial = portfolio?.total_value_base ?? 10000;
   const { profile, targetReturn } = useProfileStore();
-  const { horizon_params, frontier_result, setSettings } = useSettingsStore();
+  const horizon_params  = useSettingsStore((s) => s.horizon_params);
+  const frontier_result = useSettingsStore((s) => s.frontier_result);
+  const setSettings     = useSettingsStore((s) => s.setSettings);
 
   // Pick the right frontier point for the active profile
   const frontierKey = PROFILE_FRONTIER_KEY[profile as keyof typeof PROFILE_FRONTIER_KEY] ?? "max_sharpe";
@@ -68,6 +48,35 @@ export default function InvestmentHorizonPage() {
   const [ret, setRet]         = useState(defaultRet);
   const [vol, setVol]         = useState(defaultVol);
   const [goal, setGoal]       = useState(horizon_params?.goal ?? 100000);
+
+  // Debounced values fed to worker (500ms delay)
+  const [debouncedParams, setDebouncedParams] = useState({ initial, monthly, years, ret, vol });
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      setDebouncedParams({ initial, monthly, years, ret, vol });
+    }, 500);
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [initial, monthly, years, ret, vol]);
+
+  // Worker-driven Monte Carlo
+  const [data, setData] = useState<MCPoint[]>([]);
+  const [mcLoading, setMcLoading] = useState(true);
+
+  useEffect(() => {
+    const worker = new Worker("/workers/horizon.worker.js");
+    setMcLoading(true);
+    worker.onmessage = (e) => {
+      if (e.data.type === "result") {
+        setData(e.data.data);
+        setMcLoading(false);
+        worker.terminate();
+      }
+    };
+    worker.postMessage({ ...debouncedParams, nPaths: 1000 });
+    return () => worker.terminate();
+  }, [debouncedParams]);
 
   // Sync when frontier result updates (user ran optimization)
   useEffect(() => {
@@ -88,24 +97,24 @@ export default function InvestmentHorizonPage() {
     setSettings({ horizon_params: { monthly, years, vol, goal } });
   }, [monthly, years, vol, goal, setSettings]);
 
-  const data = monteCarlo(initial, monthly, years, ret, vol);
   const base = data[data.length - 1];
 
-  const successRate = (() => {
+  const successRate = useMemo(() => {
+    if (!base) return 0;
     if (base.p10 >= goal) return 90;
     if (base.p50 >= goal) return 50 + Math.round(50 * (base.p50 - goal) / (base.p50 - base.p10) * -1 + 50);
     if (base.p90 >= goal) return Math.round(50 * (base.p90 - goal) / (base.p90 - base.p50));
     return 5;
-  })();
+  }, [base, goal]);
 
-  const requiredMonthly = (() => {
+  const requiredMonthly = useMemo(() => {
     const months = years * 12;
     const mu = ret / 12;
     const growth = Math.pow(1 + mu, months);
     const pvComponent = initial * growth;
     const annuityFactor = mu > 0 ? (growth - 1) / mu : months;
     return Math.max(0, (goal - pvComponent) / annuityFactor);
-  })();
+  }, [years, ret, initial, goal]);
 
   const ccy = portfolio?.base_currency ?? "USD";
 
@@ -208,7 +217,11 @@ export default function InvestmentHorizonPage() {
 
       <div className="bbg-card">
         <p className="bbg-header">Monte Carlo Projection ({years}y)</p>
-        <HorizonLWChart data={data} ccy={ccy} />
+        {mcLoading ? (
+          <div className="h-40 bg-bloomberg-border/30 animate-pulse rounded mt-2" />
+        ) : (
+          <HorizonLWChart data={data} ccy={ccy} />
+        )}
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
+import dynamic from "next/dynamic";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchFrontier, fetchBlackLitterman } from "@/lib/api/analytics";
 import { fetchProfileOptimal } from "@/lib/api/profile";
@@ -8,9 +9,13 @@ import { usePortfolio } from "@/lib/hooks/usePortfolio";
 import { useProfileStore } from "@/lib/store/profileStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { fmtPct, fmtCurrency } from "@/lib/formatters";
-import { FrontierCanvas } from "@/components/charts/FrontierCanvas";
 import type { OptimizationResult, FrontierPoint, TickerFloorCap, CombinationRange } from "@/lib/types";
 import { Plus, Trash2, Save } from "lucide-react";
+
+const FrontierCanvas = dynamic(
+  () => import("@/components/charts/FrontierCanvas").then((m) => ({ default: m.FrontierCanvas })),
+  { ssr: false, loading: () => <div className="h-72 bg-bloomberg-border/30 animate-pulse rounded" /> }
+);
 
 const PROFILES = ["conservative", "base", "aggressive"] as const;
 type ProfileKey = typeof PROFILES[number];
@@ -94,7 +99,10 @@ export default function OptimizationPage() {
   const qc = useQueryClient();
   const { data: portfolio } = usePortfolio();
   const { profile } = useProfileStore();
-  const { bl_views: savedBlViews, setSettings, max_single_asset, optimization_periods } = useSettingsStore();
+  const savedBlViews        = useSettingsStore((s) => s.bl_views);
+  const setSettings         = useSettingsStore((s) => s.setSettings);
+  const max_single_asset    = useSettingsStore((s) => s.max_single_asset);
+  const optimization_periods = useSettingsStore((s) => s.optimization_periods);
   const maxSingle = max_single_asset ?? 0.40;
   const period = optimization_periods?.[profile] ?? "2y";
   const N_SIM = 12000;
@@ -583,7 +591,6 @@ export default function OptimizationPage() {
               currentMetrics={result.current_metrics as { volatility: number | null; return: number; sharpe: number | null }}
               profileMetrics={profileData?.profiles?.[profile]?.metrics}
               profileColor={PROFILE_COLORS[activeProfile]}
-              sharpeToColor={sharpeToColor}
               colors={COLORS}
             />
           </div>
