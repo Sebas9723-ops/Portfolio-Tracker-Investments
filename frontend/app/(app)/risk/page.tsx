@@ -61,10 +61,10 @@ export default function RiskPage() {
           <div className="flex items-center justify-between mb-0">
             <p className="bbg-header mb-0">Stress Tests</p>
             <button
-              onClick={() => openWith("Interpreta mi riesgo actual: VaR, stress tests y correlaciones. ¿Qué debo saber?")}
+              onClick={() => openWith("Interpret my current risk profile: VaR, stress tests, and correlations. What should I know?")}
               className="flex items-center gap-1.5 text-[10px] text-[#f3a712] border border-[#f3a712]/40 px-2.5 py-1 rounded-lg hover:bg-[#f3a712]/10 transition-colors"
             >
-              🤖 Interpretar mi riesgo
+              🤖 Interpret my risk
             </button>
           </div>
           <ResponsiveContainer width="100%" height={200}>

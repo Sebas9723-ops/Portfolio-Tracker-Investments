@@ -78,7 +78,7 @@ export function useGroqChat() {
         if ((err as Error)?.name !== "AbortError") {
           const errMsg: ChatMessage = {
             role: "assistant",
-            content: "⚠️ Error al conectar con Groq. Verifica tu API key o intenta de nuevo.",
+            content: "⚠️ Error connecting to Groq. Check your API key or try again.",
           };
           setMessages((prev) => [...prev, errMsg]);
         }

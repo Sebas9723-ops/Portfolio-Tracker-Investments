@@ -597,10 +597,10 @@ export default function OptimizationPage() {
             />
             <div className="flex justify-end mt-2">
               <button
-                onClick={() => openWith("Interpreta los resultados de la frontera eficiente. ¿Qué portafolio recomiendas para mi perfil?")}
+                onClick={() => openWith("Interpret the efficient frontier results. Which portfolio do you recommend for my profile and why?")}
                 className="flex items-center gap-1.5 text-[10px] text-[#f3a712] border border-[#f3a712]/40 px-2.5 py-1 rounded-lg hover:bg-[#f3a712]/10 transition-colors"
               >
-                🤖 Interpretar resultados
+                🤖 Interpret results
               </button>
             </div>
           </div>

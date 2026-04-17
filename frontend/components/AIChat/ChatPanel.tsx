@@ -157,7 +157,7 @@ export function ChatPanel({
         <div className="flex items-center gap-1">
           <button
             onClick={onClear}
-            title="Nueva conversación"
+            title="New conversation"
             className="w-7 h-7 flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
           >
             <RotateCcw size={13} />
@@ -175,7 +175,7 @@ export function ChatPanel({
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 bg-slate-50/50">
         {!isConfigured && (
           <div className="text-center text-[11px] text-slate-400 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mx-2">
-            Configura <code className="font-mono bg-amber-100 px-1 rounded">NEXT_PUBLIC_GROQ_API_KEY</code> en tu <code className="font-mono">.env.local</code> para activar el AI
+            Set <code className="font-mono bg-amber-100 px-1 rounded">NEXT_PUBLIC_GROQ_API_KEY</code> in your <code className="font-mono">.env.local</code> to enable AI
           </div>
         )}
 
@@ -252,7 +252,7 @@ export function ChatPanel({
             value={input}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
-            placeholder="Pregunta sobre tu portfolio..."
+            placeholder="Ask about your portfolio..."
             disabled={!isConfigured || streaming}
             className="flex-1 resize-none bg-slate-100 rounded-xl px-3 py-2 text-[12px] text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#f3a712]/30 disabled:opacity-50 leading-relaxed"
             style={{ maxHeight: 72, minHeight: 36 }}

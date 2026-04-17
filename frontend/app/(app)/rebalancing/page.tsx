@@ -349,10 +349,10 @@ export default function RebalancingPage() {
         <div className="flex items-center justify-between mb-0">
           <p className="bbg-header mb-0">Trade Suggestions</p>
           <button
-            onClick={() => openWith("Tengo $250 para aportar. Con el drift actual de cada posición y los constraints del Motor 1, dame el monto exacto en USD para cada ETF.")}
+            onClick={() => openWith("I have $250 to deploy. Given the current drift of each position and the Motor 1 constraints, give me the exact USD amount for each ETF.")}
             className="flex items-center gap-1.5 text-[10px] text-[#f3a712] border border-[#f3a712]/40 px-2.5 py-1 rounded-lg hover:bg-[#f3a712]/10 transition-colors"
           >
-            🤖 ¿Cuánto compro este mes?
+            🤖 How much to buy this month?
           </button>
         </div>
         {isLoading ? (

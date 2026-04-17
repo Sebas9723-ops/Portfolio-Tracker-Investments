@@ -219,10 +219,10 @@ export default function InvestmentHorizonPage() {
 
       <div className="flex justify-end">
         <button
-          onClick={() => openWith(`¿Voy bien para $1M? Mi P50 proyectado es ${fmtCurrency(base?.p50 ?? 0, ccy)} en ${years} años con ${fmtCurrency(monthly, ccy)}/mes. Success rate: ~${successRate}%.`)}
+          onClick={() => openWith(`Am I on track for $1M? My P50 projection is ${fmtCurrency(base?.p50 ?? 0, ccy)} in ${years} years with ${fmtCurrency(monthly, ccy)}/month. Success rate: ~${successRate}%.`)}
           className="flex items-center gap-1.5 text-[10px] text-[#f3a712] border border-[#f3a712]/40 px-2.5 py-1 rounded-lg hover:bg-[#f3a712]/10 transition-colors"
         >
-          🤖 ¿Voy bien para $1M?
+          🤖 On track for $1M?
         </button>
       </div>
 

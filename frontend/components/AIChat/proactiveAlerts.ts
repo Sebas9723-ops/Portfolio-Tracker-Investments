@@ -49,7 +49,7 @@ export function useProactiveAlerts() {
         result.push({
           id: "drift",
           severity: "red",
-          message: `⚠️ ${top.ticker} necesita atención: drift de ${top.drift > 0 ? "+" : ""}${top.drift.toFixed(1)}%`,
+          message: `⚠️ ${top.ticker} requires attention: drift of ${top.drift > 0 ? "+" : ""}${top.drift.toFixed(1)}%`,
         });
       }
     }
@@ -65,10 +65,10 @@ export function useProactiveAlerts() {
           result.push({
             id: "voo-dip",
             severity: "orange",
-            message: `📉 VOO cayó ${monthlyReturn.toFixed(1)}% este mes — oportunidad táctica`,
+            message: `📉 VOO down ${monthlyReturn.toFixed(1)}% this month — tactical opportunity`,
             chip: {
-              label: "📉 Caída detectada — ¿qué hago?",
-              prompt: `VOO ha caído ${monthlyReturn.toFixed(1)}% este mes. Según mi regla de inversión (doblar en VOO y QQQM cuando cae >5%), ¿cuánto debo aportar exactamente en cada uno? Dame un plan de acción concreto en USD.`,
+              label: "📉 Dip detected — what do I do?",
+              prompt: `VOO has dropped ${monthlyReturn.toFixed(1)}% this month. Per my dip rule (double VOO + QQQM when down >5%), how much should I deploy in each? Give me a concrete action plan in USD.`,
             },
           });
         }

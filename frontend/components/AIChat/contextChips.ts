@@ -5,43 +5,42 @@ export interface ContextChip {
 
 const CHIPS: Record<string, ContextChip[]> = {
   "/dashboard": [
-    { label: "¿Cómo va mi portfolio?", prompt: "Dame un resumen ejecutivo de mi portfolio hoy — retorno, drift crítico y acción más urgente." },
-    { label: "¿Qué hago este mes?", prompt: "¿Cuál es la acción más importante que debo tomar este mes con mi portfolio?" },
-    { label: "¿Qué mueve mi retorno?", prompt: "¿Qué posición contribuye más positiva y negativamente a mi retorno total?" },
-    { label: "¿Cuándo llego a $100K?", prompt: "Con mi ritmo actual de aportes y el retorno histórico de mi portfolio, ¿cuándo llego a $100K?" },
+    { label: "Portfolio summary", prompt: "Give me an executive summary of my portfolio today — return, critical drift, and most urgent action." },
+    { label: "What to do this month?", prompt: "What is the single most important action I should take this month with my portfolio?" },
+    { label: "What's driving my return?", prompt: "Which position is contributing most positively and most negatively to my total return?" },
+    { label: "When do I hit $100K?", prompt: "At my current contribution pace and historical portfolio return, when do I reach $100K?" },
   ],
   "/rebalancing": [
-    { label: "¿Cuánto compro este mes?", prompt: "Tengo $250 para aportar. Con el drift actual de cada posición y los constraints del Motor 1, dame el monto exacto en USD para cada ETF." },
-    { label: "¿Cuándo se equilibra?", prompt: "Priorizando los ETFs más subpesados con $250/mes, ¿en cuántos meses llego a los weights objetivo?" },
-    { label: "¿Qué priorizo?", prompt: "¿Qué ETF necesita más urgentemente el próximo aporte y por qué?" },
+    { label: "How much to buy this month?", prompt: "I have $250 to deploy. Given the current drift of each position and the Motor 1 constraints, give me the exact USD amount for each ETF." },
+    { label: "When will it rebalance?", prompt: "Prioritizing the most underweight ETFs with $250/month, how many months until I reach target weights?" },
+    { label: "What to prioritize?", prompt: "Which ETF most urgently needs the next contribution and why?" },
   ],
   "/risk": [
-    { label: "¿Cuánto perdería en crash?", prompt: "En un escenario tipo 2008 GFC, ¿cuánto perdería mi portfolio en USD y en cuánto tiempo me recuperaría históricamente?" },
-    { label: "¿Es suficiente mi oro?", prompt: "Con IGLN.L al 2%, ¿tengo suficiente cobertura defensiva para mi perfil ultra-agresivo o debería ajustar?" },
-    { label: "Interpreta mi riesgo", prompt: "Explícame en términos prácticos mi perfil de riesgo actual basándote en el VaR, CVaR y stress tests." },
+    { label: "Loss in a crash?", prompt: "In a 2008 GFC-style scenario, how much would my portfolio lose in USD and how long would historical recovery take?" },
+    { label: "Is my gold enough?", prompt: "With IGLN.L at ~2%, do I have sufficient defensive coverage for my ultra-aggressive profile or should I adjust?" },
+    { label: "Interpret my risk", prompt: "Explain my current risk profile in practical terms based on the VaR, CVaR, and stress test results." },
   ],
   "/investment-horizon": [
-    { label: "¿Voy bien para $1M?", prompt: "Con mi portfolio actual y aportes de $250/mes + $500 cada 6 meses, ¿voy en camino a $1M antes de los 50?" },
-    { label: "¿Qué pasa si aporto más?", prompt: "¿Cuántos años me ahorro si subo el aporte de $250 a $500 mensuales?" },
-    { label: "¿Cuándo llego a $50K?", prompt: "¿Cuándo llego al hito de $50K con mi ritmo actual?" },
+    { label: "On track for $1M?", prompt: "With my current portfolio and contributions of $250/month + $500 every 6 months, am I on track for $1M before age 50?" },
+    { label: "Impact of higher contributions?", prompt: "How many years do I save if I increase monthly contributions from $250 to $500?" },
+    { label: "When do I hit $50K?", prompt: "When do I reach the $50K milestone at my current pace?" },
   ],
   "/optimization": [
-    { label: "Interpreta los resultados", prompt: "El Max Return sugiere estos weights. ¿Por qué el algoritmo los eligió y hay algo que debería overridear manualmente dado mi perfil ultra-agresivo?" },
-    { label: "¿Debo ajustar los constraints?", prompt: "¿Los floors y caps que tengo configurados son óptimos para maximizar retorno a 15 años con perfil ultra agresivo?" },
+    { label: "Interpret the results", prompt: "The Max Return frontier suggests these weights. Why did the algorithm choose them and is there anything I should manually override given my ultra-aggressive profile?" },
+    { label: "Adjust constraints?", prompt: "Are my current floors and caps optimal for maximizing 15-year returns under an ultra-aggressive mandate?" },
   ],
   "/analytics": [
-    { label: "Explícame mis ratios", prompt: "¿Qué significan mis ratios actuales (Sharpe, Sortino, Alpha) en contexto del mercado actual y mi objetivo de $1M?" },
-    { label: "¿Estoy bien diversificado?", prompt: "Basándote en mis métricas de analytics, ¿tengo diversificación real o hay concentración de riesgo que deba corregir?" },
+    { label: "Explain my ratios", prompt: "What do my current ratios (Sharpe, Sortino, Alpha) mean in the context of today's market and my $1M goal?" },
+    { label: "Am I diversified?", prompt: "Based on my analytics metrics, do I have real diversification or is there risk concentration I should address?" },
   ],
 };
 
 const DEFAULT_CHIPS: ContextChip[] = [
-  { label: "¿Cómo va mi portfolio?", prompt: "Dame un resumen ejecutivo de mi portfolio hoy — retorno, drift crítico y acción más urgente." },
-  { label: "¿Qué hago este mes?", prompt: "¿Cuál es la acción más importante que debo tomar este mes con mi portfolio?" },
+  { label: "Portfolio summary", prompt: "Give me an executive summary of my portfolio today — return, critical drift, and most urgent action." },
+  { label: "What to do this month?", prompt: "What is the single most important action I should take this month with my portfolio?" },
 ];
 
 export function getContextChips(pathname: string): ContextChip[] {
-  // Match exact route or parent route
   for (const [route, chips] of Object.entries(CHIPS)) {
     if (pathname === route || pathname.startsWith(route + "/")) return chips;
   }
