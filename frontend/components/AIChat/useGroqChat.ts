@@ -1,7 +1,7 @@
 "use client";
 import { useState, useCallback, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { getGroqClient, GROQ_MODEL, isGroqConfigured } from "@/lib/groq";
+import { isGroqConfigured } from "@/lib/groq";
 import { buildSystemPrompt } from "./systemPrompt";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import type { PortfolioSummary, AnalyticsResponse, RebalancingRow } from "@/lib/types";
@@ -39,7 +39,7 @@ export function useGroqChat() {
 
   const send = useCallback(
     async (content: string) => {
-      if (!isGroqConfigured || streaming) return;
+      if (streaming) return;
 
       const userMsg: ChatMessage = { role: "user", content };
       const newHistory = [...messages, userMsg].slice(-MAX_HISTORY);
@@ -52,24 +52,30 @@ export function useGroqChat() {
       try {
         const systemPrompt = getSystemPrompt();
 
-        const stream = await getGroqClient().chat.completions.create({
-          model: GROQ_MODEL,
-          messages: [
-            { role: "system", content: systemPrompt },
-            ...newHistory.map((m) => ({ role: m.role, content: m.content })),
-          ],
-          temperature: 0.3,
-          max_tokens: 1024,
-          stream: true,
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            messages: [
+              { role: "system", content: systemPrompt },
+              ...newHistory.map((m) => ({ role: m.role, content: m.content })),
+            ],
+          }),
+          signal: abortRef.current.signal,
         });
 
+        if (!res.ok) throw new Error(`API error ${res.status}`);
+
+        const reader = res.body!.getReader();
+        const decoder = new TextDecoder();
         let fullContent = "";
-        for await (const chunk of stream) {
-          const delta = chunk.choices[0]?.delta?.content ?? "";
-          if (delta) {
-            fullContent += delta;
-            setStreamingContent(fullContent);
-          }
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const delta = decoder.decode(value, { stream: true });
+          fullContent += delta;
+          setStreamingContent(fullContent);
         }
 
         const assistantMsg: ChatMessage = { role: "assistant", content: fullContent };
@@ -78,7 +84,7 @@ export function useGroqChat() {
         if ((err as Error)?.name !== "AbortError") {
           const errMsg: ChatMessage = {
             role: "assistant",
-            content: "⚠️ Error connecting to Groq. Check your API key or try again.",
+            content: "⚠️ Error connecting to the advisory service. Please try again.",
           };
           setMessages((prev) => [...prev, errMsg]);
         }
