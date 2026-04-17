@@ -11,6 +11,8 @@ import { BottomNav } from "@/components/layout/BottomNav";
 import { ServerBanner } from "@/components/layout/ServerBanner";
 import { useKeepAlive } from "@/lib/hooks/useKeepAlive";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { AIChatProvider } from "@/lib/context/aiChatContext";
+import { AIChatWidget } from "@/components/AIChat";
 
 const VALID_PROFILES = new Set(["conservative", "base", "aggressive"]);
 
@@ -46,6 +48,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   if (!hydrated || !isAuthenticated) return null;
 
   return (
+    <AIChatProvider>
     <div className="flex h-screen overflow-hidden">
       <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
@@ -59,6 +62,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
       <BottomNav onMenuClick={() => setSidebarOpen(true)} />
       <ServerBanner />
+      <AIChatWidget />
     </div>
+    </AIChatProvider>
   );
 }

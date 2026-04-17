@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchRebalancing, fetchRequiredForMaxSharpe } from "@/lib/api/analytics";
+import { useAIChat } from "@/lib/context/aiChatContext";
 import { fetchSettings } from "@/lib/api/settings";
 import { usePortfolio } from "@/lib/hooks/usePortfolio";
 import { useProfileStore } from "@/lib/store/profileStore";
@@ -55,6 +56,7 @@ function DriftBadge({ drift, threshold }: { drift: number; threshold: number }) 
 }
 
 export default function RebalancingPage() {
+  const { openWith } = useAIChat();
   const [contributionStr, setContributionStr] = useState("0");
   const contribution = parseFloat(contributionStr) || 0;
   const [tcModel, setTcModel] = useState("broker");
@@ -344,7 +346,15 @@ export default function RebalancingPage() {
 
       {/* Trade Suggestions */}
       <div className="bbg-card">
-        <p className="bbg-header">Trade Suggestions</p>
+        <div className="flex items-center justify-between mb-0">
+          <p className="bbg-header mb-0">Trade Suggestions</p>
+          <button
+            onClick={() => openWith("Tengo $250 para aportar. Con el drift actual de cada posición y los constraints del Motor 1, dame el monto exacto en USD para cada ETF.")}
+            className="flex items-center gap-1.5 text-[10px] text-[#f3a712] border border-[#f3a712]/40 px-2.5 py-1 rounded-lg hover:bg-[#f3a712]/10 transition-colors"
+          >
+            🤖 ¿Cuánto compro este mes?
+          </button>
+        </div>
         {isLoading ? (
           <div className="text-bloomberg-muted text-xs py-4">Loading…</div>
         ) : (

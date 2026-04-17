@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchVaR, fetchStressTest, fetchCorrelation, fetchRiskBudget, fetchFxExposure } from "@/lib/api/analytics";
+import { useAIChat } from "@/lib/context/aiChatContext";
 import { MetricCard } from "@/components/shared/MetricCard";
 import { fmtCurrency, fmtPct } from "@/lib/formatters";
 import {
@@ -12,6 +13,7 @@ import {
 const COLORS = ["#f3a712", "#4dff4d", "#38b2ff", "#ff4d4d", "#c084fc", "#fb923c"];
 
 export default function RiskPage() {
+  const { openWith } = useAIChat();
   const [confidence, setConfidence] = useState(0.95);
   const { data: varData, isLoading: varLoading } = useQuery({ queryKey: ["var", confidence], queryFn: () => fetchVaR(confidence) });
   const { data: stress } = useQuery({ queryKey: ["stress"], queryFn: fetchStressTest });
@@ -56,7 +58,15 @@ export default function RiskPage() {
       {/* Stress tests */}
       {stress && stress.length > 0 && (
         <div className="bbg-card">
-          <p className="bbg-header">Stress Tests</p>
+          <div className="flex items-center justify-between mb-0">
+            <p className="bbg-header mb-0">Stress Tests</p>
+            <button
+              onClick={() => openWith("Interpreta mi riesgo actual: VaR, stress tests y correlaciones. ¿Qué debo saber?")}
+              className="flex items-center gap-1.5 text-[10px] text-[#f3a712] border border-[#f3a712]/40 px-2.5 py-1 rounded-lg hover:bg-[#f3a712]/10 transition-colors"
+            >
+              🤖 Interpretar mi riesgo
+            </button>
+          </div>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={stress} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1e2535" />

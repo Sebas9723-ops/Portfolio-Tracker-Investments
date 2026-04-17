@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { usePortfolio } from "@/lib/hooks/usePortfolio";
 import { useProfileStore } from "@/lib/store/profileStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
+import { useAIChat } from "@/lib/context/aiChatContext";
 import { fmtCurrency, fmtPct } from "@/lib/formatters";
 
 const HorizonLWChart = dynamic(
@@ -117,6 +118,7 @@ export default function InvestmentHorizonPage() {
   }, [years, ret, initial, goal]);
 
   const ccy = portfolio?.base_currency ?? "USD";
+  const { openWith } = useAIChat();
 
   return (
     <div className="space-y-4">
@@ -213,6 +215,15 @@ export default function InvestmentHorizonPage() {
           </p>
           <p className="text-bloomberg-muted text-[10px]">to reach P50 goal</p>
         </div>
+      </div>
+
+      <div className="flex justify-end">
+        <button
+          onClick={() => openWith(`¿Voy bien para $1M? Mi P50 proyectado es ${fmtCurrency(base?.p50 ?? 0, ccy)} en ${years} años con ${fmtCurrency(monthly, ccy)}/mes. Success rate: ~${successRate}%.`)}
+          className="flex items-center gap-1.5 text-[10px] text-[#f3a712] border border-[#f3a712]/40 px-2.5 py-1 rounded-lg hover:bg-[#f3a712]/10 transition-colors"
+        >
+          🤖 ¿Voy bien para $1M?
+        </button>
       </div>
 
       <div className="bbg-card">

@@ -11,6 +11,7 @@ import { useSettingsStore } from "@/lib/store/settingsStore";
 import { fmtPct, fmtCurrency } from "@/lib/formatters";
 import type { OptimizationResult, FrontierPoint, TickerFloorCap, CombinationRange } from "@/lib/types";
 import { Plus, Trash2, Save } from "lucide-react";
+import { useAIChat } from "@/lib/context/aiChatContext";
 
 const FrontierCanvas = dynamic(
   () => import("@/components/charts/FrontierCanvas").then((m) => ({ default: m.FrontierCanvas })),
@@ -106,6 +107,7 @@ export default function OptimizationPage() {
   const maxSingle = max_single_asset ?? 0.40;
   const period = optimization_periods?.[profile] ?? "2y";
   const N_SIM = 12000;
+  const { openWith } = useAIChat();
 
   // ── Motor 1 state ─────────────────────────────────────────────────────────
   // {profile: {ticker: {floor, cap}}} — local edit state
@@ -593,6 +595,14 @@ export default function OptimizationPage() {
               profileColor={PROFILE_COLORS[activeProfile]}
               colors={COLORS}
             />
+            <div className="flex justify-end mt-2">
+              <button
+                onClick={() => openWith("Interpreta los resultados de la frontera eficiente. ¿Qué portafolio recomiendas para mi perfil?")}
+                className="flex items-center gap-1.5 text-[10px] text-[#f3a712] border border-[#f3a712]/40 px-2.5 py-1 rounded-lg hover:bg-[#f3a712]/10 transition-colors"
+              >
+                🤖 Interpretar resultados
+              </button>
+            </div>
           </div>
 
           {/* Weights + Shares tables */}
