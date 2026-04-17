@@ -122,7 +122,12 @@ export default function DashboardPage() {
   const dayChangePct = totalValue > 0 ? (dayChange / (totalValue - dayChange)) * 100 : 0;
 
   // Chart data — from automatic history (historical prices × shares)
-  const allHistory = (historyData ?? []).slice().sort((a, b) => a.date.localeCompare(b.date));
+  // Exclude today: market may be open / bar is incomplete
+  const today = new Date().toISOString().split("T")[0];
+  const allHistory = (historyData ?? [])
+    .filter((d) => d.date < today)
+    .slice()
+    .sort((a, b) => a.date.localeCompare(b.date));
   const chartData = filterHistory(allHistory, chartPeriod);
 
   // Period P&L from chart range
