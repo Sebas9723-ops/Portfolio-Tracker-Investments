@@ -210,10 +210,12 @@ export default function DashboardPage() {
   const dayChangePct = totalValue > 0 ? (dayChange / (totalValue - dayChange)) * 100 : 0;
 
   // Chart data — from automatic history (historical prices × shares)
-  // Exclude today (local time): market may be open / bar is incomplete
+  // Build history: keep all backend data, then upsert today's live value so
+  // purchases made today are visible and no stale drop appears at the end.
   const localToday = new Date().toLocaleDateString("en-CA"); // "YYYY-MM-DD" in local tz
   const allHistory = (historyData ?? [])
-    .filter((d) => d.date < localToday)
+    .filter((d) => d.date !== localToday)   // remove any stale today entry
+    .concat({ date: localToday, value: totalValue }) // add live value for today
     .slice()
     .sort((a, b) => a.date.localeCompare(b.date));
   const chartData = filterHistory(allHistory, chartPeriod);

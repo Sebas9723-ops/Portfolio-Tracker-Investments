@@ -147,12 +147,13 @@ def get_portfolio_history(
         else:
             return []
         price_df = price_df.ffill()
-        # Drop the most-recent row: it may be today's incomplete intraday bar.
-        # yfinance end= is exclusive, so the last row is the most recent close —
-        # but when the server clock (UTC) is ahead of the local market day the
-        # last row is today's partial data and will produce a misleading drop.
+        # Only drop the last row when it corresponds to today's date (UTC).
+        # Previously we always dropped it, which silently removed yesterday's
+        # confirmed close when the server clock rolled past midnight UTC.
         if len(price_df) > 1:
-            price_df = price_df.iloc[:-1]
+            last_row_date = price_df.index[-1].date()
+            if last_row_date >= date.today():
+                price_df = price_df.iloc[:-1]
     except Exception:
         return []
 
