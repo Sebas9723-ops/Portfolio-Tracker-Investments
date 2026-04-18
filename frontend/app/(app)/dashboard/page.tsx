@@ -212,10 +212,14 @@ export default function DashboardPage() {
   // Chart data — from automatic history (historical prices × shares)
   // Build history: keep all backend data, then upsert today's live value so
   // purchases made today are visible and no stale drop appears at the end.
+  // Skip weekends — markets are closed, lightweight-charts uses business-day
+  // mode and a Sat/Sun point would appear displaced to the following Monday.
   const localToday = new Date().toLocaleDateString("en-CA"); // "YYYY-MM-DD" in local tz
+  const todayDow = new Date().getDay(); // 0 = Sun, 6 = Sat
+  const isTradingDay = todayDow !== 0 && todayDow !== 6;
   const allHistory = (historyData ?? [])
-    .filter((d) => d.date !== localToday)   // remove any stale today entry
-    .concat({ date: localToday, value: totalValue }) // add live value for today
+    .filter((d) => d.date !== localToday)           // remove any stale today entry
+    .concat(isTradingDay ? [{ date: localToday, value: totalValue }] : []) // live point on weekdays only
     .slice()
     .sort((a, b) => a.date.localeCompare(b.date));
   const chartData = filterHistory(allHistory, chartPeriod);
