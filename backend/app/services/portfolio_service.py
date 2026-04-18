@@ -18,7 +18,7 @@ def load_portfolio_data(user_id: str) -> tuple[PortfolioSummary, list[str], dict
     Returns:
         (summary, tickers, settings)
         - summary: fully built PortfolioSummary with rows, total_value_base, etc.
-        - tickers: list of tickers with shares > 0
+        - tickers: list of all tickers (including those with 0 shares, for optimization)
         - settings: raw user_settings dict from DB
     """
     db = get_admin_client()
@@ -28,7 +28,7 @@ def load_portfolio_data(user_id: str) -> tuple[PortfolioSummary, list[str], dict
 
     pos_res = db.table("positions").select("*").eq("user_id", user_id).execute()
     positions = pos_res.data or []
-    tickers = [p["ticker"] for p in positions if float(p.get("shares", 0)) > 0]
+    tickers = [p["ticker"] for p in positions]
     quotes = get_quotes(tickers) if tickers else {}
     currencies = list(set(get_native_currency(t) for t in tickers)) if tickers else []
     fx_rates = get_fx_rates(currencies, base=base_currency) if currencies else {}

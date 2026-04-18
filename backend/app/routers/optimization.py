@@ -72,7 +72,7 @@ def frontier(body: OptimizationRequest, user_id: str = Depends(get_user_id)):
     db = get_admin_client()
     pos_res = db.table("positions").select("ticker,shares").eq("user_id", user_id).execute()
     positions = pos_res.data or []
-    tickers = [p["ticker"] for p in positions if float(p.get("shares", 0)) > 0]
+    tickers = [p["ticker"] for p in positions]
     shares = {p["ticker"]: float(p["shares"]) for p in positions}
     total = sum(shares.values())
     current_weights = {t: shares[t] / total for t in tickers} if total > 0 else {}
@@ -105,7 +105,7 @@ class BLRequest(BaseModel):
 def bl_optimization(body: BLRequest, user_id: str = Depends(get_user_id)):
     db = get_admin_client()
     pos_res = db.table("positions").select("ticker,shares").eq("user_id", user_id).execute()
-    tickers = [p["ticker"] for p in (pos_res.data or []) if float(p.get("shares", 0)) > 0]
+    tickers = [p["ticker"] for p in (pos_res.data or [])]
 
     hist = get_historical_multi(tickers, period=body.period)
     closes: dict[str, pd.Series] = {}
@@ -131,7 +131,7 @@ def bl_optimization(body: BLRequest, user_id: str = Depends(get_user_id)):
 def max_sharpe(body: OptimizationRequest, user_id: str = Depends(get_user_id)):
     db = get_admin_client()
     pos_res = db.table("positions").select("ticker,shares").eq("user_id", user_id).execute()
-    tickers = [p["ticker"] for p in (pos_res.data or []) if float(p.get("shares", 0)) > 0]
+    tickers = [p["ticker"] for p in (pos_res.data or [])]
 
     returns_df = _build_returns_df(tickers, body.period)
     rfr = _load_user_rfr(user_id, db)
@@ -144,7 +144,7 @@ def max_sharpe(body: OptimizationRequest, user_id: str = Depends(get_user_id)):
 def max_return_endpoint(body: OptimizationRequest, user_id: str = Depends(get_user_id)):
     db = get_admin_client()
     pos_res = db.table("positions").select("ticker,shares").eq("user_id", user_id).execute()
-    tickers = [p["ticker"] for p in (pos_res.data or []) if float(p.get("shares", 0)) > 0]
+    tickers = [p["ticker"] for p in (pos_res.data or [])]
 
     returns_df = _build_returns_df(tickers, body.period)
     rfr = _load_user_rfr(user_id, db)
