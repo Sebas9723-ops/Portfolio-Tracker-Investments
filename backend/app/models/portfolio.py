@@ -56,6 +56,7 @@ class PortfolioSummary(BaseModel):
     total_day_change_base: Optional[float]
     base_currency: str
     as_of: datetime
+    pending_tickers: list[str] = []  # positions with 0 shares (watchlist/pre-buy)
 
 
 class CashBalance(BaseModel):

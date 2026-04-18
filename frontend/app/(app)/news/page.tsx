@@ -7,7 +7,10 @@ import { ExternalLink } from "lucide-react";
 
 export default function NewsPage() {
   const { data: portfolio } = usePortfolio();
-  const tickers = portfolio?.rows.map((r) => r.ticker) ?? ["VOO"];
+  const tickers = [
+    ...(portfolio?.rows.map((r) => r.ticker) ?? []),
+    ...(portfolio?.pending_tickers ?? []),
+  ].filter((t, i, a) => a.indexOf(t) === i) || ["VOO"];
 
   const { data: articles, isLoading } = useQuery({
     queryKey: ["news", tickers.slice(0, 5).sort().join(",")],

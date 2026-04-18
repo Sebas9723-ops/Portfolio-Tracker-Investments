@@ -2,12 +2,18 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchFundamentals } from "@/lib/api/settings";
+import { usePortfolio } from "@/lib/hooks/usePortfolio";
 import { MetricCard } from "@/components/shared/MetricCard";
 import { fmtCurrency, fmtPct, fmtNumber } from "@/lib/formatters";
 
 export default function FundamentalsPage() {
   const [ticker, setTicker] = useState("VOO");
   const [input, setInput] = useState("VOO");
+  const { data: portfolio } = usePortfolio();
+  const allTracked = [
+    ...(portfolio?.rows.map((r) => r.ticker) ?? []),
+    ...(portfolio?.pending_tickers ?? []),
+  ];
 
   const { data, isLoading } = useQuery({
     queryKey: ["fundamentals", ticker],
@@ -17,14 +23,30 @@ export default function FundamentalsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <h1 className="text-bloomberg-gold text-xs font-bold uppercase tracking-widest">Fundamentals</h1>
-        <input value={input} onChange={(e) => setInput(e.target.value.toUpperCase())}
-          onKeyDown={(e) => e.key === "Enter" && setTicker(input)}
-          placeholder="Ticker…"
-          className="bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs w-24 focus:outline-none focus:border-bloomberg-gold" />
-        <button onClick={() => setTicker(input)}
-          className="bg-bloomberg-gold text-bloomberg-bg text-xs font-bold px-3 py-1">GO</button>
+      <div className="space-y-2">
+        <div className="flex items-center gap-3">
+          <h1 className="text-bloomberg-gold text-xs font-bold uppercase tracking-widest">Fundamentals</h1>
+          <input value={input} onChange={(e) => setInput(e.target.value.toUpperCase())}
+            onKeyDown={(e) => e.key === "Enter" && setTicker(input)}
+            placeholder="Ticker…"
+            className="bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs w-24 focus:outline-none focus:border-bloomberg-gold" />
+          <button onClick={() => setTicker(input)}
+            className="bg-bloomberg-gold text-bloomberg-bg text-xs font-bold px-3 py-1">GO</button>
+        </div>
+        {allTracked.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {allTracked.map((t) => (
+              <button key={t} onClick={() => { setTicker(t); setInput(t); }}
+                className={`text-[10px] px-2 py-0.5 border transition-colors ${
+                  ticker === t
+                    ? "border-bloomberg-gold text-bloomberg-gold"
+                    : "border-bloomberg-border text-bloomberg-muted hover:border-bloomberg-muted"
+                }`}>
+                {t}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {isLoading && <div className="text-bloomberg-muted text-xs">Loading…</div>}

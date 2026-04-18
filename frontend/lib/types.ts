@@ -66,6 +66,7 @@ export interface PortfolioSummary {
   total_day_change_base: number | null;
   base_currency: string;
   as_of: string;
+  pending_tickers: string[];  // 0-share positions (watchlist/pre-buy)
 }
 
 export interface Position {

@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchTechnicals } from "@/lib/api/settings";
+import { usePortfolio } from "@/lib/hooks/usePortfolio";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -14,6 +15,11 @@ export default function TechnicalsPage() {
   const [ticker, setTicker] = useState("VOO");
   const [input, setInput] = useState("VOO");
   const [period, setPeriod] = useState("1y");
+  const { data: portfolio } = usePortfolio();
+  const allTracked = [
+    ...(portfolio?.rows.map((r) => r.ticker) ?? []),
+    ...(portfolio?.pending_tickers ?? []),
+  ];
 
   const { data, isLoading } = useQuery({
     queryKey: ["technicals", ticker, period],
@@ -45,24 +51,40 @@ export default function TechnicalsPage() {
   return (
     <ErrorBoundary>
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <h1 className="text-bloomberg-gold text-xs font-bold uppercase tracking-widest">Technicals</h1>
-        <div className="flex gap-2">
-          <input value={input} onChange={(e) => setInput(e.target.value.toUpperCase())}
-            onKeyDown={(e) => e.key === "Enter" && setTicker(input)}
-            placeholder="Ticker…"
-            className="bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs w-24 focus:outline-none focus:border-bloomberg-gold" />
-          <button onClick={() => setTicker(input)}
-            className="bg-bloomberg-gold text-bloomberg-bg text-xs font-bold px-3 py-1">GO</button>
+      <div className="space-y-2">
+        <div className="flex items-center gap-3">
+          <h1 className="text-bloomberg-gold text-xs font-bold uppercase tracking-widest">Technicals</h1>
+          <div className="flex gap-2">
+            <input value={input} onChange={(e) => setInput(e.target.value.toUpperCase())}
+              onKeyDown={(e) => e.key === "Enter" && setTicker(input)}
+              placeholder="Ticker…"
+              className="bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs w-24 focus:outline-none focus:border-bloomberg-gold" />
+            <button onClick={() => setTicker(input)}
+              className="bg-bloomberg-gold text-bloomberg-bg text-xs font-bold px-3 py-1">GO</button>
+          </div>
+          <div className="flex gap-1">
+            {PERIODS.map((p) => (
+              <button key={p} onClick={() => setPeriod(p)}
+                className={`text-[10px] px-2 py-1 border ${period === p ? "border-bloomberg-gold text-bloomberg-gold" : "border-bloomberg-border text-bloomberg-muted"}`}>
+                {p.toUpperCase()}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="flex gap-1">
-          {PERIODS.map((p) => (
-            <button key={p} onClick={() => setPeriod(p)}
-              className={`text-[10px] px-2 py-1 border ${period === p ? "border-bloomberg-gold text-bloomberg-gold" : "border-bloomberg-border text-bloomberg-muted"}`}>
-              {p.toUpperCase()}
-            </button>
-          ))}
-        </div>
+        {allTracked.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {allTracked.map((t) => (
+              <button key={t} onClick={() => { setTicker(t); setInput(t); }}
+                className={`text-[10px] px-2 py-0.5 border transition-colors ${
+                  ticker === t
+                    ? "border-bloomberg-gold text-bloomberg-gold"
+                    : "border-bloomberg-border text-bloomberg-muted hover:border-bloomberg-muted"
+                }`}>
+                {t}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {isLoading && <div className="text-bloomberg-muted text-xs">Loading…</div>}

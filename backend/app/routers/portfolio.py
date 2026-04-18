@@ -50,7 +50,11 @@ def get_portfolio(user_id: str = Depends(get_user_id)):
     currencies = list(set(exchange_currencies + pos_currencies))
     fx_rates = get_fx_rates(currencies, base=base_currency)
 
-    return build_portfolio(positions, quotes, fx_rates, base_currency, transactions)
+    summary = build_portfolio(positions, quotes, fx_rates, base_currency, transactions)
+    summary.pending_tickers = [
+        p["ticker"] for p in positions if float(p.get("shares", 0)) == 0
+    ]
+    return summary
 
 
 @router.get("/positions")
