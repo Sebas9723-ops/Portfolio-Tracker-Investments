@@ -28,8 +28,10 @@ def build_rebalancing_table(
     total_with_contrib = total_value + contribution
     rows = []
 
+    seen_tickers: set[str] = set()
     for row in portfolio_rows:
         ticker = row["ticker"]
+        seen_tickers.add(ticker)
         current_value = row.get("value_base", 0.0)
         current_w = current_value / total_value if total_value > 0 else 0
         target_w = target_weights.get(ticker, current_w)
@@ -54,6 +56,24 @@ def build_rebalancing_table(
             value_base=round(current_value, 2),
             trade_value=round(trade_value, 2),
             trade_direction=direction,
+            estimated_tc=round(tc, 2),
+        ))
+
+    # Include 0-share tickers that appear in target_weights but not in portfolio
+    for ticker, target_w in target_weights.items():
+        if ticker in seen_tickers or target_w <= 0:
+            continue
+        trade_value = target_w * total_with_contrib
+        tc = estimate_tc(trade_value, tc_model)
+        rows.append(RebalancingRow(
+            ticker=ticker,
+            name=ticker,
+            current_weight=0.0,
+            target_weight=round(target_w * 100, 2),
+            drift=round(-target_w * 100, 2),
+            value_base=0.0,
+            trade_value=round(trade_value, 2),
+            trade_direction="BUY",
             estimated_tc=round(tc, 2),
         ))
 

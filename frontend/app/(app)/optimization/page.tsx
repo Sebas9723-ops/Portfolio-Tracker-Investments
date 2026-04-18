@@ -196,6 +196,8 @@ export default function OptimizationPage() {
   const rows = portfolio?.rows ?? [];
   const totalValue = portfolio?.total_value_base ?? 0;
   const ccy = portfolio?.base_currency ?? "USD";
+  // All tickers including 0-share positions (for Motor 1 & 2)
+  const allTickers: string[] = profileData?.tickers ?? rows.map((r) => r.ticker);
 
   const activeProfile = (profile as ProfileKey) || "base";
 
@@ -333,7 +335,7 @@ export default function OptimizationPage() {
           </span>
         </div>
 
-        {rows.length === 0 ? (
+        {allTickers.length === 0 ? (
           <p className="text-bloomberg-muted text-[10px]">No positions loaded.</p>
         ) : (
           <table className="bbg-table mb-3">
@@ -345,11 +347,11 @@ export default function OptimizationPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => {
-                const fc = getFloorCap(r.ticker);
+              {allTickers.map((ticker) => {
+                const fc = getFloorCap(ticker);
                 return (
-                  <tr key={r.ticker}>
-                    <td className="text-bloomberg-gold">{r.ticker}</td>
+                  <tr key={ticker}>
+                    <td className="text-bloomberg-gold">{ticker}</td>
                     <td className="text-right">
                       <input
                         type="number"
@@ -357,7 +359,7 @@ export default function OptimizationPage() {
                         max={100}
                         step={1}
                         value={Math.round((fc.floor ?? 0) * 100)}
-                        onChange={(e) => setFloorCap(r.ticker, "floor", e.target.value)}
+                        onChange={(e) => setFloorCap(ticker, "floor", e.target.value)}
                         className="w-20 bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-0.5 text-xs text-right focus:outline-none focus:border-bloomberg-gold"
                       />
                     </td>
@@ -368,7 +370,7 @@ export default function OptimizationPage() {
                         max={100}
                         step={1}
                         value={Math.round((fc.cap ?? 1) * 100)}
-                        onChange={(e) => setFloorCap(r.ticker, "cap", e.target.value)}
+                        onChange={(e) => setFloorCap(ticker, "cap", e.target.value)}
                         className="w-20 bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-0.5 text-xs text-right focus:outline-none focus:border-bloomberg-gold"
                       />
                     </td>
@@ -445,18 +447,18 @@ export default function OptimizationPage() {
           <div>
             <p className="text-bloomberg-muted text-[10px] mb-1">Assets (select ≥ 2):</p>
             <div className="flex flex-wrap gap-1">
-              {rows.map((r) => (
+              {allTickers.map((ticker) => (
                 <button
-                  key={r.ticker}
-                  onClick={() => toggleNewComboTicker(r.ticker)}
+                  key={ticker}
+                  onClick={() => toggleNewComboTicker(ticker)}
                   className="text-[10px] px-2 py-0.5 border transition-colors"
                   style={
-                    newComboTickers.includes(r.ticker)
+                    newComboTickers.includes(ticker)
                       ? { borderColor: "#38b2ff", color: "#38b2ff" }
                       : { borderColor: "#334155", color: "#64748b" }
                   }
                 >
-                  {r.ticker}
+                  {ticker}
                 </button>
               ))}
             </div>

@@ -45,13 +45,14 @@ def get_profile_optimal(
     if not positions:
         return {"profiles": {}, "current": {}, "active_profile": active_profile}
 
-    tickers = [p["ticker"] for p in positions if float(p.get("shares", 0)) > 0]
-    if not tickers:
+    tickers = [p["ticker"] for p in positions]
+    active_tickers = [p["ticker"] for p in positions if float(p.get("shares", 0)) > 0]
+    if not active_tickers:
         return {"profiles": {}, "current": {}, "active_profile": active_profile}
 
-    # Build portfolio to get current weights
-    quotes = get_quotes(tickers)
-    currencies = list(set(get_native_currency(t) for t in tickers))
+    # Build portfolio to get current weights (only active tickers need live quotes)
+    quotes = get_quotes(active_tickers)
+    currencies = list(set(get_native_currency(t) for t in active_tickers))
     fx_rates = get_fx_rates(currencies, base=base_currency)
     tx_res = db.table("transactions").select("*").eq("user_id", user_id).execute()
     summary = build_portfolio(positions, quotes, fx_rates, base_currency, tx_res.data or [])
