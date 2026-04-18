@@ -61,7 +61,6 @@ export default function RebalancingPage() {
   const contribution = parseFloat(contributionStr) || 0;
   const [tcModel, setTcModel] = useState("broker");
   const [msPeriod, setMsPeriod] = useState("2y");
-  const [msMaxSingle, setMsMaxSingle] = useState(0.40);
 
   const { data: portfolio } = usePortfolio();
   const { profile } = useProfileStore();
@@ -80,6 +79,7 @@ export default function RebalancingPage() {
     queryFn: () => fetchRebalancing({ contribution, tc_model: tcModel }),
   });
 
+  const msMaxSingle = settings?.max_single_asset ?? 0.40;
   const { data: msData, isLoading: msLoading, refetch: refetchMs } = useQuery({
     queryKey: ["rebalancing-max-sharpe", msPeriod, msMaxSingle],
     queryFn: () => fetchRequiredForMaxSharpe({ period: msPeriod, max_single_asset: msMaxSingle }),
@@ -415,16 +415,6 @@ export default function RebalancingPage() {
             >
               {["1y", "2y", "3y", "5y", "10y"].map((p) => <option key={p}>{p}</option>)}
             </select>
-          </div>
-          <div>
-            <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">
-              Max Single Asset: {fmtPct(msMaxSingle * 100)}
-            </label>
-            <input
-              type="range" min={0.1} max={1} step={0.05} value={msMaxSingle}
-              onChange={(e) => setMsMaxSingle(parseFloat(e.target.value))}
-              className="w-40 accent-bloomberg-gold"
-            />
           </div>
           <button
             onClick={() => refetchMs()}
