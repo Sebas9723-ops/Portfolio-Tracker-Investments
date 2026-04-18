@@ -18,12 +18,7 @@ import {
 
 const COLORS = ["#f3a712", "#4dff4d", "#ff4d4d", "#38b2ff", "#c084fc", "#fb923c", "#34d399"];
 
-interface PortfolioRow {
-  ticker: string; name: string; price_native: number; currency: string;
-  change_pct_1d: number; shares: number; value_base: number;
-  unrealized_pnl: number | null; unrealized_pnl_pct: number | null;
-  weight: number; data_source: string;
-}
+import type { PortfolioRow } from "@/lib/types";
 
 const PositionRow = memo(function PositionRow({
   row, ccy, onDelete,
