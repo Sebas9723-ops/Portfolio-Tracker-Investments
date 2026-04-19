@@ -222,13 +222,21 @@ def get_portfolio_history(
         elif tx.get("action") == "SELL":
             running[ticker] = max(0.0, running[ticker] - qty)
 
-    # If no transactions at all before start, fall back to current shares
-    if all(v == 0.0 for v in running.values()):
+    # Fall back to current shares only when there are zero BUY/SELL transactions
+    # anywhere in history.  If BUY/SELL transactions exist, the reconstruction
+    # below handles the share evolution correctly; using current_shares as a
+    # baseline AND replaying buys would double-count shares.
+    has_buy_sell = any(tx.get("action") in ("BUY", "SELL") for tx in transactions)
+    if not has_buy_sell and all(v == 0.0 for v in running.values()):
         running = dict(current_shares)
 
-    # Index transactions >= start_date by date
+    # Index BUY/SELL transactions >= start_date by date.
+    # DIVIDEND and other actions must be excluded — they do not change share count
+    # and treating them as sells would collapse positions on dividend dates.
     changes: dict[str, dict[str, float]] = {}
     for tx in transactions:
+        if tx.get("action") not in ("BUY", "SELL"):
+            continue
         tx_date = (tx.get("date") or "")[:10]
         if tx_date < start:
             continue
