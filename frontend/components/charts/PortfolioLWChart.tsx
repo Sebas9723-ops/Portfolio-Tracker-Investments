@@ -61,8 +61,20 @@ export function PortfolioLWChart({ data }: Props) {
 
   useEffect(() => {
     if (!seriesRef.current || !data.length) return;
+    // Sort and deduplicate by date before feeding to lightweight-charts.
+    // The library requires strictly ascending timestamps; duplicate or
+    // out-of-order entries throw an assertion error and crash the chart.
+    const seen = new Set<string>();
+    const clean = data
+      .slice()
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .filter((d) => {
+        if (seen.has(d.date)) return false;
+        seen.add(d.date);
+        return true;
+      });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    seriesRef.current.setData(data.map((d) => ({ time: d.date as any, value: d.value })));
+    seriesRef.current.setData(clean.map((d) => ({ time: d.date as any, value: d.value })));
     chartRef.current?.timeScale().fitContent();
   }, [data]);
 

@@ -151,9 +151,12 @@ def get_portfolio_history(
         else:
             return []
         price_df = price_df.ffill()
-        # Only drop the last row when it corresponds to today's date (UTC).
-        # Previously we always dropped it, which silently removed yesterday's
-        # confirmed close when the server clock rolled past midnight UTC.
+        # Deduplicate: yfinance occasionally returns two rows for the same
+        # calendar date (tz-aware timestamps that collapse to the same date).
+        # lightweight-charts requires strictly ascending dates, so keep the last.
+        price_df.index = price_df.index.normalize()
+        price_df = price_df[~price_df.index.duplicated(keep="last")]
+        # Drop the last row when it corresponds to today's date (UTC).
         if len(price_df) > 1:
             last_row_date = price_df.index[-1].date()
             if last_row_date >= date.today():
@@ -273,7 +276,16 @@ def get_portfolio_history(
         if total > 0:
             result.append({"date": day_str, "value": round(total, 2)})
 
-    return result
+    # Guarantee strict ascending order and no duplicate dates so the chart
+    # never throws an assertion error regardless of yfinance quirks.
+    result.sort(key=lambda x: x["date"])
+    seen: set[str] = set()
+    deduped = []
+    for item in result:
+        if item["date"] not in seen:
+            seen.add(item["date"])
+            deduped.append(item)
+    return deduped
 
 
 # ── Snapshots ─────────────────────────────────────────────────────────────────
