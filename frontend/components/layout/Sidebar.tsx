@@ -127,11 +127,11 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
 
       <aside
         className={cn(
-          "fixed top-0 left-0 z-50 h-full w-56 flex flex-col bg-white transition-transform duration-200",
+          "fixed top-0 left-0 z-50 h-full w-56 flex flex-col bg-bloomberg-card transition-transform duration-200",
           "lg:static lg:translate-x-0 lg:z-auto",
           isOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         )}
-        style={{ borderRight: "1px solid #e2e8f0" }}
+        style={{ borderRight: "1px solid var(--border)" }}
       >
         {/* Logo + close button */}
         <div className="flex items-center justify-between px-4 py-4 border-b border-bloomberg-border shrink-0">

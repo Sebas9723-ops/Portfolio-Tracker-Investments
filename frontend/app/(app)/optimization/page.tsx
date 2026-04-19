@@ -10,7 +10,9 @@ import { useProfileStore } from "@/lib/store/profileStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { fmtPct, fmtCurrency } from "@/lib/formatters";
 import type { OptimizationResult, FrontierPoint, TickerFloorCap, CombinationRange } from "@/lib/types";
-import { Plus, Trash2, Save } from "lucide-react";
+import { Plus, Trash2, Save, FlaskConical } from "lucide-react";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import { backtestWeights } from "@/lib/api/analytics";
 import { useAIChat } from "@/lib/context/aiChatContext";
 
 const FrontierCanvas = dynamic(
@@ -174,6 +176,20 @@ export default function OptimizationPage() {
       },
     });
   }, [result, setSettings]);
+
+  // Backtest state
+  const [backtestResult, setBacktestResult] = useState<{
+    optimal_series: { date: string; value: number }[];
+    current_series: { date: string; value: number }[];
+    label: string;
+  } | null>(null);
+  const [backtestPeriod, setBacktestPeriod] = useState("1y");
+
+  const { mutate: runBacktest, isPending: pendingBacktest } = useMutation({
+    mutationFn: ({ weights, label }: { weights: Record<string, number>; label: string }) =>
+      backtestWeights(weights, backtestPeriod).then((r) => ({ ...r, label })),
+    onSuccess: (data) => setBacktestResult(data),
+  });
 
   const { mutate: runBL, isPending: pendingBL } = useMutation({
     mutationFn: () => {
@@ -639,6 +655,80 @@ export default function OptimizationPage() {
             />
           </div>
         </>
+      )}
+
+      {/* Backtest */}
+      {result && (
+        <div className="bbg-card">
+          <p className="bbg-header" style={{ color: "#4dff4d" }}>Backtest — Optimal vs Current</p>
+          <p className="text-bloomberg-muted text-[10px] mb-3">
+            Simulate how an optimized portfolio would have performed vs your current holdings over a historical period.
+          </p>
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            <div className="flex gap-1">
+              {(["1y", "2y", "3y"] as const).map((p) => (
+                <button key={p}
+                  onClick={() => setBacktestPeriod(p)}
+                  className={`text-[10px] px-2 py-0.5 border transition-colors ${
+                    backtestPeriod === p
+                      ? "border-bloomberg-gold text-bloomberg-gold bg-bloomberg-gold/10"
+                      : "border-bloomberg-border text-bloomberg-muted"
+                  }`}
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
+            {[
+              { label: "Max Sharpe", key: "max_sharpe" as const, color: COLORS.maxSharpe },
+              { label: "Min Vol", key: "min_vol" as const, color: COLORS.minVol },
+              { label: "Max Return", key: "max_return" as const, color: COLORS.maxReturn },
+            ].map(({ label, key, color }) => (
+              <button
+                key={key}
+                onClick={() => runBacktest({ weights: result[key].weights, label })}
+                disabled={pendingBacktest}
+                className="flex items-center gap-1.5 text-[10px] px-3 py-1.5 border disabled:opacity-50 transition-colors hover:opacity-80"
+                style={{ borderColor: color, color }}
+              >
+                <FlaskConical size={11} /> Backtest {label}
+              </button>
+            ))}
+          </div>
+          {pendingBacktest && (
+            <div className="text-bloomberg-muted text-xs py-3">Computing backtest…</div>
+          )}
+          {backtestResult && !pendingBacktest && (
+            <>
+              <p className="text-bloomberg-muted text-[10px] mb-2">
+                {backtestResult.label} vs Current — {backtestPeriod} lookback (normalized to 100)
+              </p>
+              <ResponsiveContainer width="100%" height={200}>
+                <LineChart
+                  data={(() => {
+                    const optMap = Object.fromEntries(backtestResult.optimal_series.map((d) => [d.date, d.value]));
+                    const curMap = Object.fromEntries(backtestResult.current_series.map((d) => [d.date, d.value]));
+                    const dates = [...new Set([...Object.keys(optMap), ...Object.keys(curMap)])].sort();
+                    return dates.map((date) => ({
+                      date: date.slice(5),
+                      optimal: optMap[date] != null ? +(100 + optMap[date]).toFixed(2) : undefined,
+                      current: curMap[date] != null ? +(100 + curMap[date]).toFixed(2) : undefined,
+                    }));
+                  })()}
+                  margin={{ top: 4, right: 4, bottom: 0, left: 0 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="date" tick={{ fontSize: 9 }} tickLine={false} interval="preserveStartEnd" />
+                  <YAxis tick={{ fontSize: 9 }} tickLine={false} axisLine={false} width={40} />
+                  <Tooltip formatter={(v: number) => `${v.toFixed(1)}`} />
+                  <Legend wrapperStyle={{ fontSize: 10 }} />
+                  <Line type="monotone" dataKey="optimal" stroke={COLORS.maxSharpe} strokeWidth={1.5} dot={false} name={backtestResult.label} />
+                  <Line type="monotone" dataKey="current" stroke={COLORS.current} strokeWidth={1.5} strokeDasharray="4 3" dot={false} name="Current" />
+                </LineChart>
+              </ResponsiveContainer>
+            </>
+          )}
+        </div>
       )}
 
       {/* Black-Litterman */}

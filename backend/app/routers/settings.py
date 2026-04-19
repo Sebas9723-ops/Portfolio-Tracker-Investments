@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from app.auth.dependencies import get_user_id
 from app.db.supabase_client import get_admin_client
 from app.models.user import UserSettings
@@ -64,9 +64,29 @@ alerts_router = APIRouter(prefix="/api/alerts", tags=["alerts"])
 
 @alerts_router.get("")
 def list_alerts(user_id: str = Depends(get_user_id)):
+    from app.services.market_data import get_quotes
     db = get_admin_client()
     res = db.table("alerts").select("*").eq("user_id", user_id).execute()
-    return res.data or []
+    alerts = res.data or []
+    if not alerts:
+        return alerts
+    tickers = list({a["ticker"] for a in alerts})
+    quotes = get_quotes(tickers)
+    for alert in alerts:
+        quote = quotes.get(alert["ticker"])
+        if quote:
+            price = quote.price
+            alert["current_price"] = price
+            if alert["alert_type"] == "above":
+                alert["triggered"] = price >= alert["threshold"]
+            elif alert["alert_type"] == "below":
+                alert["triggered"] = price <= alert["threshold"]
+            else:
+                alert["triggered"] = False
+        else:
+            alert["current_price"] = None
+            alert["triggered"] = False
+    return alerts
 
 
 @alerts_router.post("", status_code=201)

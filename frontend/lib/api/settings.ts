@@ -38,3 +38,21 @@ export const fetchFundamentals = (ticker: string) =>
 
 export const fetchTechnicals = (ticker: string, period = "1y") =>
   apiClient.get(`/api/technicals/${ticker}`, { params: { period } }).then((r) => r.data);
+
+export type Alert = {
+  id: string;
+  ticker: string;
+  alert_type: "above" | "below";
+  threshold: number;
+  current_price: number | null;
+  triggered: boolean;
+};
+
+export const fetchAlerts = () =>
+  apiClient.get<Alert[]>("/api/alerts").then((r) => r.data);
+
+export const createAlert = (body: { ticker: string; alert_type: string; threshold: number }) =>
+  apiClient.post<Alert>("/api/alerts", body).then((r) => r.data);
+
+export const deleteAlert = (id: string) =>
+  apiClient.delete(`/api/alerts/${id}`);

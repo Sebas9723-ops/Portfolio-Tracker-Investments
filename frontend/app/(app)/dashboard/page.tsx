@@ -2,17 +2,18 @@
 import { useState, memo } from "react";
 import dynamic from "next/dynamic";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { usePortfolio, useSnapshots, useSaveSnapshot, usePortfolioHistory } from "@/lib/hooks/usePortfolio";
+import { usePortfolio, usePortfolioHistory } from "@/lib/hooks/usePortfolio";
 import { fetchTransactions } from "@/lib/api/transactions";
-import { fetchPortfolioBreakdown } from "@/lib/api/analytics";
+import { fetchPortfolioBreakdown, fetchAnalytics } from "@/lib/api/analytics";
 import { updateSettings } from "@/lib/api/settings";
 import { fmtCurrency, fmtPct, fmtDate } from "@/lib/formatters";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
+  ComposedChart, Area, Line,
 } from "recharts";
-import { Save, RefreshCw, TrendingUp, TrendingDown } from "lucide-react";
+import { RefreshCw, TrendingUp, TrendingDown } from "lucide-react";
 import Link from "next/link";
 import type { PortfolioRow } from "@/lib/types";
 
@@ -185,15 +186,21 @@ const PositionRow = memo(function PositionRow({ row, ccy }: { row: PortfolioRow;
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const [chartPeriod, setChartPeriod] = useState<Period>("Max");
+  const [chartMode, setChartMode] = useState<"value" | "benchmark">("value");
   const [editingBasis, setEditingBasis] = useState(false);
   const [basisInput, setBasisInput] = useState("");
   const [donutView, setDonutView] = useState<"weights" | "sectors" | "regions">("weights");
 
   const { data: portfolio, isLoading, isFetching } = usePortfolio();
-  const { mutate: saveSnap, isPending: saving } = useSaveSnapshot();
   const { data: historyData, isLoading: historyLoading } = usePortfolioHistory();
   const { data: transactions } = useQuery({ queryKey: ["transactions"], queryFn: fetchTransactions });
   const { data: breakdown } = useQuery({ queryKey: ["portfolioBreakdown"], queryFn: fetchPortfolioBreakdown, staleTime: 60 * 60 * 1000 });
+  const { data: analyticsData } = useQuery({
+    queryKey: ["analytics", "1y"],
+    queryFn: () => fetchAnalytics("1y"),
+    staleTime: 60 * 60 * 1000,
+    enabled: chartMode === "benchmark",
+  });
   const qc = useQueryClient();
   const base_currency = useSettingsStore((s) => s.base_currency);
   const cost_basis_usd = useSettingsStore((s) => s.cost_basis_usd);
@@ -263,6 +270,27 @@ export default function DashboardPage() {
   const periodChange = totalValue - periodStart;
   const periodChangePct = periodStart > 0 ? (periodChange / periodStart) * 100 : 0;
 
+  // Benchmark overlay — normalize analytics series to start at 100
+  const normSeries = (s: { date: string; value: number }[]) => {
+    if (!s.length) return s;
+    const first = s[0].value;
+    return s.map((d) => ({ date: d.date, value: first !== 0 ? 100 + d.value - first : 100 }));
+  };
+  const bmPortfolioSeries = analyticsData?.portfolio_series ? normSeries(analyticsData.portfolio_series) : undefined;
+  const bmBenchmarkSeries = analyticsData?.benchmark_series ? normSeries(analyticsData.benchmark_series) : undefined;
+  const bmTicker = analyticsData?.metrics?.benchmark_ticker ?? "VOO";
+
+  // Contributions tracker — cumulative invested vs portfolio value
+  const buyTxs = (transactions ?? [])
+    .filter((t) => t.action === "BUY")
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const contributionsData = allHistory.map((h) => {
+    const invested = buyTxs
+      .filter((t) => t.date <= h.date)
+      .reduce((s, t) => s + t.quantity * t.price_native + t.fee_native, 0);
+    return { date: h.date.slice(5), value: Math.round(h.value), invested: Math.round(invested) };
+  });
+
   // Allocation donut
   const pieData = portfolio.rows.map((r) => ({ name: r.ticker, value: r.value_base }));
 
@@ -310,14 +338,7 @@ export default function DashboardPage() {
             {fmtDate(portfolio.as_of)}{isFetching && " · refreshing…"}
           </p>
         </div>
-        <button
-          onClick={() => saveSnap(undefined)}
-          disabled={saving}
-          className="flex items-center gap-1.5 text-[10px] text-bloomberg-muted border border-bloomberg-border px-3 py-1.5 hover:text-bloomberg-gold hover:border-bloomberg-gold"
-        >
-          {saving ? <RefreshCw size={11} className="animate-spin" /> : <Save size={11} />}
-          Save Snapshot
-        </button>
+        {isFetching && <RefreshCw size={11} className="animate-spin text-bloomberg-muted" />}
       </div>
 
       {/* Two-column layout */}
@@ -336,7 +357,12 @@ export default function DashboardPage() {
                     {fmtCurrency(totalValue, ccy)}
                   </span>
                   {dayChange !== 0 && (
-                    <Chg v={dayChangePct} pct className="text-xs" />
+                    <div className="flex flex-col">
+                      <Chg v={dayChangePct} pct className="text-xs" />
+                      <span className="text-[10px] text-bloomberg-muted">
+                        {dayChange >= 0 ? "+" : ""}{fmtCurrency(dayChange, ccy)} today
+                      </span>
+                    </div>
                   )}
                 </div>
                 <div className="flex items-center gap-2 mt-1">
@@ -346,25 +372,69 @@ export default function DashboardPage() {
                   </span>
                 </div>
               </div>
-              {/* Period selector */}
-              <div className="flex gap-1 shrink-0">
-                {PERIODS.map((p) => (
-                  <button
-                    key={p}
-                    onClick={() => setChartPeriod(p)}
-                    className={`text-[10px] px-2 py-0.5 border transition-colors ${
-                      chartPeriod === p
-                        ? "border-bloomberg-gold text-bloomberg-gold bg-bloomberg-gold/10"
-                        : "border-bloomberg-border text-bloomberg-muted hover:border-bloomberg-muted"
-                    }`}
-                  >
-                    {p}
-                  </button>
-                ))}
+              <div className="flex flex-col items-end gap-1 shrink-0">
+                {/* Chart mode toggle */}
+                <div className="flex gap-1">
+                  {(["value", "benchmark"] as const).map((m) => (
+                    <button
+                      key={m}
+                      onClick={() => setChartMode(m)}
+                      className={`text-[9px] px-2 py-0.5 border transition-colors ${
+                        chartMode === m
+                          ? "border-bloomberg-gold text-bloomberg-gold bg-bloomberg-gold/10"
+                          : "border-bloomberg-border text-bloomberg-muted hover:border-bloomberg-muted"
+                      }`}
+                    >
+                      {m === "value" ? "$ VALUE" : `% vs ${bmTicker}`}
+                    </button>
+                  ))}
+                </div>
+                {/* Period selector — only in value mode */}
+                {chartMode === "value" && (
+                  <div className="flex gap-1">
+                    {PERIODS.map((p) => (
+                      <button
+                        key={p}
+                        onClick={() => setChartPeriod(p)}
+                        className={`text-[10px] px-2 py-0.5 border transition-colors ${
+                          chartPeriod === p
+                            ? "border-bloomberg-gold text-bloomberg-gold bg-bloomberg-gold/10"
+                            : "border-bloomberg-border text-bloomberg-muted hover:border-bloomberg-muted"
+                        }`}
+                      >
+                        {p}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 
-            {historyLoading ? (
+            {chartMode === "benchmark" ? (
+              <div className="mt-3">
+                {bmPortfolioSeries && bmBenchmarkSeries ? (
+                  <>
+                    <div className="flex items-center gap-4 mb-2">
+                      <span className="flex items-center gap-1 text-[10px]" style={{ color: "#f3a712" }}>
+                        <span className="w-4 h-0.5 inline-block" style={{ background: "#f3a712" }} /> Portfolio
+                      </span>
+                      <span className="flex items-center gap-1 text-[10px] text-bloomberg-muted">
+                        <span className="w-4 h-0.5 inline-block border-t border-dashed" style={{ borderColor: "#94a3b8" }} /> {bmTicker}
+                      </span>
+                    </div>
+                    <PortfolioLWChart
+                      data={bmPortfolioSeries}
+                      benchmark={bmBenchmarkSeries}
+                      benchmarkLabel={bmTicker}
+                    />
+                  </>
+                ) : (
+                  <div className="flex items-center justify-center h-40 text-bloomberg-muted text-xs border border-dashed border-bloomberg-border">
+                    Loading benchmark data…
+                  </div>
+                )}
+              </div>
+            ) : historyLoading ? (
               <div className="mt-3 h-40 rounded overflow-hidden">
                 <div className="w-full h-full bg-bloomberg-border/30 animate-pulse rounded" />
               </div>
@@ -414,6 +484,35 @@ export default function DashboardPage() {
               </table>
             </div>
           </div>
+
+          {/* Contributions Tracker */}
+          {contributionsData.length > 1 && (
+            <div className="bbg-card">
+              <p className="bbg-header">Capital vs Portfolio Value</p>
+              <div className="flex items-center gap-4 mb-2">
+                <span className="flex items-center gap-1.5 text-[10px]" style={{ color: "#f3a712" }}>
+                  <span className="w-3 h-3 rounded-sm inline-block opacity-60" style={{ background: "#f3a712" }} /> Portfolio Value
+                </span>
+                <span className="flex items-center gap-1.5 text-[10px] text-bloomberg-muted">
+                  <span className="w-3 h-0.5 inline-block border-t-2 border-dashed" style={{ borderColor: "#38b2ff" }} /> Capital Invested
+                </span>
+              </div>
+              <ResponsiveContainer width="100%" height={160}>
+                <ComposedChart data={contributionsData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="date" tick={{ fontSize: 9 }} tickLine={false} interval="preserveStartEnd" />
+                  <YAxis tick={{ fontSize: 9 }} tickLine={false} axisLine={false} width={50}
+                    tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
+                  <Tooltip
+                    formatter={(v: number, name: string) => [fmtCurrency(v, ccy), name === "value" ? "Portfolio" : "Invested"]}
+                    labelFormatter={(l) => `2026-${l}`}
+                  />
+                  <Area type="monotone" dataKey="value" fill="rgba(243,167,18,0.15)" stroke="#f3a712" strokeWidth={1.5} dot={false} name="value" />
+                  <Line type="monotone" dataKey="invested" stroke="#38b2ff" strokeWidth={1.5} strokeDasharray="4 3" dot={false} name="invested" />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          )}
 
           {/* Dividends */}
           <div className="bbg-card">

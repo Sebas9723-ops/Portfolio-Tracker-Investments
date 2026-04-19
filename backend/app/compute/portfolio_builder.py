@@ -138,6 +138,37 @@ def _compute_tx_avg_costs(
             for ticker, (shares, cost) in running.items()}
 
 
+def compute_realized_pnl(transactions: list[dict]) -> list[dict]:
+    """FIFO realized P&L from SELL transactions (native currency of each ticker)."""
+    running: dict[str, tuple[float, float]] = {}  # ticker → (shares, total_cost_native)
+    realized: dict[str, dict] = {}
+
+    for tx in sorted(transactions, key=lambda t: t.get("date", "")):
+        ticker = tx.get("ticker", "")
+        action = tx.get("action", "")
+        qty = float(tx.get("quantity", 0))
+        price = float(tx.get("price_native", 0))
+        fee = float(tx.get("fee_native", 0))
+
+        shares, cost = running.get(ticker, (0.0, 0.0))
+
+        if action == "BUY":
+            running[ticker] = (shares + qty, cost + price * qty + fee)
+        elif action == "SELL":
+            if shares > 0:
+                avg = cost / shares
+                sell_proceeds = price * qty - fee
+                pnl = sell_proceeds - avg * qty
+                if ticker not in realized:
+                    realized[ticker] = {"ticker": ticker, "realized_pnl": 0.0, "trades": 0}
+                realized[ticker]["realized_pnl"] += pnl
+                realized[ticker]["trades"] += 1
+                remaining = max(0.0, shares - qty)
+                running[ticker] = (remaining, avg * remaining if remaining > 0 else 0.0)
+
+    return list(realized.values())
+
+
 def portfolio_to_df(summary: PortfolioSummary) -> pd.DataFrame:
     """Convert PortfolioSummary to a pandas DataFrame for compute modules."""
     return pd.DataFrame([r.model_dump() for r in summary.rows])

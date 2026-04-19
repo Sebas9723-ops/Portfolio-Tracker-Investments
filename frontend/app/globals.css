@@ -6,6 +6,19 @@
 
 /* ── CSS Variables ─────────────────────────────────────────────────────────── */
 :root {
+  /* Tailwind RGB triplets (enable bg-bloomberg-*/10 opacity modifiers) */
+  --tw-bg:         241 245 249;
+  --tw-card:       255 255 255;
+  --tw-border:     226 232 240;
+  --tw-gold:       15  23  42;   /* dark navy = primary accent in light mode */
+  --tw-gold-dim:   51  65  85;
+  --tw-green:      22  163  74;
+  --tw-red:        220  38  38;
+  --tw-muted:      100 116 139;
+  --tw-text:       15  23  42;
+  --tw-text-dim:   148 163 184;
+
+  /* CSS vars for bbg-* utility classes */
   --bg:      #f1f5f9;
   --card:    #ffffff;
   --border:  #e2e8f0;
@@ -16,6 +29,31 @@
   --text:    #0f172a;
   --text-dim:#94a3b8;
   --shadow:  0 1px 3px 0 rgba(0,0,0,0.07), 0 1px 2px -1px rgba(0,0,0,0.05);
+}
+
+/* ── Dark mode ─────────────────────────────────────────────────────────────── */
+html.dark {
+  --tw-bg:         9   11  18;
+  --tw-card:       15  20  30;
+  --tw-border:     30  42  60;
+  --tw-gold:       243 167  18;  /* actual gold in dark mode */
+  --tw-gold-dim:   180 120  10;
+  --tw-green:      34  197  94;
+  --tw-red:        239  68  68;
+  --tw-muted:      100 116 139;
+  --tw-text:       226 232 240;
+  --tw-text-dim:   100 116 139;
+
+  --bg:      #090b12;
+  --card:    #0f141e;
+  --border:  #1e2a3c;
+  --accent:  #f3a712;
+  --green:   #22c55e;
+  --red:     #ef4444;
+  --muted:   #64748b;
+  --text:    #e2e8f0;
+  --text-dim:#64748b;
+  --shadow:  0 1px 3px 0 rgba(0,0,0,0.4), 0 1px 2px -1px rgba(0,0,0,0.3);
 }
 
 /* ── Reset ─────────────────────────────────────────────────────────────────── */
@@ -61,8 +99,8 @@ html, body {
 .bbg-table { width: 100%; border-collapse: collapse; }
 
 .bbg-table th {
-  background: #f8fafc;
-  color: #475569;
+  background: var(--bg);
+  color: var(--muted);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -74,13 +112,13 @@ html, body {
 }
 .bbg-table td {
   padding: 7px 8px;
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 1px solid var(--border);
   font-size: 12px;
   white-space: nowrap;
   color: var(--text);
 }
 .bbg-table tr:last-child td { border-bottom: none; }
-.bbg-table tr:hover td { background: #f8fafc; }
+.bbg-table tr:hover td { background: var(--bg); }
 
 /* Desktop: restore comfortable padding */
 @media (min-width: 640px) {
@@ -132,3 +170,19 @@ html, body {
 }
 .recharts-polar-grid-concentric path,
 .recharts-polar-grid-angle line { stroke: #e2e8f0 !important; }
+
+/* ── Dark mode Recharts overrides ──────────────────────────────────────────── */
+html.dark .recharts-cartesian-grid-horizontal line,
+html.dark .recharts-cartesian-grid-vertical line { stroke: #1e2a3c !important; }
+html.dark .recharts-text.recharts-cartesian-axis-tick-value tspan { fill: #64748b !important; }
+html.dark .recharts-reference-line-line { stroke: #1e2a3c !important; }
+html.dark .recharts-default-tooltip {
+  background-color: #0f141e !important;
+  border: 1px solid #1e2a3c !important;
+}
+html.dark .recharts-tooltip-label { color: #e2e8f0 !important; }
+html.dark .recharts-tooltip-item { color: #cbd5e1 !important; }
+html.dark .recharts-tooltip-item-name { color: #64748b !important; }
+html.dark .recharts-legend-item-text { color: #64748b !important; }
+html.dark .recharts-polar-grid-concentric path,
+html.dark .recharts-polar-grid-angle line { stroke: #1e2a3c !important; }

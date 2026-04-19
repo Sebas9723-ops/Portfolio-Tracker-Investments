@@ -26,3 +26,6 @@ export const updatePosition = (ticker: string, data: { shares?: number; avg_cost
 
 export const deletePosition = (ticker: string) =>
   apiClient.delete(`/api/portfolio/positions/${ticker}`);
+
+export const fetchRealizedPnl = () =>
+  apiClient.get<{ ticker: string; realized_pnl: number; trades: number }[]>("/api/portfolio/realized-pnl").then((r) => r.data);

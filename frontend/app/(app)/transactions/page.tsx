@@ -2,8 +2,9 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchTransactions, createTransaction, deleteTransaction } from "@/lib/api/transactions";
+import { fetchRealizedPnl } from "@/lib/api/portfolio";
 import { fmtCurrency, fmtDate, colorClass } from "@/lib/formatters";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, Download } from "lucide-react";
 import type { TransactionAction } from "@/lib/types";
 
 const ACTIONS: TransactionAction[] = ["BUY", "SELL", "DIVIDEND", "SPLIT", "FEE"];
@@ -12,9 +13,29 @@ const initForm = { ticker: "", date: new Date().toISOString().split("T")[0], act
 
 export default function TransactionsPage() {
   const { data: transactions, isLoading } = useQuery({ queryKey: ["transactions"], queryFn: fetchTransactions, staleTime: 5 * 60 * 1000 });
+  const { data: realizedPnl } = useQuery({ queryKey: ["realizedPnl"], queryFn: fetchRealizedPnl, staleTime: 5 * 60 * 1000 });
   const qc = useQueryClient();
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(initForm);
+
+  const downloadCSV = () => {
+    if (!transactions?.length) return;
+    const headers = ["Date", "Ticker", "Action", "Quantity", "Price", "Fee", "Total", "Currency", "Comment"];
+    const rows = transactions.map((tx) => [
+      tx.date, tx.ticker, tx.action,
+      tx.quantity, tx.price_native, tx.fee_native,
+      (tx.quantity * tx.price_native).toFixed(2),
+      tx.currency, `"${(tx.comment || "").replace(/"/g, '""')}"`,
+    ]);
+    const csv = [headers, ...rows].map((r) => r.join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `transactions_${new Date().toISOString().split("T")[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const createMut = useMutation({
     mutationFn: createTransaction,
@@ -44,12 +65,21 @@ export default function TransactionsPage() {
           <h1 className="text-bloomberg-gold text-xs font-bold uppercase tracking-widest">Transactions</h1>
           <p className="text-bloomberg-muted text-[10px]">{transactions?.length ?? 0} records · Total deployed: {fmtCurrency(totalBought)}</p>
         </div>
-        <button
-          onClick={() => setShowForm(true)}
-          className="flex items-center gap-1.5 text-[10px] text-bloomberg-muted border border-bloomberg-border px-3 py-1.5 hover:text-bloomberg-gold hover:border-bloomberg-gold"
-        >
-          <Plus size={11} /> Add Transaction
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={downloadCSV}
+            disabled={!transactions?.length}
+            className="flex items-center gap-1.5 text-[10px] text-bloomberg-muted border border-bloomberg-border px-3 py-1.5 hover:text-bloomberg-gold hover:border-bloomberg-gold disabled:opacity-40"
+          >
+            <Download size={11} /> Export CSV
+          </button>
+          <button
+            onClick={() => setShowForm(true)}
+            className="flex items-center gap-1.5 text-[10px] text-bloomberg-muted border border-bloomberg-border px-3 py-1.5 hover:text-bloomberg-gold hover:border-bloomberg-gold"
+          >
+            <Plus size={11} /> Add Transaction
+          </button>
+        </div>
       </div>
 
       {showForm && (
@@ -99,6 +129,24 @@ export default function TransactionsPage() {
               CANCEL
             </button>
           </div>
+        </div>
+      )}
+
+      {realizedPnl && realizedPnl.length > 0 && (
+        <div className="bbg-card">
+          <p className="bbg-header">Realized P&amp;L</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+            {realizedPnl.map((item) => (
+              <div key={item.ticker} className="border border-bloomberg-border p-2.5">
+                <p className="text-bloomberg-gold text-[10px] font-bold">{item.ticker}</p>
+                <p className={`text-sm font-semibold mt-1 ${item.realized_pnl >= 0 ? "text-green-400" : "text-red-400"}`}>
+                  {item.realized_pnl >= 0 ? "+" : ""}{fmtCurrency(item.realized_pnl)}
+                </p>
+                <p className="text-bloomberg-muted text-[9px] mt-0.5">{item.trades} trade{item.trades !== 1 ? "s" : ""} closed</p>
+              </div>
+            ))}
+          </div>
+          <p className="text-bloomberg-muted text-[9px] mt-2">FIFO · native currency · excludes fees on open positions</p>
         </div>
       )}
 

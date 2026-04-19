@@ -1,7 +1,8 @@
 "use client";
-import { Menu, RefreshCw } from "lucide-react";
+import { Menu, RefreshCw, Sun, Moon } from "lucide-react";
 import { useMarketQuotes } from "@/lib/hooks/useMarketQuotes";
 import { useSettingsStore } from "@/lib/store/settingsStore";
+import { useThemeStore } from "@/lib/store/themeStore";
 import { fmtCurrency, fmtPct, colorClass } from "@/lib/formatters";
 
 const WATCH_TICKERS = ["VOO", "QQQM", "^GSPC", "^VIX"];
@@ -16,11 +17,12 @@ interface TopBarProps {
 export function TopBar({ onMenuClick }: TopBarProps) {
   const { data: quotes, isFetching } = useMarketQuotes(WATCH_TICKERS);
   const base_currency = useSettingsStore((s) => s.base_currency);
+  const { dark, toggle } = useThemeStore();
 
   return (
     <header
-      className="h-9 flex items-center justify-between px-3 shrink-0 text-xs bg-white"
-      style={{ borderBottom: "1px solid #e2e8f0" }}
+      className="h-9 flex items-center justify-between px-3 shrink-0 text-xs bg-bloomberg-card"
+      style={{ borderBottom: "1px solid var(--border)" }}
     >
       {/* Hamburger — only on mobile/tablet */}
       <button
@@ -52,7 +54,7 @@ export function TopBar({ onMenuClick }: TopBarProps) {
         })}
       </div>
 
-      {/* Status + currency */}
+      {/* Status + currency + theme toggle */}
       <div className="flex items-center gap-2 text-bloomberg-muted shrink-0 ml-2">
         {isFetching && <RefreshCw size={11} className="animate-spin" />}
         <span
@@ -64,6 +66,13 @@ export function TopBar({ onMenuClick }: TopBarProps) {
         <span className="text-bloomberg-text-dim hidden sm:inline">
           {new Date().toLocaleTimeString("en-US", { hour12: false })}
         </span>
+        <button
+          onClick={toggle}
+          className="flex items-center justify-center w-6 h-6 text-bloomberg-muted hover:text-bloomberg-text transition-colors"
+          title={dark ? "Switch to light mode" : "Switch to dark mode"}
+        >
+          {dark ? <Sun size={13} /> : <Moon size={13} />}
+        </button>
       </div>
     </header>
   );

@@ -2,6 +2,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, useEffect } from "react";
 import { useAuthStore } from "@/lib/store/authStore";
+import { useThemeStore } from "@/lib/store/themeStore";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
@@ -9,8 +10,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
       new QueryClient({
         defaultOptions: {
           queries: {
-            staleTime: 5 * 60 * 1000,     // 5 minutes
-            gcTime: 30 * 60 * 1000,        // 30 minutes
+            staleTime: 5 * 60 * 1000,
+            gcTime: 30 * 60 * 1000,
             retry: 3,
             retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 30_000),
             refetchOnWindowFocus: false,
@@ -19,11 +20,15 @@ export function Providers({ children }: { children: React.ReactNode }) {
       })
   );
 
-  // Rehydrate auth store from localStorage on the client only.
-  // skipHydration in the store prevents SSR/client mismatch ("Application error" on load).
   useEffect(() => {
     useAuthStore.persist.rehydrate();
+    useThemeStore.persist.rehydrate();
   }, []);
+
+  const dark = useThemeStore((s) => s.dark);
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", dark);
+  }, [dark]);
 
   return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
 }

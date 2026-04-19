@@ -70,6 +70,14 @@ export const fetchPortfolioBreakdown = () =>
     .get<{ sectors: Record<string, number>; regions: Record<string, number> }>("/api/portfolio/breakdown")
     .then((r) => r.data);
 
+export const backtestWeights = (weights: Record<string, number>, period = "1y") =>
+  apiClient
+    .post<{ optimal_series: { date: string; value: number }[]; current_series: { date: string; value: number }[] }>(
+      "/api/analytics/backtest-weights",
+      { weights, period }
+    )
+    .then((r) => r.data);
+
 export const fetchBlackLitterman = (body: {
   views: Record<string, number>;
   tau?: number;

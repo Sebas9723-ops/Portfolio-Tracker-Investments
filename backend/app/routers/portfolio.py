@@ -4,7 +4,7 @@ from app.db.supabase_client import get_admin_client
 from app.models.portfolio import PortfolioSummary, PositionCreate, PositionUpdate, Snapshot, SnapshotCreate
 from app.services.market_data import get_quotes
 from app.services.fx_service import get_fx_rates, _FX_PAIR_MAP, _FALLBACK_RATES
-from app.compute.portfolio_builder import build_portfolio
+from app.compute.portfolio_builder import build_portfolio, compute_realized_pnl
 from app.services.exchange_classifier import get_native_currency, yf_ticker
 from datetime import date, timedelta
 
@@ -457,6 +457,14 @@ def _fetch_etf_breakdown(ticker: str) -> tuple[str, dict, dict]:
 
     cache.set(cache_key, {"sector_weights": sector_weights, "info": info}, ttl=3600)
     return ticker, sector_weights, info
+
+
+@router.get("/realized-pnl")
+def get_realized_pnl(user_id: str = Depends(get_user_id)):
+    """Realized P&L per ticker from closed SELL transactions (FIFO, native currency)."""
+    db = get_admin_client()
+    res = db.table("transactions").select("*").eq("user_id", user_id).execute()
+    return compute_realized_pnl(res.data or [])
 
 
 @router.get("/breakdown")

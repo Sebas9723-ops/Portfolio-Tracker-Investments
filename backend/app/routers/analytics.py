@@ -4,7 +4,7 @@ from app.db.supabase_client import get_admin_client
 from app.services.market_data import get_historical_multi, get_risk_free_rate
 from app.compute.returns import (
     build_portfolio_returns, compute_twr, compute_monthly_returns,
-    compute_drawdown_episodes, cum_return_series
+    compute_drawdown_episodes, cum_return_series,
 )
 from app.compute.risk import (
     compute_extended_ratios, compute_rolling_metrics,
@@ -153,3 +153,36 @@ def vol_regime_endpoint(
         {t: weights.get(t, 0) for t in tickers},
     )
     return compute_vol_regime(portfolio_returns, window=window)
+
+
+@router.post("/backtest-weights")
+def backtest_weights(
+    body: dict,
+    user_id: str = Depends(get_user_id),
+):
+    """Backtest a set of weights vs the current portfolio over a given period."""
+    weights: dict = body.get("weights", {})
+    period: str = body.get("period", "1y")
+
+    if not weights:
+        return {"optimal_series": [], "current_series": []}
+
+    tickers = list(weights.keys())
+    current_tickers, current_weights = _get_positions_and_weights(user_id)
+    all_tickers = list(set(tickers + current_tickers))
+
+    hist = get_historical_multi(all_tickers, period=period)
+
+    optimal_returns = build_portfolio_returns(
+        {t: hist[t] for t in tickers if t in hist},
+        weights,
+    )
+    current_returns = build_portfolio_returns(
+        {t: hist[t] for t in current_tickers if t in hist},
+        {t: current_weights.get(t, 0) for t in current_tickers},
+    )
+
+    return {
+        "optimal_series": cum_return_series(optimal_returns, "Optimal"),
+        "current_series": cum_return_series(current_returns, "Current"),
+    }

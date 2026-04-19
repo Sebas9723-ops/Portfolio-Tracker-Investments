@@ -12,16 +12,16 @@ const config: Config = {
     extend: {
       colors: {
         bloomberg: {
-          bg:        "#f1f5f9",
-          card:      "#ffffff",
-          border:    "#e2e8f0",
-          gold:      "#0f172a",
-          "gold-dim":"#334155",
-          green:     "#16a34a",
-          red:       "#dc2626",
-          muted:     "#64748b",
-          text:      "#0f172a",
-          "text-dim":"#94a3b8",
+          bg:         "rgb(var(--tw-bg) / <alpha-value>)",
+          card:       "rgb(var(--tw-card) / <alpha-value>)",
+          border:     "rgb(var(--tw-border) / <alpha-value>)",
+          gold:       "rgb(var(--tw-gold) / <alpha-value>)",
+          "gold-dim": "rgb(var(--tw-gold-dim) / <alpha-value>)",
+          green:      "rgb(var(--tw-green) / <alpha-value>)",
+          red:        "rgb(var(--tw-red) / <alpha-value>)",
+          muted:      "rgb(var(--tw-muted) / <alpha-value>)",
+          text:       "rgb(var(--tw-text) / <alpha-value>)",
+          "text-dim": "rgb(var(--tw-text-dim) / <alpha-value>)",
         },
       },
       fontFamily: {

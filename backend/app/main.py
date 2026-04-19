@@ -23,7 +23,14 @@ async def lifespan(app: FastAPI):
         print("✓ Finnhub connection OK")
     except Exception as e:
         print(f"⚠ Finnhub check failed: {e}")
+
+    # Start daily snapshot scheduler (17:30 America/Bogota)
+    from app.scheduler import start_scheduler
+    scheduler = start_scheduler()
+
     yield
+
+    scheduler.shutdown(wait=False)
 
 
 app = FastAPI(

@@ -33,8 +33,8 @@ export function BottomNav({ onMenuClick }: BottomNavProps) {
 
   return (
     <nav
-      className="lg:hidden fixed bottom-0 inset-x-0 z-30 flex items-center bg-white"
-      style={{ borderTop: "1px solid #e2e8f0", height: 56 }}
+      className="lg:hidden fixed bottom-0 inset-x-0 z-30 flex items-center bg-bloomberg-card"
+      style={{ borderTop: "1px solid var(--border)", height: 56 }}
     >
       {TABS.map((tab) => {
         const active = isGroupActive(tab.label);

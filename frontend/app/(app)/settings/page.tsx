@@ -1,9 +1,11 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { fetchSettings, updateSettings } from "@/lib/api/settings";
+import { fetchSettings, updateSettings, fetchAlerts, createAlert, deleteAlert } from "@/lib/api/settings";
+import type { Alert } from "@/lib/api/settings";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { useProfileStore, type InvestorProfile } from "@/lib/store/profileStore";
+import { Trash2, Bell, BellOff } from "lucide-react";
 import type { UserSettings } from "@/lib/types";
 
 const PROFILES_LABELS: Record<string, string> = { conservative: "Conservative", base: "Base", aggressive: "Aggressive" };
@@ -20,13 +22,28 @@ const CURRENCIES = [
 const BENCHMARKS = ["VOO", "VWCE.DE", "IWDA.AS", "SPY", "QQQ", "IWM", "VTI"];
 const TC_MODELS = ["broker", "etoro", "degiro", "ib"];
 
+const ALERT_INIT = { ticker: "", alert_type: "above" as "above" | "below", threshold: "" };
+
 export default function SettingsPage() {
   const qc = useQueryClient();
   const { data: remote } = useQuery({ queryKey: ["settings"], queryFn: fetchSettings });
+  const { data: alerts } = useQuery({ queryKey: ["alerts"], queryFn: fetchAlerts, staleTime: 60 * 1000 });
   const setLocal = useSettingsStore((s) => s.setSettings);
   const setProfile = useProfileStore((s) => s.setProfile);
   const [form, setForm] = useState<UserSettings | null>(null);
   const [saved, setSaved] = useState(false);
+  const [alertForm, setAlertForm] = useState(ALERT_INIT);
+  const [showAlertForm, setShowAlertForm] = useState(false);
+
+  const createAlertMut = useMutation({
+    mutationFn: (data: { ticker: string; alert_type: string; threshold: number }) => createAlert(data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["alerts"] }); setAlertForm(ALERT_INIT); setShowAlertForm(false); },
+  });
+
+  const deleteAlertMut = useMutation({
+    mutationFn: (id: string) => deleteAlert(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["alerts"] }),
+  });
 
   useEffect(() => { if (remote) setForm(remote); }, [remote]);
 
@@ -154,6 +171,101 @@ export default function SettingsPage() {
             </div>
           );
         })}
+      </div>
+
+      {/* ── Price Alerts ─────────────────────────────────────────────────── */}
+      <div className="bbg-card space-y-3">
+        <div className="flex items-center justify-between">
+          <p className="bbg-header mb-0">Price Alerts</p>
+          <button
+            onClick={() => setShowAlertForm((v) => !v)}
+            className="text-[10px] text-bloomberg-muted border border-bloomberg-border px-3 py-1 hover:text-bloomberg-gold hover:border-bloomberg-gold"
+          >
+            + New Alert
+          </button>
+        </div>
+
+        {showAlertForm && (
+          <div className="grid grid-cols-3 gap-2 border border-bloomberg-border p-3">
+            <div>
+              <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">Ticker</label>
+              <input
+                className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1.5 text-xs focus:outline-none focus:border-bloomberg-gold uppercase"
+                placeholder="e.g. VOO"
+                value={alertForm.ticker}
+                onChange={(e) => setAlertForm((f) => ({ ...f, ticker: e.target.value.toUpperCase() }))}
+              />
+            </div>
+            <div>
+              <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">Type</label>
+              <select
+                className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1.5 text-xs focus:outline-none focus:border-bloomberg-gold"
+                value={alertForm.alert_type}
+                onChange={(e) => setAlertForm((f) => ({ ...f, alert_type: e.target.value as "above" | "below" }))}
+              >
+                <option value="above">Price above</option>
+                <option value="below">Price below</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">Threshold</label>
+              <input
+                type="number"
+                step="any"
+                className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1.5 text-xs focus:outline-none focus:border-bloomberg-gold"
+                placeholder="e.g. 500"
+                value={alertForm.threshold}
+                onChange={(e) => setAlertForm((f) => ({ ...f, threshold: e.target.value }))}
+              />
+            </div>
+            <div className="col-span-3 flex gap-2">
+              <button
+                onClick={() => createAlertMut.mutate({ ticker: alertForm.ticker, alert_type: alertForm.alert_type, threshold: parseFloat(alertForm.threshold) })}
+                disabled={!alertForm.ticker || !alertForm.threshold || createAlertMut.isPending}
+                className="bg-bloomberg-gold text-bloomberg-bg text-xs font-bold px-4 py-1 disabled:opacity-50"
+              >
+                {createAlertMut.isPending ? "SAVING…" : "SAVE"}
+              </button>
+              <button onClick={() => setShowAlertForm(false)} className="text-bloomberg-muted text-xs px-3 py-1 border border-bloomberg-border">
+                CANCEL
+              </button>
+            </div>
+          </div>
+        )}
+
+        {alerts && alerts.length > 0 ? (
+          <div className="space-y-1">
+            {alerts.map((alert: Alert) => (
+              <div key={alert.id} className={`flex items-center justify-between px-3 py-2 border ${alert.triggered ? "border-bloomberg-gold bg-bloomberg-gold/5" : "border-bloomberg-border"}`}>
+                <div className="flex items-center gap-3">
+                  {alert.triggered
+                    ? <Bell size={12} className="text-bloomberg-gold" />
+                    : <BellOff size={12} className="text-bloomberg-muted" />
+                  }
+                  <span className="text-bloomberg-gold text-xs font-bold">{alert.ticker}</span>
+                  <span className="text-bloomberg-muted text-[10px]">
+                    {alert.alert_type === "above" ? "≥" : "≤"} {alert.threshold.toLocaleString()}
+                  </span>
+                  {alert.current_price != null && (
+                    <span className="text-bloomberg-text text-[10px]">
+                      now {alert.current_price.toFixed(2)}
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {alert.triggered && (
+                    <span className="text-bloomberg-gold text-[9px] font-bold uppercase tracking-widest">TRIGGERED</span>
+                  )}
+                  <button onClick={() => deleteAlertMut.mutate(alert.id)} className="text-bloomberg-muted hover:text-bloomberg-red">
+                    <Trash2 size={11} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-bloomberg-muted text-[10px]">No alerts configured.</p>
+        )}
       </div>
 
       <div className="flex items-center gap-4">
