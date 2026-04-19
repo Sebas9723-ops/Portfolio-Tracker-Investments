@@ -149,48 +149,47 @@ class QuantEngine:
     def compute_covariance(self, returns: pd.DataFrame) -> np.ndarray:
         """
         Ledoit-Wolf shrinkage covariance (annualized).
-        For tickers with < full history: fills missing off-diagonal entries
-        with the average cross-asset correlation scaled to each pair's std.
+        - Diagonal: per-ticker sample variance (annualized), no LW needed for 1D.
+        - Off-diagonal: pairwise LW shrinkage on aligned (overlapping) observations.
+        - Short-history pairs: filled with avg_corr * std_i * std_j.
+        - Final matrix projected to PSD cone.
         """
         tickers = list(returns.columns)
         n = len(tickers)
-        cov_full = np.zeros((n, n))
+        cov_full = np.full((n, n), np.nan)
 
-        # Compute full-data std for each ticker
-        stds = returns.std().values * np.sqrt(252)
+        # Diagonal: annualized sample variance per ticker (stable, 1-D)
+        for i, t in enumerate(tickers):
+            col = returns[t].dropna()
+            cov_full[i, i] = float(col.var()) * 252 if len(col) >= 2 else 0.0
 
-        # Fit LW on available pairwise data for full-overlap pairs
-        # For pairs with partial overlap, use rolling correlation proxy
+        # Annualized std for correlation fallback
+        stds = np.array([np.sqrt(cov_full[i, i]) for i in range(n)])
+
+        # Off-diagonal: pairwise Ledoit-Wolf on overlapping observations
         for i in range(n):
-            for j in range(i, n):
+            for j in range(i + 1, n):           # strictly upper triangle, no i==j
                 pair = returns[[tickers[i], tickers[j]]].dropna()
                 if len(pair) < 20:
-                    # Not enough data: fill later
-                    cov_full[i, j] = np.nan
+                    cov_full[i, j] = np.nan      # fill later with avg corr
                     cov_full[j, i] = np.nan
                 else:
                     lw = LedoitWolf().fit(pair.values * np.sqrt(252))
-                    lw_cov = lw.covariance_
-                    cov_full[i, j] = lw_cov[0, 1]
-                    cov_full[j, i] = lw_cov[0, 1]
-                    cov_full[i, i] = lw_cov[0, 0]
-                    cov_full[j, j] = lw_cov[1, 1]
+                    lw_cov_ij = lw.covariance_[0, 1]
+                    cov_full[i, j] = lw_cov_ij
+                    cov_full[j, i] = lw_cov_ij
 
-        # Compute mean correlation from non-NaN off-diagonal entries
-        off_diag_mask = ~np.eye(n, dtype=bool)
+        # Average correlation from all available off-diagonal pairs
         valid_corrs: list[float] = []
         for i in range(n):
             for j in range(i + 1, n):
                 c = cov_full[i, j]
                 if not np.isnan(c) and stds[i] > 0 and stds[j] > 0:
                     valid_corrs.append(c / (stds[i] * stds[j]))
-
         avg_corr = float(np.mean(valid_corrs)) if valid_corrs else 0.3
 
-        # Fill NaN entries with avg_corr * std_i * std_j
+        # Fill NaN off-diagonal entries
         for i in range(n):
-            if np.isnan(cov_full[i, i]):
-                cov_full[i, i] = stds[i] ** 2
             for j in range(i + 1, n):
                 if np.isnan(cov_full[i, j]):
                     fill = avg_corr * stds[i] * stds[j]
@@ -658,75 +657,92 @@ def _solve_cvxpy(
 ) -> Optional[np.ndarray]:
     """
     Solve a single CVXPY instance.
-    Objective depends on profile.
-    CVaR constraint is parametric: -(mu_d - z * sigma_d) <= cvar_limit
-    Returns weight array or None if infeasible/error.
+
+    CVaR constraint (parametric, normal approximation):
+        CVaR_95(daily) = -(mu_daily @ w) + z_alpha * ||L.T @ w||_2 <= cvar_limit
+    where L is the Cholesky factor of cov/252.  This formulation is DCP-valid
+    (norm of an affine expression is convex; the sum with an affine term is convex).
+
+    Returns weight array or None if infeasible/solver error.
     """
     w = cp.Variable(n, nonneg=True)
 
-    # Daily portfolio stats for CVaR (parametric, normal approximation)
+    # ── Cholesky decomposition for DCP-compliant portfolio vol ───────────────
+    # sigma(w)_daily = ||L.T @ w||_2  where  cov/252 = L @ L.T
+    # This avoids cp.sqrt(cp.quad_form(...)) which violates DCP.
+    cov_daily = cov / 252
+    try:
+        L = np.linalg.cholesky(cov_daily)
+    except np.linalg.LinAlgError:
+        L = np.linalg.cholesky(cov_daily + np.eye(n) * 1e-7)
+
     mu_daily = mu / 252
-    port_ret_daily = mu_daily @ w
-    port_var_daily = cp.quad_form(w, cov / 252)
-    port_vol_daily = cp.sqrt(port_var_daily)
+    port_ret_daily = mu_daily @ w                  # affine
+    port_vol_daily = cp.norm(L.T @ w, 2)           # convex (norm of affine)
 
-    # CVaR(95%) parametric: -(E[r] - 1.6449 * sigma)
-    cvar_expr = -(port_ret_daily - z_alpha * port_vol_daily)
+    # CVaR(95%) parametric: loss = -E[r] + z * sigma  (convex)
+    cvar_expr = -port_ret_daily + z_alpha * port_vol_daily
 
-    # TC penalty
+    # TC penalty (convex: sum of pos() = max(0, ...))
     tc_penalty = 0.005 * cp.sum(cp.pos(w - cur_w))
 
-    # Objective
+    # ── Objective ────────────────────────────────────────────────────────────
     if profile == "aggressive":
         objective = cp.Maximize(mu @ w - tc_penalty)
     elif profile == "conservative":
         objective = cp.Minimize(cp.quad_form(w, cov) + tc_penalty)
-    else:  # balanced
-        # Mean-variance: maximize risk-adjusted return
+    else:  # base / balanced
         objective = cp.Maximize(mu @ w - 3.0 * cp.quad_form(w, cov) - tc_penalty)
 
-    # Constraints
-    constraints = [
-        cp.sum(w) == 1,
-        w >= floors,
-        w <= caps,
-        cvar_expr <= cvar_limit_daily,
-    ]
+    # ── Build shared constraint list ─────────────────────────────────────────
+    def _base_constraints(cvar_limit: float) -> list:
+        c = [
+            cp.sum(w) == 1,
+            w >= floors,
+            w <= caps,
+            cvar_expr <= cvar_limit,
+        ]
+        for rule in constraints_motor2:
+            group_tickers = rule.get("tickers", [])
+            idx = [k for k, t in enumerate(tickers) if t in group_tickers]
+            if not idx:
+                continue
+            g = cp.sum(w[idx])
+            if rule.get("min") is not None:
+                c.append(g >= float(rule["min"]))
+            if rule.get("max") is not None:
+                c.append(g <= float(rule["max"]))
+        return c
 
-    # Motor 2 combination ranges
-    for rule in constraints_motor2:
-        group_tickers = rule.get("tickers", [])
-        indices = [i for i, t in enumerate(tickers) if t in group_tickers]
-        if not indices:
-            continue
-        group_sum = cp.sum(w[indices])
-        if rule.get("min") is not None:
-            constraints.append(group_sum >= float(rule["min"]))
-        if rule.get("max") is not None:
-            constraints.append(group_sum <= float(rule["max"]))
-
-    prob = cp.Problem(objective, constraints)
+    # ── Primary solve ────────────────────────────────────────────────────────
+    prob = cp.Problem(objective, _base_constraints(cvar_limit_daily))
     try:
-        prob.solve(solver=cp.CLARABEL, warm_start=True, verbose=False)
+        prob.solve(solver=cp.CLARABEL, verbose=False)
         if prob.status in ("optimal", "optimal_inaccurate") and w.value is not None:
             sol = np.array(w.value, dtype=float)
             sol = np.maximum(sol, 0)
             if sol.sum() > 0:
                 return sol / sol.sum()
-    except Exception as exc:
-        pass  # Infeasible or solver error — skip this sample
+    except Exception:
+        pass
 
-    # Retry with relaxed CVaR
+    # ── Retry with 50% relaxed CVaR (keeps Motor 2) ──────────────────────────
     try:
-        constraints_relaxed = [
-            cp.sum(w) == 1,
-            w >= floors,
-            w <= caps,
-            cvar_expr <= cvar_limit_daily * 1.5,  # 50% relaxation
-        ]
-        prob2 = cp.Problem(objective, constraints_relaxed)
+        prob2 = cp.Problem(objective, _base_constraints(cvar_limit_daily * 1.5))
         prob2.solve(solver=cp.CLARABEL, verbose=False)
         if prob2.status in ("optimal", "optimal_inaccurate") and w.value is not None:
+            sol = np.array(w.value, dtype=float)
+            sol = np.maximum(sol, 0)
+            if sol.sum() > 0:
+                return sol / sol.sum()
+    except Exception:
+        pass
+
+    # ── Last resort: SCS fallback (more tolerant solver) ─────────────────────
+    try:
+        prob3 = cp.Problem(objective, _base_constraints(cvar_limit_daily * 2.0))
+        prob3.solve(solver=cp.SCS, verbose=False)
+        if prob3.status in ("optimal", "optimal_inaccurate") and w.value is not None:
             sol = np.array(w.value, dtype=float)
             sol = np.maximum(sol, 0)
             if sol.sum() > 0:
