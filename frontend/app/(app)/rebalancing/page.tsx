@@ -1,7 +1,9 @@
 "use client";
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { fetchRebalancing, fetchRequiredForMaxSharpe } from "@/lib/api/analytics";
+import { fetchContributionPlan } from "@/lib/api/contribution";
+import type { ContributionPlanResponse } from "@/lib/api/contribution";
 import { useAIChat } from "@/lib/context/aiChatContext";
 import { fetchSettings } from "@/lib/api/settings";
 import { usePortfolio } from "@/lib/hooks/usePortfolio";
@@ -12,6 +14,9 @@ import {
   ResponsiveContainer, Cell, ReferenceLine,
 } from "recharts";
 import type { TickerFloorCap, CombinationRange } from "@/lib/types";
+import { QuantResultBadge } from "@/components/quant/QuantResultBadge";
+import { CorrelationAlerts } from "@/components/quant/CorrelationAlerts";
+import { SlippageBreakdown } from "@/components/quant/SlippageBreakdown";
 
 const PROFILE_LABELS: Record<string, { label: string; color: string; bg: string }> = {
   conservative: { label: "Conservative", color: "#2563eb", bg: "#eff6ff" },
@@ -61,6 +66,19 @@ export default function RebalancingPage() {
   const contribution = parseFloat(contributionStr) || 0;
   const [tcModel, setTcModel] = useState("broker");
   const [msPeriod, setMsPeriod] = useState("2y");
+  const [quantData, setQuantData] = useState<ContributionPlanResponse | null>(null);
+  const [quantError, setQuantError] = useState<string | null>(null);
+
+  const quantMutation = useMutation({
+    mutationFn: fetchContributionPlan,
+    onSuccess: (data) => {
+      setQuantData(data);
+      setQuantError(null);
+    },
+    onError: (err: Error) => {
+      setQuantError(err.message ?? "Optimization failed");
+    },
+  });
 
   const { data: portfolio } = usePortfolio();
   const { profile } = useProfileStore();
@@ -89,32 +107,6 @@ export default function RebalancingPage() {
   const totalTC = data?.reduce((s, r) => s + r.estimated_tc, 0) ?? 0;
   const threshold = 5; // 5% drift threshold for badge (display only)
 
-  // Contribution planner: buy-only allocation from current holdings
-  const buyPlan = (() => {
-    if (!data || contribution <= 0) return [];
-    const newTotal = totalValue + contribution;
-    return data
-      .map((r) => {
-        const targetValue = (r.target_weight / 100) * newTotal;
-        const currentValue = r.value_base;
-        const gap = targetValue - currentValue;
-        return { ticker: r.ticker, name: r.name, gap, currentValue, targetValue };
-      })
-      .filter((x) => x.gap > 0)
-      .map((x) => {
-        const totalGap = data
-          .map((r) => {
-            const tv = (r.target_weight / 100) * newTotal;
-            const gap = tv - r.value_base;
-            return gap > 0 ? gap : 0;
-          })
-          .reduce((s, v) => s + v, 0);
-        const allocPct = totalGap > 0 ? (x.gap / totalGap) * 100 : 0;
-        const allocValue = (allocPct / 100) * contribution;
-        return { ...x, allocPct, allocValue };
-      })
-      .sort((a, b) => b.allocValue - a.allocValue);
-  })();
 
   return (
     <div className="space-y-4">
@@ -294,52 +286,104 @@ export default function RebalancingPage() {
         )}
       </div>
 
-      {/* Contribution Planner */}
+      {/* ── Quant Contribution Planner ──────────────────────────────── */}
       {contribution > 0 && (
         <div className="bbg-card">
-          <p className="bbg-header">Contribution Planner — Buy-Only Allocation</p>
+          <div className="flex items-center justify-between mb-3">
+            <p className="bbg-header mb-0">
+              Contribution Planner — Quant Engine
+            </p>
+            <button
+              onClick={() =>
+                quantMutation.mutate({ available_cash: contribution, profile })
+              }
+              disabled={quantMutation.isPending}
+              className="bg-bloomberg-gold text-bloomberg-bg text-[10px] font-bold px-5 py-1.5 hover:opacity-90 disabled:opacity-50 uppercase tracking-wider"
+            >
+              {quantMutation.isPending ? "OPTIMIZING…" : "RUN OPTIMIZATION"}
+            </button>
+          </div>
+
           <p className="text-bloomberg-muted text-[10px] mb-3">
-            How to deploy{" "}
-            <span className="text-bloomberg-gold font-bold">{fmtCurrency(contribution, ccy)}</span>
-            {" "}without selling any existing positions (total after: {fmtCurrency(totalValue + contribution, ccy)})
+            Deploy{" "}
+            <span className="text-bloomberg-gold font-bold">
+              {fmtCurrency(contribution, ccy)}
+            </span>{" "}
+            using CVaR-constrained optimization with Ledoit-Wolf covariance,
+            HMM regime detection, and Black-Litterman expected returns.
           </p>
 
-          {buyPlan.length === 0 ? (
-            <p className="text-bloomberg-muted text-xs">Portfolio is on target — no buys needed.</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="bbg-table">
-                <thead>
-                  <tr>
-                    <th>Ticker</th>
-                    <th>Name</th>
-                    <th className="text-right">Current Value</th>
-                    <th className="text-right">Target Value</th>
-                    <th className="text-right">Buy Amount</th>
-                    <th className="text-right">% of Cash</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {buyPlan.map((x) => (
-                    <tr key={x.ticker}>
-                      <td className="text-bloomberg-gold font-medium">{x.ticker}</td>
-                      <td className="text-bloomberg-muted">{x.name}</td>
-                      <td className="text-right">{fmtCurrency(x.currentValue, ccy)}</td>
-                      <td className="text-right">{fmtCurrency(x.targetValue, ccy)}</td>
-                      <td className="text-right text-green-400 font-medium">{fmtCurrency(x.allocValue, ccy)}</td>
-                      <td className="text-right">{fmtPct(x.allocPct)}</td>
-                    </tr>
-                  ))}
-                  <tr className="border-t border-bloomberg-border">
-                    <td colSpan={4} className="text-bloomberg-muted text-right text-[10px]">Total deployed</td>
-                    <td className="text-right text-bloomberg-gold font-bold">
-                      {fmtCurrency(buyPlan.reduce((s, x) => s + x.allocValue, 0), ccy)}
-                    </td>
-                    <td className="text-right text-bloomberg-gold font-bold">100%</td>
-                  </tr>
-                </tbody>
-              </table>
+          {quantMutation.isPending && (
+            <div className="flex items-center gap-2 text-bloomberg-muted text-xs py-4">
+              <span className="animate-pulse">Running 500-sample resampling optimization…</span>
             </div>
+          )}
+
+          {quantError && (
+            <div className="text-red-400 text-xs py-2 border border-red-900/40 px-3">
+              {quantError}
+            </div>
+          )}
+
+          {quantData && (
+            <div className="space-y-4">
+              {/* Regime + metrics badge */}
+              <QuantResultBadge
+                regime={quantData.regime}
+                regimeConfidence={quantData.regime_confidence}
+                expectedReturn={quantData.quant_result.expected_return}
+                expectedSharpe={quantData.quant_result.expected_sharpe}
+                cvar95={quantData.quant_result.cvar_95}
+                optimizationTimestamp={quantData.optimization_timestamp}
+              />
+
+              {/* Correlation alerts */}
+              {quantData.correlation_alerts.length > 0 && (
+                <CorrelationAlerts alerts={quantData.correlation_alerts} />
+              )}
+
+              {/* Slippage allocation table */}
+              {quantData.contribution_plan.allocations.length === 0 ? (
+                <p className="text-bloomberg-muted text-xs">
+                  Portfolio is already at target — no buys needed.
+                </p>
+              ) : (
+                <>
+                  <SlippageBreakdown
+                    allocations={quantData.contribution_plan.allocations}
+                    slippageBreakdown={quantData.slippage_breakdown}
+                    currency={ccy}
+                  />
+                  <div className="flex flex-wrap gap-4 text-[10px] pt-1">
+                    <div>
+                      <span className="text-bloomberg-muted">Total cash: </span>
+                      <span className="font-semibold text-bloomberg-text">
+                        {fmtCurrency(quantData.contribution_plan.total_cash, ccy)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-bloomberg-muted">Total slippage: </span>
+                      <span className="font-semibold text-red-400">
+                        -{fmtCurrency(quantData.contribution_plan.total_slippage, ccy)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-bloomberg-muted">Net invested: </span>
+                      <span className="font-bold text-green-400">
+                        {fmtCurrency(quantData.contribution_plan.net_invested, ccy)}
+                      </span>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {!quantData && !quantMutation.isPending && (
+            <p className="text-bloomberg-muted text-[10px]">
+              Press <span className="text-bloomberg-gold font-semibold">RUN OPTIMIZATION</span> to
+              compute the optimal allocation with slippage breakdown.
+            </p>
           )}
         </div>
       )}

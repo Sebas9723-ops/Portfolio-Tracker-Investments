@@ -17,3 +17,5 @@ cachetools
 python-dotenv
 requests
 apscheduler
+cvxpy
+hmmlearn
