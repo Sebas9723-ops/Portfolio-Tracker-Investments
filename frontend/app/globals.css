@@ -6,7 +6,7 @@
 
 /* ── CSS Variables ─────────────────────────────────────────────────────────── */
 :root {
-  /* Tailwind RGB triplets (enable bg-bloomberg-*/10 opacity modifiers) */
+  /* Tailwind RGB triplets — enable opacity modifiers like bg-bloomberg-border/10 */
   --tw-bg:         241 245 249;
   --tw-card:       255 255 255;
   --tw-border:     226 232 240;
