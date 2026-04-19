@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
+import time
 import numpy as np
 import pandas as pd
 import yfinance as yf
@@ -22,10 +23,11 @@ from app.services.exchange_classifier import PROXY_TICKER_MAP
 
 log = logging.getLogger(__name__)
 
-_WINDOW_DAYS = 756          # 3 years of trading days (default)
+_WINDOW_DAYS = 504          # 2 years of trading days — enough for LW/HMM, faster fetch
 _RISK_AVERSION = 2.5        # for CAPM equilibrium returns
 _MOMENTUM_WINDOW = 252      # trading days for 12-month momentum
 _RESAMPLE_ITERS = 500
+_OPTIM_TIME_BUDGET = 25.0   # max seconds for the resampling loop
 _MU_NOISE_STD = 0.02
 _COV_NOISE_STD = 0.01
 _CORR_SHIFT_THRESHOLD = 0.25
@@ -223,9 +225,9 @@ class QuantEngine:
             model = hmm.GaussianHMM(
                 n_components=2,
                 covariance_type="diag",
-                n_iter=200,
+                n_iter=50,
                 random_state=42,
-                tol=1e-4,
+                tol=1e-3,
             )
             model.fit(series)
 
@@ -470,8 +472,12 @@ class QuantEngine:
 
         all_weights: list[np.ndarray] = []
         rng = np.random.default_rng(42)
+        t0 = time.monotonic()
 
         for iteration in range(_RESAMPLE_ITERS):
+            if time.monotonic() - t0 > _OPTIM_TIME_BUDGET:
+                log.warning("QuantEngine: time budget reached after %d/%d resamples", iteration, _RESAMPLE_ITERS)
+                break
             if iteration == 0:
                 mu_p = mu.copy()
                 cov_p = cov.copy()
@@ -488,6 +494,8 @@ class QuantEngine:
             )
             if w_sol is not None:
                 all_weights.append(w_sol)
+
+        log.info("QuantEngine: %d/%d resamples completed in %.1fs", len(all_weights), _RESAMPLE_ITERS, time.monotonic() - t0)
 
         if not all_weights:
             # Fallback: start from equal weight but respect both floors AND caps
