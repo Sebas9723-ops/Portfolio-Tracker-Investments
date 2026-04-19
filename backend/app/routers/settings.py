@@ -75,6 +75,8 @@ def create_alert(body: AlertCreate, user_id: str = Depends(get_user_id)):
     data = body.model_dump()
     data["user_id"] = user_id
     res = db.table("alerts").insert(data).execute()
+    if not res.data:
+        raise HTTPException(status_code=500, detail="Failed to create alert")
     return res.data[0]
 
 

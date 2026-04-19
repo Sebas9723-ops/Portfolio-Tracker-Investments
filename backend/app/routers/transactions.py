@@ -23,6 +23,8 @@ def create_transaction(body: TransactionCreate, user_id: str = Depends(get_user_
     data["date"] = str(data["date"])
     data["action"] = data["action"].value if hasattr(data["action"], "value") else data["action"]
     res = db.table("transactions").insert(data).execute()
+    if not res.data:
+        raise HTTPException(status_code=500, detail="Failed to create transaction")
     return res.data[0]
 
 

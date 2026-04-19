@@ -131,8 +131,8 @@ def _compute_tx_avg_costs(
         elif action == "SELL":
             if shares > 0:
                 avg = cost / shares
-                remaining = max(0, shares - qty)
-                running[ticker] = (remaining, avg * remaining)
+                remaining = max(0.0, shares - qty)
+                running[ticker] = (remaining, avg * remaining if remaining > 0 else 0.0)
 
     return {ticker: (cost / shares) if shares > 0 else 0.0
             for ticker, (shares, cost) in running.items()}

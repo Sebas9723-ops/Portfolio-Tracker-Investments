@@ -85,7 +85,8 @@ def compute_rolling_metrics(
         ann_ret = mu * 252
         ann_vol = sigma * np.sqrt(252)
         sharpe = (ann_ret - risk_free_rate) / ann_vol if ann_vol > 0 else 0
-        downside = window_ret[window_ret < rfr_daily].std() * np.sqrt(252)
+        below = window_ret[window_ret < rfr_daily]
+        downside = float(below.std()) * np.sqrt(252) if len(below) > 1 else 0.0
         sortino = (ann_ret - risk_free_rate) / downside if downside > 0 else 0
         cum = (1 + window_ret).cumprod()
         dd = float((cum / cum.cummax() - 1).min())
@@ -122,7 +123,8 @@ def compute_extended_ratios(
 
     # Sharpe, Sortino
     sharpe = (mu_p - risk_free_rate) / sigma_p if sigma_p > 0 else 0
-    downside = p[p < rfr_daily].std() * np.sqrt(252)
+    below_rfr = p[p < rfr_daily]
+    downside = float(below_rfr.std()) * np.sqrt(252) if len(below_rfr) > 1 else 0.0
     sortino = (mu_p - risk_free_rate) / downside if downside > 0 else 0
 
     # Max drawdown
@@ -185,7 +187,10 @@ def compute_correlation_matrix(
             closes[t] = df[col].dropna()
 
     if len(closes) < 2:
-        return CorrelationMatrix(tickers=tickers, matrix=[[1.0] * len(tickers)] * len(tickers))
+        # Build a proper identity matrix — do NOT use [[...]] * n (shared reference).
+        n = len(tickers)
+        identity = [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)]
+        return CorrelationMatrix(tickers=tickers, matrix=identity)
 
     df_all = pd.DataFrame(closes).dropna(how="all").ffill().pct_change().dropna()
     corr = df_all.corr()

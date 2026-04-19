@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional
 from app.auth.dependencies import get_user_id
 from app.db.supabase_client import get_admin_client
@@ -18,6 +18,27 @@ class OptimizationRequest(BaseModel):
     min_bonds: float = 0.0
     min_gold: float = 0.0
     profile: str = "base"
+
+    @field_validator("n_simulations")
+    @classmethod
+    def validate_n_simulations(cls, v: int) -> int:
+        if v < 100 or v > 50_000:
+            raise ValueError("n_simulations must be between 100 and 50000")
+        return v
+
+    @field_validator("max_single_asset")
+    @classmethod
+    def validate_max_single_asset(cls, v: float) -> float:
+        if not 0 < v <= 1:
+            raise ValueError("max_single_asset must be between 0 (exclusive) and 1")
+        return v
+
+    @field_validator("profile")
+    @classmethod
+    def validate_profile(cls, v: str) -> str:
+        if v not in ("conservative", "base", "aggressive"):
+            raise ValueError("profile must be one of: conservative, base, aggressive")
+        return v
 
 
 def _load_profile_constraints(

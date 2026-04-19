@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from app.auth.dependencies import get_user_id
 from app.services.market_data import get_historical_multi, get_risk_free_rate
 from app.compute.returns import build_portfolio_returns
@@ -23,6 +23,8 @@ def var_endpoint(
     period: str = Query(default="2y"),
     user_id: str = Depends(get_user_id),
 ):
+    if not 0 < confidence < 1:
+        raise HTTPException(status_code=422, detail="confidence must be between 0 and 1 (exclusive)")
     summary, tickers, settings = _load_portfolio_data(user_id)
     if not tickers:
         return {}
@@ -38,6 +40,8 @@ def rolling_endpoint(
     period: str = Query(default="2y"),
     user_id: str = Depends(get_user_id),
 ):
+    if window <= 0:
+        raise HTTPException(status_code=422, detail="window must be a positive integer")
     summary, tickers, settings = _load_portfolio_data(user_id)
     if not tickers:
         return []
