@@ -63,16 +63,50 @@ function DonutCenter({ cx, cy, value, ccy }: { cx: number; cy: number; value: nu
   );
 }
 
+// ── Market hours (UTC) ────────────────────────────────────────────────────────
+// Returns true when the exchange for the given ticker is currently open.
+// Hours are approximate UTC ranges; DST shifts are ~±1h and acceptable.
+function isMarketOpen(ticker: string): boolean {
+  const now = new Date();
+  const day = now.getUTCDay(); // 0=Sun, 6=Sat
+  if (day === 0 || day === 6) return false; // weekend
+
+  const h = now.getUTCHours();
+  const m = now.getUTCMinutes();
+  const mins = h * 60 + m; // minutes since midnight UTC
+
+  const upper = ticker.toUpperCase();
+
+  // XETRA (.DE) and major EU exchanges: ~08:00–16:30 UTC
+  if (/\.(DE|PA|AM|MI|BR|VI|MC)$/.test(upper)) {
+    return mins >= 8 * 60 && mins < 16 * 60 + 30;
+  }
+  // LSE (.L, .UK): ~08:00–16:30 UTC
+  if (/\.(L|UK)$/.test(upper)) {
+    return mins >= 8 * 60 && mins < 16 * 60 + 30;
+  }
+  // US exchanges (NYSE / NASDAQ): 14:30–21:00 UTC
+  return mins >= 14 * 60 + 30 && mins < 21 * 60;
+}
+
 // ── Badge ─────────────────────────────────────────────────────────────────────
 function TickerBadge({ ticker }: { ticker: string }) {
   const color = tickerBadgeColor(ticker);
   const initials = ticker.replace(/[^A-Z]/g, "").slice(0, 2) || ticker.slice(0, 2).toUpperCase();
+  const open = isMarketOpen(ticker);
   return (
-    <span
-      className="inline-flex items-center justify-center w-8 h-8 rounded-full text-[10px] font-bold text-bloomberg-bg shrink-0"
-      style={{ backgroundColor: color }}
-    >
-      {initials}
+    <span className="relative inline-flex shrink-0">
+      <span
+        className="inline-flex items-center justify-center w-8 h-8 rounded-full text-[10px] font-bold text-bloomberg-bg"
+        style={{ backgroundColor: color }}
+      >
+        {initials}
+      </span>
+      {/* Market status dot — bottom-right corner of the badge */}
+      <span
+        className={`absolute bottom-0 right-0 w-2 h-2 rounded-full border border-white ${open ? "bg-green-400" : "bg-red-400"}`}
+        title={open ? "Market open" : "Market closed"}
+      />
     </span>
   );
 }
