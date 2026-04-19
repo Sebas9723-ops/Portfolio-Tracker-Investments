@@ -710,14 +710,42 @@ def _solve_robust_cvxpy(
 
     Returns weight array or None if infeasible/solver error.
     """
+    try:
+        return _solve_robust_cvxpy_inner(
+            n, mu, cov, floors, caps, cur_w,
+            constraints_motor2, tickers, profile,
+            cvar_limit_daily, z_alpha, kappa, max_turnover,
+        )
+    except Exception as exc:
+        log.warning("_solve_robust_cvxpy: unexpected error: %s", exc)
+        return None
+
+
+def _solve_robust_cvxpy_inner(
+    n: int,
+    mu: np.ndarray,
+    cov: np.ndarray,
+    floors: np.ndarray,
+    caps: np.ndarray,
+    cur_w: np.ndarray,
+    constraints_motor2: list[dict],
+    tickers: list[str],
+    profile: str,
+    cvar_limit_daily: float,
+    z_alpha: float,
+    kappa: float,
+    max_turnover: float,
+) -> Optional[np.ndarray]:
     w = cp.Variable(n, nonneg=True)
 
     # ── Cholesky decomposition for DCP-compliant portfolio vol ───────────────
     cov_daily = cov / 252
+    cov_daily_reg = cov_daily + np.eye(n) * 1e-6   # always PSD
     try:
-        L = np.linalg.cholesky(cov_daily)
+        L = np.linalg.cholesky(cov_daily_reg)
     except np.linalg.LinAlgError:
-        L = np.linalg.cholesky(cov_daily + np.eye(n) * 1e-7)
+        # last resort: use diagonal
+        L = np.diag(np.sqrt(np.maximum(np.diag(cov_daily_reg), 1e-8)))
 
     mu_daily = mu / 252
     port_ret_daily = mu_daily @ w
@@ -728,10 +756,11 @@ def _solve_robust_cvxpy(
 
     # Robust penalty: kappa * ||L_mu^T w||_2 where L_mu = chol(tau_robust * cov)
     tau_robust = _TAU_ROBUST
+    cov_rob = tau_robust * cov + np.eye(n) * 1e-6
     try:
-        L_mu = np.linalg.cholesky(tau_robust * cov + np.eye(n) * 1e-8)
+        L_mu = np.linalg.cholesky(cov_rob)
     except np.linalg.LinAlgError:
-        L_mu = np.sqrt(tau_robust) * L  # fallback to Cholesky of daily cov scaled
+        L_mu = np.sqrt(tau_robust) * L
 
     robust_penalty = kappa * cp.norm(L_mu.T @ w, 2)
 

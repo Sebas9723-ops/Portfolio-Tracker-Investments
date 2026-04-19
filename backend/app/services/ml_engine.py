@@ -656,10 +656,12 @@ class MLEngine:
         diag["regime_available"] = regime_ok
 
         # 5. XGBoost ML-BL views (regime-aware, ML views only — no user merge yet)
+        # Pass empty user_bl_views so XGB generates views for ALL tickers;
+        # user views are merged AFTER caching so they always override fresh.
         t0 = time.monotonic()
         log.info("ML: XGBoost BL views (regime-aware)")
         xgb_ml_views, xgb_ok = self.generate_xgb_bl_views(
-            returns, ff5_returns, garch_vols, user_bl_views,
+            returns, ff5_returns, garch_vols, {},
             regime_labels, regime,
         )
         diag["xgb_ms"] = round((time.monotonic() - t0) * 1000)
