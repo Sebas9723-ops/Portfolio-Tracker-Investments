@@ -100,6 +100,7 @@ def run_contribution_plan(
             bl_views=bl_views,
             constraints_motor1=constraints_motor1,
             constraints_motor2=constraints_motor2,
+            available_cash=req.available_cash,
         )
     except Exception as exc:
         log.error("QuantEngine failed for user %s: %s", user_id[:8], exc)

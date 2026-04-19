@@ -506,10 +506,13 @@ class QuantEngine:
         bl_views: dict,
         constraints_motor1: dict,
         constraints_motor2: list[dict],
+        available_cash: float = 0.0,
     ) -> QuantResult:
         """
         Orchestrates all steps:
           portfolio: {ticker: {"value_base": float, ...}}
+          available_cash: new cash being deployed (used to compute no-sell floors
+            relative to post-contribution total, making room for new tickers).
           Returns QuantResult with all outputs.
         """
         tickers = list(portfolio.keys())
@@ -517,11 +520,16 @@ class QuantEngine:
             raise ValueError("Portfolio is empty")
 
         # Current weights from portfolio values
+        # Use total_after (including new cash) so no-sell floors for existing
+        # tickers are slightly lower, making room for new 0-share tickers that
+        # have Motor 1 floors — avoids sum(floors) > 1 infeasibility.
         values = np.array([portfolio[t].get("value_base", 0.0) for t in tickers])
         total_value = values.sum()
-        current_weights: dict[str, float] = {}
-        if total_value > 0:
-            current_weights = {t: float(values[i] / total_value) for i, t in enumerate(tickers)}
+        total_after = total_value + max(available_cash, 0.0)
+        denominator = total_after if total_after > 0 else (total_value if total_value > 0 else 1.0)
+        current_weights: dict[str, float] = {
+            t: float(values[i] / denominator) for i, t in enumerate(tickers)
+        }
 
         log.info("QuantEngine: fetching data for %d tickers", len(tickers))
         returns = self.fetch_data(tickers)
