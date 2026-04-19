@@ -57,9 +57,15 @@ def run_contribution_plan(
     if not tickers:
         raise HTTPException(status_code=422, detail="No positions found. Add positions first.")
 
+    # Include all tickers from positions table (even 0-share pending ones) so
+    # the optimizer can allocate to them and their Motor 1/2 constraints apply.
+    rows_by_ticker = {r.ticker: r for r in summary.rows}
     portfolio: dict = {
-        r.ticker: {"value_base": r.value_base, "shares": r.shares}
-        for r in summary.rows
+        t: {
+            "value_base": rows_by_ticker[t].value_base if t in rows_by_ticker else 0.0,
+            "shares": rows_by_ticker[t].shares if t in rows_by_ticker else 0.0,
+        }
+        for t in tickers
     }
 
     # ── Motor 1 & Motor 2 constraints ─────────────────────────────────────
