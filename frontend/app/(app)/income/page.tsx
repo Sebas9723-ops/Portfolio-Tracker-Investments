@@ -33,7 +33,7 @@ export default function IncomePage() {
     calendarData[yr][mo].entries.push(d);
   }
   const years = Object.keys(calendarData).map(Number).sort((a, b) => b - a);
-  const maxMonthlyAmt = Math.max(...Object.values(byMonth), 1);
+  const maxMonthlyAmt = Math.max(...(Object.values(byMonth) as number[]), 1);
 
   return (
     <div className="space-y-4">
