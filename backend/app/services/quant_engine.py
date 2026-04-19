@@ -434,6 +434,11 @@ class QuantEngine:
             floors[i] = f
             caps[i] = c
 
+        # Clip floors to Motor 1 caps BEFORE applying regime/corr reductions so
+        # that the `max(floors[i], reduced_cap)` guard uses the real Motor 1 floor,
+        # not the (potentially higher) no-sell floor.
+        floors = np.minimum(floors, caps)
+
         # Bear regime: reduce cap by 20% for top-2 return tickers
         if regime == "bear":
             top2_idx = np.argsort(mu)[-2:]
@@ -449,7 +454,7 @@ class QuantEngine:
             if t in affected_tickers:
                 caps[i] = max(floors[i], caps[i] * (1 - _CORR_CAP_REDUCTION))
 
-        # Ensure floors <= caps
+        # Final clip after regime/corr adjustments
         floors = np.minimum(floors, caps)
 
         # Simulate returns scenarios for CVaR (use empirical — pass via shared state)
@@ -485,17 +490,11 @@ class QuantEngine:
                 all_weights.append(w_sol)
 
         if not all_weights:
-            # Fallback: equal weight respecting floors
-            w_fb = np.maximum(floors, 1.0 / n)
-            if w_fb.sum() > 0:
-                w_fb = w_fb / w_fb.sum()
+            # Fallback: start from equal weight but respect both floors AND caps
+            w_fb = _project_weights(np.full(n, 1.0 / n), floors, caps)
             return {t: round(float(w_fb[i]), 6) for i, t in enumerate(tickers)}
 
-        avg_w = np.mean(all_weights, axis=0)
-        avg_w = np.maximum(avg_w, floors)
-        avg_w = np.minimum(avg_w, caps)
-        if avg_w.sum() > 0:
-            avg_w = avg_w / avg_w.sum()
+        avg_w = _project_weights(np.mean(all_weights, axis=0), floors, caps)
         return {t: round(float(avg_w[i]), 6) for i, t in enumerate(tickers)}
 
     # ── 8. Full orchestration ─────────────────────────────────────────────
@@ -589,6 +588,40 @@ class QuantEngine:
 
 
 # ── Private helpers ───────────────────────────────────────────────────────────
+
+def _project_weights(
+    w: np.ndarray, floors: np.ndarray, caps: np.ndarray, max_iters: int = 100
+) -> np.ndarray:
+    """
+    Project w onto {x | floors <= x <= caps, sum(x) == 1}.
+
+    Iterative algorithm: clip to [floors, caps], then redistribute the
+    excess/deficit proportionally among tickers that have room to absorb it.
+    Guarantees sum == 1 while respecting hard bounds.
+    """
+    w = w.copy()
+    for _ in range(max_iters):
+        w = np.clip(w, floors, caps)
+        excess = w.sum() - 1.0
+        if abs(excess) < 1e-10:
+            break
+        if excess > 0:
+            # Need to reduce: use tickers above their floor
+            mask = w > floors + 1e-12
+        else:
+            # Need to increase: use tickers below their cap
+            mask = w < caps - 1e-12
+        if not mask.any():
+            break
+        w[mask] -= excess / mask.sum()
+    # Final hard clip
+    w = np.clip(w, floors, caps)
+    # If still off (all tickers at bounds), normalise with best-effort clip
+    if abs(w.sum() - 1.0) > 1e-6 and w.sum() > 0:
+        w = w / w.sum()
+        w = np.clip(w, floors, caps)
+    return w
+
 
 def _ensure_psd(matrix: np.ndarray, epsilon: float = 1e-8) -> np.ndarray:
     """Project matrix onto positive semidefinite cone via eigenvalue clipping."""
@@ -714,15 +747,20 @@ def _solve_cvxpy(
                 c.append(g <= float(rule["max"]))
         return c
 
+    def _extract(wvar: cp.Variable) -> Optional[np.ndarray]:
+        """Project solver output onto feasible [floors, caps] simplex."""
+        if wvar.value is None:
+            return None
+        return _project_weights(np.array(wvar.value, dtype=float), floors, caps)
+
     # ── Primary solve ────────────────────────────────────────────────────────
     prob = cp.Problem(objective, _base_constraints(cvar_limit_daily))
     try:
         prob.solve(solver=cp.CLARABEL, verbose=False)
-        if prob.status in ("optimal", "optimal_inaccurate") and w.value is not None:
-            sol = np.array(w.value, dtype=float)
-            sol = np.maximum(sol, 0)
-            if sol.sum() > 0:
-                return sol / sol.sum()
+        if prob.status in ("optimal", "optimal_inaccurate"):
+            sol = _extract(w)
+            if sol is not None:
+                return sol
     except Exception:
         pass
 
@@ -730,11 +768,10 @@ def _solve_cvxpy(
     try:
         prob2 = cp.Problem(objective, _base_constraints(cvar_limit_daily * 1.5))
         prob2.solve(solver=cp.CLARABEL, verbose=False)
-        if prob2.status in ("optimal", "optimal_inaccurate") and w.value is not None:
-            sol = np.array(w.value, dtype=float)
-            sol = np.maximum(sol, 0)
-            if sol.sum() > 0:
-                return sol / sol.sum()
+        if prob2.status in ("optimal", "optimal_inaccurate"):
+            sol = _extract(w)
+            if sol is not None:
+                return sol
     except Exception:
         pass
 
@@ -742,11 +779,10 @@ def _solve_cvxpy(
     try:
         prob3 = cp.Problem(objective, _base_constraints(cvar_limit_daily * 2.0))
         prob3.solve(solver=cp.SCS, verbose=False)
-        if prob3.status in ("optimal", "optimal_inaccurate") and w.value is not None:
-            sol = np.array(w.value, dtype=float)
-            sol = np.maximum(sol, 0)
-            if sol.sum() > 0:
-                return sol / sol.sum()
+        if prob3.status in ("optimal", "optimal_inaccurate"):
+            sol = _extract(w)
+            if sol is not None:
+                return sol
     except Exception:
         pass
 
