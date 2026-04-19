@@ -50,8 +50,13 @@ def simulate_efficient_frontier(
     best_minvol = FrontierPoint(ret=0, vol=1e9, sharpe=0, weights={})
     best_maxret = FrontierPoint(ret=-1e9, vol=0, sharpe=0, weights={})
 
+    # n_simulations is the TARGET number of valid (constraint-satisfying) portfolios.
+    # We cap total attempts at 10× to avoid infinite loops when constraints are very tight.
+    max_attempts = n_simulations * 10
+    attempts = 0
     rng = np.random.default_rng(42)
-    for _ in range(n_simulations):
+    while len(frontier_points) < n_simulations and attempts < max_attempts:
+        attempts += 1
         w = rng.dirichlet(np.ones(n))
         w = np.clip(w, lower_bounds, upper_bounds)
         if w.sum() == 0:
