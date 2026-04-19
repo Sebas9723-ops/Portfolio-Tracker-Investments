@@ -103,7 +103,7 @@ def run_contribution_plan(
             available_cash=req.available_cash,
         )
     except Exception as exc:
-        log.error("QuantEngine failed for user %s: %s", user_id[:8], exc)
+        log.error("QuantEngine failed for user %s: %s", user_id[:8], exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Optimization failed: {exc}")
 
     # ── Estimate slippage for buying tickers ──────────────────────────────

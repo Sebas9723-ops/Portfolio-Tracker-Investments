@@ -528,32 +528,57 @@ class QuantEngine:
             log.warning("Missing data for: %s", set(tickers) - set(available))
         tickers = available
 
-        # ── ML pipeline (GARCH + FF5 + GMM + XGBoost-BL) ────────────────
-        from app.services.ml_engine import MLEngine
-        ml = MLEngine(risk_free_rate=self.rfr)
-        ml_result = ml.run_ml_pipeline(
-            returns=returns,
-            user_bl_views=bl_views,
-            market_ticker="VOO" if "VOO" in tickers else tickers[0],
-        )
+        # ── ML pipeline (GJR-GARCH + DCC + FF5 + HMM + XGBoost-BL) ─────
+        # Falls back to simple LW+HMM+CAPM pipeline if any ML module crashes.
+        ml_regime = "bull_weak"
+        ml_regime_confidence = 0.5
+        ml_regime_probs: dict = {"bull_strong": 0.15, "bull_weak": 0.55, "bear_mild": 0.20, "crisis": 0.10}
+        ml_diagnostics: dict = {}
 
-        cov_matrix = ml_result.garch_cov
-        mu = ml_result.ff5_returns
-
-        # Apply BL update using ML-generated + user views as prior update on FF5
-        merged_bl = ml_result.bl_views
-        if merged_bl:
-            mu_updated = _black_litterman_update(
-                mu.values, cov_matrix, tickers, merged_bl
+        try:
+            from app.services.ml_engine import MLEngine
+            ml = MLEngine(risk_free_rate=self.rfr)
+            ml_result = ml.run_ml_pipeline(
+                returns=returns,
+                user_bl_views=bl_views,
+                market_ticker="VOO" if "VOO" in tickers else tickers[0],
             )
-            mu = pd.Series(mu_updated, index=tickers)
+            cov_matrix = ml_result.garch_cov
+            mu = ml_result.ff5_returns
+            # Ensure mu is indexed by current tickers
+            mu = mu.reindex(tickers).fillna(mu.mean() if not mu.empty else 0.0)
+            merged_bl = ml_result.bl_views
+            if merged_bl:
+                mu_updated = _black_litterman_update(
+                    mu.values, cov_matrix, tickers, merged_bl
+                )
+                mu = pd.Series(mu_updated, index=tickers)
+            ml_regime = ml_result.regime
+            ml_regime_confidence = ml_result.regime_confidence
+            ml_regime_probs = ml_result.regime_probs
+            ml_diagnostics = ml_result.diagnostics
+            log.info("QuantEngine: ML pipeline OK — regime=%s", ml_regime)
 
-        # Correlation shifts (kept as structural signal, separate from ML)
+        except Exception as exc:
+            log.error("ML pipeline failed, using simple fallback: %s", exc, exc_info=True)
+            ml_diagnostics = {"error": str(exc), "fallback": True}
+            # Simple fallback: Ledoit-Wolf covariance + CAPM + 2-state HMM
+            cov_matrix = self.compute_covariance(returns)
+            mu = self.compute_expected_returns(returns, bl_views)
+            mu = mu.reindex(tickers).fillna(0.0)
+            regime_info = self.detect_volatility_regime(
+                returns, "VOO" if "VOO" in tickers else tickers[0]
+            )
+            raw = regime_info.get("regime", "bull")
+            ml_regime = "bull_weak" if raw == "bull" else "bear_mild"
+            ml_regime_confidence = float(regime_info.get("confidence", 0.5))
+
+        # Correlation shifts (always run, regardless of ML success)
         log.info("QuantEngine: detecting correlation shifts")
         corr_alerts = self.detect_correlation_shifts(returns)
 
         # ── Optimize ─────────────────────────────────────────────────────
-        log.info("QuantEngine: robust optimization (regime=%s kappa=%.1f)", ml_result.regime, _KAPPA_BY_REGIME.get(ml_result.regime, 0.6))
+        log.info("QuantEngine: robust optimization (regime=%s)", ml_regime)
         optimal_w = self.optimize(
             tickers=tickers,
             current_weights=current_weights,
@@ -562,7 +587,7 @@ class QuantEngine:
             constraints_motor1=constraints_motor1,
             constraints_motor2=constraints_motor2,
             profile=profile,
-            regime=ml_result.regime,
+            regime=ml_regime,
             correlation_shifts=corr_alerts,
         )
 
@@ -573,7 +598,7 @@ class QuantEngine:
 
         mu_arr = np.array([float(mu.get(t, 0.0)) for t in tickers])
         exp_ret = float(w_arr @ mu_arr)
-        exp_vol = float(np.sqrt(w_arr @ cov_matrix @ w_arr))
+        exp_vol = float(np.sqrt(max(float(w_arr @ cov_matrix @ w_arr), 0.0)))
         exp_sharpe = (exp_ret - self.rfr) / exp_vol if exp_vol > 0 else 0.0
 
         daily_vol = exp_vol / np.sqrt(252)
@@ -586,11 +611,11 @@ class QuantEngine:
             expected_volatility=round(exp_vol, 6),
             expected_sharpe=round(exp_sharpe, 4),
             cvar_95=round(cvar_95, 6),
-            regime=ml_result.regime,
-            regime_confidence=ml_result.regime_confidence,
-            regime_probs=ml_result.regime_probs,
+            regime=ml_regime,
+            regime_confidence=ml_regime_confidence,
+            regime_probs=ml_regime_probs,
             correlation_alerts=corr_alerts,
-            ml_diagnostics=ml_result.diagnostics,
+            ml_diagnostics=ml_diagnostics,
             timestamp=datetime.utcnow(),
         )
 
