@@ -310,12 +310,12 @@ export default function RebalancingPage() {
               {fmtCurrency(contribution, ccy)}
             </span>{" "}
             using CVaR-constrained optimization with Ledoit-Wolf covariance,
-            GMM 4-state regime detection, GARCH covariance, Fama-French 5-factor returns, and XGBoost Black-Litterman views.
+            HMM 4-state regime detection, GARCH covariance, Fama-French 5-factor returns, and XGBoost Black-Litterman views.
           </p>
 
           {quantMutation.isPending && (
             <div className="flex items-center gap-2 text-bloomberg-muted text-xs py-4">
-              <span className="animate-pulse">Running ML pipeline + 1000-sample resampling optimization…</span>
+              <span className="animate-pulse">Running ML pipeline + robust optimization…</span>
             </div>
           )}
 

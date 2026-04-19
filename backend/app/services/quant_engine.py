@@ -26,14 +26,13 @@ log = logging.getLogger(__name__)
 _WINDOW_DAYS = 1260         # 5 years of trading days
 _RISK_AVERSION = 2.5        # for CAPM equilibrium returns
 _MOMENTUM_WINDOW = 252      # trading days for 12-month momentum
-_RESAMPLE_ITERS = 1000
-_OPTIM_TIME_BUDGET = 90.0   # max seconds for the resampling loop
-_MU_NOISE_STD = 0.02
-_COV_NOISE_STD = 0.01
 _CORR_SHIFT_THRESHOLD = 0.25
 _SLIPPAGE_WINDOW = 20       # trading days for spread estimation
 _BEAR_CAP_REDUCTION = 0.20  # reduce cap by 20% for top-2 tickers in bear
 _CORR_CAP_REDUCTION = 0.15  # reduce cap by 15% for corr-shifted pairs
+_KAPPA_BY_REGIME = {"bull_strong": 0.3, "bull_weak": 0.6, "bear_mild": 1.2, "crisis": 2.0}
+_MAX_TURNOVER = {"aggressive": 0.70, "base": 0.45, "conservative": 0.30}
+_TAU_ROBUST = 0.10          # uncertainty fraction of cov for robust penalty
 
 
 # ── Result dataclass ─────────────────────────────────────────────────────────
@@ -391,7 +390,7 @@ class QuantEngine:
 
         return results
 
-    # ── 7. CVXPY Optimize ─────────────────────────────────────────────────
+    # ── 7. CVXPY Robust Optimize ──────────────────────────────────────────
 
     def optimize(
         self,
@@ -406,14 +405,16 @@ class QuantEngine:
         correlation_shifts: list[dict],
     ) -> dict:
         """
-        CVXPY mean-variance / CVaR-constrained optimization with:
+        Robust CVXPY optimization (Bertsimas uncertainty set) with:
           - Motor 1 floor/cap per ticker (hard constraints)
           - Motor 2 combination ranges (hard constraints)
           - No-sell: floor = max(motor1_floor, current_weight)
+          - Robust penalty: kappa * ||L_mu^T w||_2 (regime-dependent kappa)
           - TC penalty: 0.005 * sum(pos(w - current_w))
+          - Turnover hard constraint: ||w - w_cur||_1 <= max_turnover
           - Regime bear: reduce cap by 20% for top-2 expected-return tickers
           - Correlation shifts: reduce cap by 15% for affected tickers
-        Runs 500 resampling iterations; returns averaged weights.
+        Single robust solve replaces 1000-sample Michaud resampling.
         """
         n = len(tickers)
         mu = np.array([expected_returns.get(t, 0.0) for t in tickers])
@@ -422,11 +423,11 @@ class QuantEngine:
         if cur_w.sum() > 0:
             cur_w = cur_w / cur_w.sum()
 
-        # CVaR limit by profile
         cvar_limits = {"aggressive": 0.20, "balanced": 0.15, "conservative": 0.10}
         cvar_limit = cvar_limits.get(profile, 0.15)
+        z_alpha = 1.6449
 
-        # Build per-ticker bounds accounting for regime and correlation shifts
+        # Build per-ticker floors/caps
         floors = np.zeros(n)
         caps = np.ones(n)
         for i, t in enumerate(tickers):
@@ -438,13 +439,10 @@ class QuantEngine:
             floors[i] = f
             caps[i] = c
 
-        # Clip floors to Motor 1 caps BEFORE applying regime/corr reductions so
-        # that the `max(floors[i], reduced_cap)` guard uses the real Motor 1 floor,
-        # not the (potentially higher) no-sell floor.
+        # Clip floors to Motor 1 caps BEFORE applying regime/corr reductions
         floors = np.minimum(floors, caps)
 
         # Regime-based cap reduction for top-2 expected-return tickers
-        # bear_mild: -20%  |  crisis: -30%  |  bull_*: no reduction
         _BEAR_REGIMES = {"bear_mild", "bear", "crisis"}
         if regime in _BEAR_REGIMES:
             reduction = _BEAR_CAP_REDUCTION * (1.5 if regime == "crisis" else 1.0)
@@ -461,54 +459,29 @@ class QuantEngine:
             if t in affected_tickers:
                 caps[i] = max(floors[i], caps[i] * (1 - _CORR_CAP_REDUCTION))
 
-        # Final clip after regime/corr adjustments
         floors = np.minimum(floors, caps)
 
-        # Simulate returns scenarios for CVaR (use empirical — pass via shared state)
-        # We'll compute CVaR analytically from cov in single solves
-        # Using parametric CVaR: CVaR_95 ≈ -(mu - 1.645 * sigma) for normal
-        # For the full CVaR constraint we use the parametric form:
-        # CVaR_95(portfolio) = -(mu_p - z_alpha * sigma_p)  (as daily)
-        # We constrain: -mu_p_daily + z_alpha * sigma_p_daily <= cvar_limit_daily
-        # where mu_p_daily = mu/252, sigma_p_daily = sigma/sqrt(252)
-        # z_alpha for 95% = 1.6449
-        z_alpha = 1.6449
-        cvar_limit_daily = cvar_limit  # treat as fraction of portfolio daily loss
+        # Robust optimization parameters (regime-dependent)
+        kappa = _KAPPA_BY_REGIME.get(regime, 0.6)
+        max_turnover = _MAX_TURNOVER.get(profile, 0.45)
 
-        all_weights: list[np.ndarray] = []
-        rng = np.random.default_rng(42)
         t0 = time.monotonic()
+        w_sol = _solve_robust_cvxpy(
+            n, mu, cov, floors, caps, cur_w,
+            constraints_motor2, tickers, profile,
+            cvar_limit, z_alpha, kappa, max_turnover,
+        )
+        log.info(
+            "QuantEngine: robust optimization done in %.1fs (regime=%s kappa=%.1f)",
+            time.monotonic() - t0, regime, kappa,
+        )
 
-        for iteration in range(_RESAMPLE_ITERS):
-            if time.monotonic() - t0 > _OPTIM_TIME_BUDGET:
-                log.warning("QuantEngine: time budget reached after %d/%d resamples", iteration, _RESAMPLE_ITERS)
-                break
-            if iteration == 0:
-                mu_p = mu.copy()
-                cov_p = cov.copy()
-            else:
-                mu_p = mu + rng.normal(0, _MU_NOISE_STD, size=n)
-                noise = rng.normal(0, _COV_NOISE_STD, size=(n, n))
-                noise = (noise + noise.T) / 2
-                cov_p = _ensure_psd(cov + noise)
+        if w_sol is not None:
+            return {t: round(float(w_sol[i]), 6) for i, t in enumerate(tickers)}
 
-            w_sol = _solve_cvxpy(
-                n, mu_p, cov_p, floors, caps, cur_w,
-                constraints_motor2, tickers, profile,
-                cvar_limit_daily, z_alpha,
-            )
-            if w_sol is not None:
-                all_weights.append(w_sol)
-
-        log.info("QuantEngine: %d/%d resamples completed in %.1fs", len(all_weights), _RESAMPLE_ITERS, time.monotonic() - t0)
-
-        if not all_weights:
-            # Fallback: start from equal weight but respect both floors AND caps
-            w_fb = _project_weights(np.full(n, 1.0 / n), floors, caps)
-            return {t: round(float(w_fb[i]), 6) for i, t in enumerate(tickers)}
-
-        avg_w = _project_weights(np.mean(all_weights, axis=0), floors, caps)
-        return {t: round(float(avg_w[i]), 6) for i, t in enumerate(tickers)}
+        # Fallback
+        w_fb = _project_weights(np.full(n, 1.0 / n), floors, caps)
+        return {t: round(float(w_fb[i]), 6) for i, t in enumerate(tickers)}
 
     # ── 8. Full orchestration ─────────────────────────────────────────────
 
@@ -580,7 +553,7 @@ class QuantEngine:
         corr_alerts = self.detect_correlation_shifts(returns)
 
         # ── Optimize ─────────────────────────────────────────────────────
-        log.info("QuantEngine: optimizing (%d resamples, regime=%s)", _RESAMPLE_ITERS, ml_result.regime)
+        log.info("QuantEngine: robust optimization (regime=%s kappa=%.1f)", ml_result.regime, _KAPPA_BY_REGIME.get(ml_result.regime, 0.6))
         optimal_w = self.optimize(
             tickers=tickers,
             current_weights=current_weights,
@@ -710,7 +683,7 @@ def _black_litterman_update(
         return pi
 
 
-def _solve_cvxpy(
+def _solve_robust_cvxpy(
     n: int,
     mu: np.ndarray,
     cov: np.ndarray,
@@ -722,22 +695,24 @@ def _solve_cvxpy(
     profile: str,
     cvar_limit_daily: float,
     z_alpha: float,
+    kappa: float,
+    max_turnover: float,
 ) -> Optional[np.ndarray]:
     """
-    Solve a single CVXPY instance.
+    Robust CVXPY solve (Bertsimas uncertainty set).
 
     CVaR constraint (parametric, normal approximation):
         CVaR_95(daily) = -(mu_daily @ w) + z_alpha * ||L.T @ w||_2 <= cvar_limit
-    where L is the Cholesky factor of cov/252.  This formulation is DCP-valid
-    (norm of an affine expression is convex; the sum with an affine term is convex).
+    where L is the Cholesky factor of cov/252.  DCP-valid.
+
+    Robust penalty: kappa * ||L_mu^T w||_2  where L_mu = chol(tau_robust * cov).
+    Turnover constraint: ||w - cur_w||_1 <= max_turnover (only when cur_w non-trivial).
 
     Returns weight array or None if infeasible/solver error.
     """
     w = cp.Variable(n, nonneg=True)
 
     # ── Cholesky decomposition for DCP-compliant portfolio vol ───────────────
-    # sigma(w)_daily = ||L.T @ w||_2  where  cov/252 = L @ L.T
-    # This avoids cp.sqrt(cp.quad_form(...)) which violates DCP.
     cov_daily = cov / 252
     try:
         L = np.linalg.cholesky(cov_daily)
@@ -745,22 +720,31 @@ def _solve_cvxpy(
         L = np.linalg.cholesky(cov_daily + np.eye(n) * 1e-7)
 
     mu_daily = mu / 252
-    port_ret_daily = mu_daily @ w                  # affine
-    port_vol_daily = cp.norm(L.T @ w, 2)           # convex (norm of affine)
+    port_ret_daily = mu_daily @ w
+    port_vol_daily = cp.norm(L.T @ w, 2)
 
     # CVaR(95%) parametric: loss = -E[r] + z * sigma  (convex)
     cvar_expr = -port_ret_daily + z_alpha * port_vol_daily
 
-    # TC penalty (convex: sum of pos() = max(0, ...))
+    # Robust penalty: kappa * ||L_mu^T w||_2 where L_mu = chol(tau_robust * cov)
+    tau_robust = _TAU_ROBUST
+    try:
+        L_mu = np.linalg.cholesky(tau_robust * cov + np.eye(n) * 1e-8)
+    except np.linalg.LinAlgError:
+        L_mu = np.sqrt(tau_robust) * L  # fallback to Cholesky of daily cov scaled
+
+    robust_penalty = kappa * cp.norm(L_mu.T @ w, 2)
+
+    # TC penalty
     tc_penalty = 0.005 * cp.sum(cp.pos(w - cur_w))
 
     # ── Objective ────────────────────────────────────────────────────────────
     if profile == "aggressive":
-        objective = cp.Maximize(mu @ w - tc_penalty)
+        objective = cp.Maximize(mu @ w - robust_penalty - tc_penalty)
     elif profile == "conservative":
-        objective = cp.Minimize(cp.quad_form(w, cov) + tc_penalty)
+        objective = cp.Minimize(cp.quad_form(w, cov) + robust_penalty + tc_penalty)
     else:  # base / balanced
-        objective = cp.Maximize(mu @ w - 3.0 * cp.quad_form(w, cov) - tc_penalty)
+        objective = cp.Maximize(mu @ w - robust_penalty - 3.0 * cp.quad_form(w, cov) - tc_penalty)
 
     # ── Build shared constraint list ─────────────────────────────────────────
     def _base_constraints(cvar_limit: float) -> list:
@@ -770,6 +754,10 @@ def _solve_cvxpy(
             w <= caps,
             cvar_expr <= cvar_limit,
         ]
+        # Turnover constraint (only when portfolio has existing positions)
+        if cur_w.sum() > 0.01:
+            c.append(cp.norm1(w - cur_w) <= max_turnover)
+        # Motor 2 constraints
         for rule in constraints_motor2:
             group_tickers = rule.get("tickers", [])
             idx = [k for k, t in enumerate(tickers) if t in group_tickers]

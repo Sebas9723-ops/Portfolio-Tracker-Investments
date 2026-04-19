@@ -60,8 +60,9 @@ export function QuantResultBadge({
   const mlModules = mlDiagnostics
     ? [
         { key: "GARCH", ok: mlDiagnostics.garch_available, ms: mlDiagnostics.garch_ms },
+        { key: "DCC", ok: mlDiagnostics.garch_available, ms: mlDiagnostics.dcc_ms },
         { key: "FF5", ok: mlDiagnostics.ff5_available, ms: mlDiagnostics.ff5_ms },
-        { key: "GMM", ok: mlDiagnostics.regime_available, ms: mlDiagnostics.regime_ms },
+        { key: "HMM", ok: mlDiagnostics.regime_available, ms: mlDiagnostics.regime_ms },
         { key: "XGB", ok: mlDiagnostics.xgb_available, ms: mlDiagnostics.xgb_ms },
       ]
     : [];

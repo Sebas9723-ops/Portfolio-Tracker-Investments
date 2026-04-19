@@ -54,6 +54,7 @@ export interface MLDiagnostics {
   regime_available: boolean;
   xgb_available: boolean;
   garch_ms?: number;
+  dcc_ms?: number;
   ff5_ms?: number;
   regime_ms?: number;
   xgb_ms?: number;

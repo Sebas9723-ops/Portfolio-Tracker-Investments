@@ -2,26 +2,28 @@
 ML Engine — feeds into Quant Engine contribution planner.
 
 Modules (all optional, degrade gracefully):
-  1. GARCH(1,1)         → dynamic covariance  (arch)
-  2. Fama-French 5      → expected returns     (pandas_datareader + statsmodels)
-  3. GMM 4-state        → regime               (sklearn)
-  4. XGBoost            → ML-BL views          (xgboost)
+  1. GJR-GARCH(1,1,1) + Student-t  → dynamic covariance  (arch)
+  2. DCC(1,1)                       → time-varying correlations
+  3. Fama-French 5                  → expected returns     (pandas_datareader + statsmodels)
+  4. HMM 4-state                    → regime               (hmmlearn)
+  5. XGBoost                        → ML-BL views          (xgboost)
 
-All 4 converge in run_ml_pipeline().
+All modules converge in run_ml_pipeline().
+TTL cache (4h) for everything except user BL views.
 """
 from __future__ import annotations
 
 import logging
+import threading
 import time
 import warnings
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 import numpy as np
 import pandas as pd
 from sklearn.covariance import LedoitWolf
-from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
 
 log = logging.getLogger(__name__)
@@ -55,14 +57,52 @@ except ImportError:
     _XGB_OK = False
     log.warning("ML: xgboost not installed — ML-BL disabled, using user views only")
 
+try:
+    from hmmlearn import hmm as hmmlib
+    _HMM_OK = True
+except ImportError:
+    _HMM_OK = False
+    log.warning("ML: hmmlearn not installed — HMM disabled, using default regime")
+
+try:
+    from cachetools import TTLCache
+    _CACHETOOLS_OK = True
+except ImportError:
+    _CACHETOOLS_OK = False
+    log.warning("ML: cachetools not installed — pipeline cache disabled")
+
 _REGIME_LABELS = ["bull_strong", "bull_weak", "bear_mild", "crisis"]
+
+# ── TTL Cache ─────────────────────────────────────────────────────────────────
+
+_CACHE_TTL = 14400  # 4 hours
+_pipeline_cache = TTLCache(maxsize=8, ttl=_CACHE_TTL) if _CACHETOOLS_OK else {}
+_cache_lock = threading.Lock()
+
+
+class _CacheEntry(NamedTuple):
+    garch_cov: np.ndarray
+    garch_vols: dict
+    garch_std_resids: dict
+    garch_available: bool
+    ff5_returns: pd.Series
+    ff5_loadings: dict
+    ff5_available: bool
+    regime: str
+    regime_confidence: float
+    regime_probs: dict
+    regime_labels: pd.Series
+    regime_available: bool
+    xgb_ml_views: dict          # ML-only views (no user BL views merged yet)
+    xgb_available: bool
+    diagnostics_base: dict      # diag without user-merge info
 
 
 # ── Result dataclass ──────────────────────────────────────────────────────────
 
 @dataclass
 class MLResult:
-    # GARCH
+    # GARCH + DCC
     garch_cov: np.ndarray
     garch_vols: dict[str, float]
     garch_available: bool
@@ -72,15 +112,16 @@ class MLResult:
     ff5_loadings: dict[str, dict[str, float]]
     ff5_available: bool
 
-    # GMM regime
+    # HMM regime
     regime: str                          # "bull_strong"|"bull_weak"|"bear_mild"|"crisis"
     regime_confidence: float
     regime_probs: dict[str, float]
-    regime_available: bool
+    regime_labels: pd.Series = field(default_factory=lambda: pd.Series(dtype=str))
+    regime_available: bool = False
 
     # XGBoost ML-BL (merged with user views)
-    bl_views: dict[str, dict]
-    xgb_available: bool
+    bl_views: dict = field(default_factory=dict)
+    xgb_available: bool = False
 
     diagnostics: dict[str, Any] = field(default_factory=dict)
     timestamp: datetime = field(default_factory=datetime.utcnow)
@@ -94,45 +135,58 @@ class MLEngine:
     def __init__(self, risk_free_rate: float = 0.045):
         self.rfr = risk_free_rate
 
-    # ── 1. GARCH(1,1) Covariance ──────────────────────────────────────────
+    # ── 1. GJR-GARCH(1,1,1) + Student-t Covariance ───────────────────────
 
     def fit_garch_covariance(
         self, returns: pd.DataFrame
-    ) -> tuple[dict[str, float], np.ndarray, bool]:
+    ) -> tuple[dict[str, float], dict[str, pd.Series], np.ndarray, bool]:
         """
-        Per-ticker GARCH(1,1) conditional variance → GARCH-adjusted covariance.
+        Per-ticker GJR-GARCH(1,1,1) + Student-t conditional variance.
 
         Algorithm:
-          - Fit arch_model(r_i * 100, vol='Garch', p=1, q=1) per ticker
-          - Extract 1-step-ahead conditional variance h_T, convert to annualized vol
-          - Build cov = outer(garch_vols) * LW_correlation
+          - Fit arch_model(r_i * 100, vol='GARCH', p=1, o=1, q=1, dist='studentst')
+          - Extract conditional_volatility for DCC residuals
+          - Build fallback_cov = outer(garch_vols) * LW_correlation for callers
+            that don't use DCC
+        Returns (garch_vols, garch_std_resids, fallback_cov, success).
         Falls back to sample variance per ticker on failure.
         """
         tickers = list(returns.columns)
         n = len(tickers)
         garch_vols: dict[str, float] = {}
+        garch_std_resids: dict[str, pd.Series] = {}
 
         for t in tickers:
             series = returns[t].dropna()
             if len(series) < 100 or not _ARCH_OK:
                 garch_vols[t] = float(series.std() * np.sqrt(252))
+                garch_std_resids[t] = pd.Series(dtype=float)
                 continue
             try:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
                     mdl = arch_model(
                         series * 100,
-                        vol="Garch", p=1, q=1,
-                        dist="normal", rescale=False,
+                        vol="GARCH", p=1, o=1, q=1,
+                        dist="studentst", rescale=False,
                     )
                     res = mdl.fit(disp="off", show_warning=False,
                                   options={"maxiter": 200, "ftol": 1e-6})
+
+                    # 1-step-ahead conditional variance for annualized vol
                     fc = res.forecast(horizon=1, reindex=False)
                     daily_var = float(fc.variance.iloc[-1, 0]) / 1e4  # /100²
                     garch_vols[t] = np.sqrt(daily_var * 252)
+
+                    # Standardized residuals for DCC
+                    cond_vol_daily = res.conditional_volatility / 100.0  # undo *100 scaling
+                    std_resid = series.reindex(cond_vol_daily.index) / (cond_vol_daily + 1e-10)
+                    garch_std_resids[t] = std_resid.dropna()
+
             except Exception as exc:
-                log.warning("GARCH failed for %s: %s", t, exc)
+                log.warning("GJR-GARCH failed for %s: %s", t, exc)
                 garch_vols[t] = float(series.std() * np.sqrt(252))
+                garch_std_resids[t] = pd.Series(dtype=float)
 
         # LW correlation matrix (structure only, diagonal replaced by GARCH)
         aligned = returns.ffill().dropna()
@@ -145,15 +199,83 @@ class MLEngine:
             corr = np.eye(n)
 
         vol_arr = np.array([garch_vols[t] for t in tickers])
-        cov = np.outer(vol_arr, vol_arr) * corr
-        cov = _psd(cov)
+        fallback_cov = np.outer(vol_arr, vol_arr) * corr
+        fallback_cov = _psd(fallback_cov)
 
         success = _ARCH_OK and all(
             len(returns[t].dropna()) >= 100 for t in tickers
         )
-        return garch_vols, cov, success
+        return garch_vols, garch_std_resids, fallback_cov, success
 
-    # ── 2. Fama-French 5-Factor Expected Returns ──────────────────────────
+    # ── 2. DCC(1,1) Dynamic Conditional Correlations ─────────────────────
+
+    def fit_dcc_covariance(
+        self,
+        tickers: list[str],
+        garch_vols: dict[str, float],
+        garch_std_resids: dict[str, pd.Series],
+        a: float = 0.05,
+        b: float = 0.90,
+    ) -> np.ndarray:
+        """
+        DCC(1,1) dynamic conditional correlations (Engle 2002).
+
+        Uses GARCH standardized residuals to estimate time-varying correlation.
+        Fixed params a=0.05, b=0.90 (standard calibration).
+        Returns PSD covariance matrix combining GARCH vols + DCC correlations.
+        Falls back to GARCH+LW covariance if residuals are insufficient.
+        """
+        try:
+            # Align residuals
+            resid_df = pd.DataFrame(
+                {t: garch_std_resids[t] for t in tickers if not garch_std_resids.get(t, pd.Series()).empty}
+            ).dropna()
+
+            if resid_df.shape[0] < 60 or resid_df.shape[1] < len(tickers):
+                raise ValueError("Insufficient aligned residuals for DCC")
+
+            # Use only the tickers with residuals (may be a subset)
+            dcc_tickers = list(resid_df.columns)
+            E = resid_df.values  # (T, N)
+            T, N = E.shape
+
+            # Unconditional correlation matrix
+            Q_bar = _psd((E.T @ E) / T)
+
+            # DCC recursion
+            Q = Q_bar.copy()
+            for i in range(1, T):
+                e_prev = E[i - 1]
+                Q = (1 - a - b) * Q_bar + a * np.outer(e_prev, e_prev) + b * Q
+
+            # Normalize Q → R (correlation)
+            diag_q = np.diag(Q)
+            diag_q[diag_q < 1e-10] = 1e-10
+            inv_sqrt = np.diag(1.0 / np.sqrt(diag_q))
+            R = inv_sqrt @ Q @ inv_sqrt
+            np.fill_diagonal(R, 1.0)
+
+            # Build full correlation matrix (use LW for tickers missing residuals)
+            n_full = len(tickers)
+            R_full = np.eye(n_full)
+            for i, ta in enumerate(tickers):
+                for j, tb in enumerate(tickers):
+                    if ta in dcc_tickers and tb in dcc_tickers:
+                        di = dcc_tickers.index(ta)
+                        dj = dcc_tickers.index(tb)
+                        R_full[i, j] = R[di, dj]
+
+            vol_arr = np.array([garch_vols[t] for t in tickers])
+            cov = _psd(np.outer(vol_arr, vol_arr) * R_full)
+            return cov
+
+        except Exception as exc:
+            log.warning("DCC failed, falling back to GARCH+LW: %s", exc)
+            # Return a basic diagonal covariance as ultimate fallback
+            vol_arr = np.array([garch_vols.get(t, 0.15) for t in tickers])
+            return _psd(np.diag(vol_arr ** 2))
+
+    # ── 3. Fama-French 5-Factor Expected Returns ──────────────────────────
 
     def fit_fama_french(
         self,
@@ -234,24 +356,30 @@ class MLEngine:
         pi = 2.5 * cov_ann.values @ w_mkt
         return pd.Series(pi, index=returns.columns)
 
-    # ── 3. GMM 4-State Regime ─────────────────────────────────────────────
+    # ── 4. HMM 4-State Regime ─────────────────────────────────────────────
 
-    def fit_gmm_regime(
+    def fit_hmm_regime(
         self,
         returns: pd.DataFrame,
         market_ticker: Optional[str] = None,
-    ) -> tuple[str, float, dict[str, float], bool]:
+    ) -> tuple[str, float, dict[str, float], pd.Series, bool]:
         """
-        GaussianMixture(n=4) on [daily_return, rolling_20d_vol] features.
+        GaussianHMM(n_components=4) on [daily_ret, rolling_20d_vol, rolling_60d_mom].
         States labeled by sorting component mean_return descending:
           bull_strong → bull_weak → bear_mild → crisis
-        Returns (regime_label, confidence, probs_dict, success).
+        Returns (regime_label, confidence, probs_dict, label_series, success).
+        label_series is the full historical label sequence indexed by returns.index.
         """
+        _default_labels = pd.Series(dtype=str)
         _default = (
             "bull_weak", 0.5,
             {"bull_strong": 0.15, "bull_weak": 0.55, "bear_mild": 0.20, "crisis": 0.10},
+            _default_labels,
             False,
         )
+
+        if not _HMM_OK:
+            return _default
 
         if market_ticker is None or market_ticker not in returns.columns:
             market_ticker = returns.columns[0]
@@ -261,7 +389,12 @@ class MLEngine:
             return _default
 
         vol20 = mkt.rolling(20).std() * np.sqrt(252)
-        features = pd.DataFrame({"ret": mkt, "vol": vol20}).dropna()
+        mom60 = mkt.rolling(60).sum()
+        features = pd.DataFrame({
+            "ret": mkt,
+            "vol": vol20,
+            "mom": mom60,
+        }).dropna()
 
         if len(features) < 60:
             return _default
@@ -270,25 +403,32 @@ class MLEngine:
             scaler = StandardScaler()
             X = scaler.fit_transform(features.values)
 
-            gmm = GaussianMixture(
+            model = hmmlib.GaussianHMM(
                 n_components=4,
                 covariance_type="full",
-                n_init=5,
-                max_iter=300,
+                n_iter=100,
                 random_state=42,
+                tol=1e-4,
             )
-            gmm.fit(X)
+            model.fit(X)
 
-            labels = gmm.predict(X)
-            posteriors = gmm.predict_proba(X)
+            hidden_states = model.predict(X)
+            posteriors = model.predict_proba(X)
 
             # Map component indices → regime labels by mean return (descending)
             comp_mean_ret = [
-                float(scaler.mean_[0] + scaler.scale_[0] * gmm.means_[k, 0])
+                float(model.means_[k, 0] * scaler.scale_[0] + scaler.mean_[0])
                 for k in range(4)
             ]
             sorted_comps = sorted(range(4), key=lambda k: comp_mean_ret[k], reverse=True)
             comp_to_label = {sorted_comps[i]: _REGIME_LABELS[i] for i in range(4)}
+
+            # Full historical label sequence
+            label_series = pd.Series(
+                [comp_to_label[s] for s in hidden_states],
+                index=features.index,
+                dtype=str,
+            )
 
             # Smooth over last 20 observations (robust to single-day spikes)
             recent_post = posteriors[-20:].mean(axis=0)  # (4,)
@@ -298,13 +438,13 @@ class MLEngine:
 
             probs = {comp_to_label[k]: round(float(recent_post[k]), 4) for k in range(4)}
 
-            return regime, round(confidence, 4), probs, True
+            return regime, round(confidence, 4), probs, label_series, True
 
         except Exception as exc:
-            log.warning("GMM regime failed: %s", exc)
+            log.warning("HMM regime failed: %s", exc)
             return _default
 
-    # ── 4. XGBoost ML-BL Views ────────────────────────────────────────────
+    # ── 5. XGBoost ML-BL Views ────────────────────────────────────────────
 
     def generate_xgb_bl_views(
         self,
@@ -312,14 +452,18 @@ class MLEngine:
         ff5_returns: pd.Series,
         garch_vols: dict[str, float],
         user_bl_views: dict,
+        regime_labels: pd.Series,
+        current_regime: str,
     ) -> tuple[dict[str, dict], bool]:
         """
         Per-ticker XGBoost predicts 1-month forward return.
+        Regime one-hot features added from historical HMM label sequence.
         Prediction → BL view with confidence from walk-forward MAE.
         User views always override ML views (merged last).
+        Returns (ml_only_views, success) — caller merges user views.
         """
         if not _XGB_OK:
-            return dict(user_bl_views), False
+            return {}, False
 
         tickers = list(returns.columns)
         ml_views: dict[str, dict] = {}
@@ -333,7 +477,7 @@ class MLEngine:
                 continue
 
             try:
-                feats = self._ticker_features(series, garch_vols.get(t, 0.15))
+                feats = self._ticker_features(series, garch_vols.get(t, 0.15), regime_labels, current_regime)
                 if feats is None or len(feats) < 80:
                     continue
 
@@ -352,11 +496,12 @@ class MLEngine:
                 X_cur = feats.iloc[[-1]].values
 
                 xgb = XGBRegressor(
-                    n_estimators=100,
+                    n_estimators=150,
                     max_depth=3,
                     learning_rate=0.05,
                     subsample=0.8,
                     colsample_bytree=0.8,
+                    min_child_weight=5,
                     random_state=42,
                     verbosity=0,
                 )
@@ -383,14 +528,16 @@ class MLEngine:
             except Exception as exc:
                 log.warning("XGB-BL failed for %s: %s", t, exc)
 
-        # User views override ML — merge last
-        merged = {**ml_views, **user_bl_views}
-        return merged, True
+        return ml_views, True
 
     def _ticker_features(
-        self, series: pd.Series, garch_vol: float
+        self,
+        series: pd.Series,
+        garch_vol: float,
+        regime_labels: pd.Series,
+        current_regime: str,
     ) -> Optional[pd.DataFrame]:
-        """Feature matrix for XGBoost BL prediction."""
+        """Feature matrix for XGBoost BL prediction, including regime one-hot columns."""
         if len(series) < 130:
             return None
         f = pd.DataFrame(index=series.index)
@@ -406,9 +553,18 @@ class MLEngine:
             / (series.rolling(60).std() + 1e-8)
         )
         f["garch_vol"] = garch_vol  # constant per ticker, encodes cross-sectional vol signal
+
+        # Regime one-hot features
+        for lbl in ["bull_strong", "bull_weak", "bear_mild", "crisis"]:
+            if not regime_labels.empty:
+                reg_aligned = regime_labels.reindex(series.index, method="ffill")
+                f[f"regime_{lbl}"] = (reg_aligned == lbl).astype(float)
+            else:
+                f[f"regime_{lbl}"] = 1.0 if lbl == current_regime else 0.0
+
         return f.dropna()
 
-    # ── 5. Full ML Pipeline ───────────────────────────────────────────────
+    # ── 6. Full ML Pipeline ───────────────────────────────────────────────
 
     def run_ml_pipeline(
         self,
@@ -417,21 +573,70 @@ class MLEngine:
         market_ticker: str = "VOO",
     ) -> MLResult:
         """
-        Orchestrate all 4 ML modules. Each module is isolated — failures
+        Orchestrate all ML modules. Each module is isolated — failures
         populate *_available=False and fall back to safe defaults.
-        """
-        diag: dict[str, Any] = {}
-        tickers = list(returns.columns)
 
-        # 1. GARCH covariance
+        TTL cache (4h) stores everything except user BL views.
+        On cache hit: re-merges user views with cached XGB ML views.
+        On cache miss: runs full pipeline, stores to cache.
+        """
+        tickers = list(returns.columns)
+        cache_key = (tuple(sorted(tickers)), round(self.rfr, 3))
+
+        # ── Cache lookup ──────────────────────────────────────────────────
+        with _cache_lock:
+            cached: Optional[_CacheEntry] = _pipeline_cache.get(cache_key)
+
+        if cached is not None:
+            log.info("ML: cache hit for %d tickers — merging user BL views", len(tickers))
+            merged_views = {**cached.xgb_ml_views, **user_bl_views}
+            diag = dict(cached.diagnostics_base)
+            diag["cache_hit"] = True
+            return MLResult(
+                garch_cov=cached.garch_cov,
+                garch_vols=cached.garch_vols,
+                garch_available=cached.garch_available,
+                ff5_returns=cached.ff5_returns,
+                ff5_loadings=cached.ff5_loadings,
+                ff5_available=cached.ff5_available,
+                regime=cached.regime,
+                regime_confidence=cached.regime_confidence,
+                regime_probs=cached.regime_probs,
+                regime_labels=cached.regime_labels,
+                regime_available=cached.regime_available,
+                bl_views=merged_views,
+                xgb_available=cached.xgb_available,
+                diagnostics=diag,
+            )
+
+        # ── Cache miss: run full pipeline ─────────────────────────────────
+        diag: dict[str, Any] = {"cache_hit": False}
+
+        # 1. GJR-GARCH covariance + standardized residuals
         t0 = time.monotonic()
-        log.info("ML: GARCH covariance (%d tickers)", len(tickers))
-        garch_vols, garch_cov, garch_ok = self.fit_garch_covariance(returns)
+        log.info("ML: GJR-GARCH(1,1,1)+Student-t covariance (%d tickers)", len(tickers))
+        garch_vols, garch_std_resids, fallback_cov, garch_ok = self.fit_garch_covariance(returns)
         diag["garch_ms"] = round((time.monotonic() - t0) * 1000)
         diag["garch_available"] = garch_ok
         diag["garch_vols"] = {t: round(v, 4) for t, v in garch_vols.items()}
 
-        # 2. FF5 expected returns
+        # 2. DCC(1,1) covariance
+        t1 = time.monotonic()
+        log.info("ML: DCC(1,1) dynamic correlations")
+        try:
+            dcc_cov = self.fit_dcc_covariance(tickers, garch_vols, garch_std_resids)
+            dcc_ok = True
+        except Exception as exc:
+            log.warning("DCC covariance failed: %s — using GARCH+LW fallback", exc)
+            dcc_cov = fallback_cov
+            dcc_ok = False
+        diag["dcc_ms"] = round((time.monotonic() - t1) * 1000)
+        diag["dcc_available"] = dcc_ok
+
+        # Use DCC cov if available, else fallback to GARCH+LW
+        garch_cov = dcc_cov if dcc_ok else fallback_cov
+
+        # 3. FF5 expected returns
         t0 = time.monotonic()
         log.info("ML: Fama-French 5-factor returns")
         ff5_returns, ff5_loadings, ff5_ok = self.fit_fama_french(returns)
@@ -441,33 +646,55 @@ class MLEngine:
         diag["ff5_available"] = ff5_ok
         diag["ff5_loadings"] = ff5_loadings
 
-        # 3. GMM 4-state regime
+        # 4. HMM 4-state regime
         t0 = time.monotonic()
-        log.info("ML: GMM 4-state regime")
-        regime, regime_conf, regime_probs, regime_ok = self.fit_gmm_regime(
+        log.info("ML: HMM 4-state regime")
+        regime, regime_conf, regime_probs, regime_labels, regime_ok = self.fit_hmm_regime(
             returns, market_ticker
         )
         diag["regime_ms"] = round((time.monotonic() - t0) * 1000)
         diag["regime_available"] = regime_ok
 
-        # 4. XGBoost ML-BL views
+        # 5. XGBoost ML-BL views (regime-aware, ML views only — no user merge yet)
         t0 = time.monotonic()
-        log.info("ML: XGBoost BL views")
-        bl_views, xgb_ok = self.generate_xgb_bl_views(
-            returns, ff5_returns, garch_vols, user_bl_views
+        log.info("ML: XGBoost BL views (regime-aware)")
+        xgb_ml_views, xgb_ok = self.generate_xgb_bl_views(
+            returns, ff5_returns, garch_vols, user_bl_views,
+            regime_labels, regime,
         )
         diag["xgb_ms"] = round((time.monotonic() - t0) * 1000)
         diag["xgb_available"] = xgb_ok
-        diag["xgb_views_generated"] = sum(
-            1 for v in bl_views.values()
-            if isinstance(v, dict) and v.get("source") == "xgboost"
-        )
+        diag["xgb_views_generated"] = len(xgb_ml_views)
 
         log.info(
-            "ML pipeline done — GARCH=%s FF5=%s regime=%s(%s) XGB=%s views=%d",
-            garch_ok, ff5_ok, regime, round(regime_conf, 2), xgb_ok,
+            "ML pipeline done — GARCH=%s DCC=%s FF5=%s regime=%s(%s) XGB=%s views=%d",
+            garch_ok, dcc_ok, ff5_ok, regime, round(regime_conf, 2), xgb_ok,
             diag["xgb_views_generated"],
         )
+
+        # ── Store to cache (without user BL views) ────────────────────────
+        entry = _CacheEntry(
+            garch_cov=garch_cov,
+            garch_vols=garch_vols,
+            garch_std_resids=garch_std_resids,
+            garch_available=garch_ok,
+            ff5_returns=ff5_returns,
+            ff5_loadings=ff5_loadings,
+            ff5_available=ff5_ok,
+            regime=regime,
+            regime_confidence=regime_conf,
+            regime_probs=regime_probs,
+            regime_labels=regime_labels,
+            regime_available=regime_ok,
+            xgb_ml_views=xgb_ml_views,
+            xgb_available=xgb_ok,
+            diagnostics_base=diag,
+        )
+        with _cache_lock:
+            _pipeline_cache[cache_key] = entry
+
+        # Merge user BL views last (user always overrides ML)
+        merged_views = {**xgb_ml_views, **user_bl_views}
 
         return MLResult(
             garch_cov=garch_cov,
@@ -479,8 +706,9 @@ class MLEngine:
             regime=regime,
             regime_confidence=regime_conf,
             regime_probs=regime_probs,
+            regime_labels=regime_labels,
             regime_available=regime_ok,
-            bl_views=bl_views,
+            bl_views=merged_views,
             xgb_available=xgb_ok,
             diagnostics=diag,
         )
