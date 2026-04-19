@@ -310,12 +310,12 @@ export default function RebalancingPage() {
               {fmtCurrency(contribution, ccy)}
             </span>{" "}
             using CVaR-constrained optimization with Ledoit-Wolf covariance,
-            HMM regime detection, and Black-Litterman expected returns.
+            GMM 4-state regime detection, GARCH covariance, Fama-French 5-factor returns, and XGBoost Black-Litterman views.
           </p>
 
           {quantMutation.isPending && (
             <div className="flex items-center gap-2 text-bloomberg-muted text-xs py-4">
-              <span className="animate-pulse">Running 500-sample resampling optimization…</span>
+              <span className="animate-pulse">Running ML pipeline + 1000-sample resampling optimization…</span>
             </div>
           )}
 
@@ -331,10 +331,12 @@ export default function RebalancingPage() {
               <QuantResultBadge
                 regime={quantData.regime}
                 regimeConfidence={quantData.regime_confidence}
+                regimeProbs={quantData.regime_probs}
                 expectedReturn={quantData.quant_result.expected_return}
                 expectedSharpe={quantData.quant_result.expected_sharpe}
                 cvar95={quantData.quant_result.cvar_95}
                 optimizationTimestamp={quantData.optimization_timestamp}
+                mlDiagnostics={quantData.ml_diagnostics}
               />
 
               {/* Correlation alerts */}

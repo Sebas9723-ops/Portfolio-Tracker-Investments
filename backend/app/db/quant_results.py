@@ -26,6 +26,7 @@ def save_quant_result(user_id: str, result: QuantResult, profile: str) -> str | 
         "profile": profile,
         "regime": result.regime,
         "regime_confidence": result.regime_confidence,
+        "regime_probs": result.regime_probs,
         "optimal_weights": result.optimal_weights,
         "expected_return": result.expected_return,
         "expected_volatility": result.expected_volatility,

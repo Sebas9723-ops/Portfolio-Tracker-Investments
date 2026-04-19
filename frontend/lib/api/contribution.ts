@@ -39,11 +39,35 @@ export interface SlippageEntry {
   total: number;
 }
 
+export type RegimeLabel = "bull_strong" | "bull_weak" | "bear_mild" | "crisis";
+
+export interface RegimeProbs {
+  bull_strong: number;
+  bull_weak: number;
+  bear_mild: number;
+  crisis: number;
+}
+
+export interface MLDiagnostics {
+  garch_available: boolean;
+  ff5_available: boolean;
+  regime_available: boolean;
+  xgb_available: boolean;
+  garch_ms?: number;
+  ff5_ms?: number;
+  regime_ms?: number;
+  xgb_ms?: number;
+  xgb_views_generated?: number;
+  garch_vols?: Record<string, number>;
+}
+
 export interface ContributionPlanResponse {
   contribution_plan: ContributionPlan;
   quant_result: QuantResultSummary;
-  regime: "bull" | "bear";
+  regime: RegimeLabel;
   regime_confidence: number;
+  regime_probs: RegimeProbs;
+  ml_diagnostics: MLDiagnostics;
   correlation_alerts: CorrelationAlert[];
   slippage_breakdown: Record<string, SlippageEntry>;
   optimization_timestamp: string;

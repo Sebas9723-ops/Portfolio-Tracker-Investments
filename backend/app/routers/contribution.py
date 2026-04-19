@@ -171,6 +171,8 @@ def run_contribution_plan(
         },
         "regime": result.regime,
         "regime_confidence": result.regime_confidence,
+        "regime_probs": result.regime_probs,
+        "ml_diagnostics": result.ml_diagnostics,
         "correlation_alerts": result.correlation_alerts,
         "slippage_breakdown": slippage,
         "optimization_timestamp": result.timestamp.isoformat(),

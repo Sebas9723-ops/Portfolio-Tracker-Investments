@@ -19,3 +19,8 @@ requests
 apscheduler
 cvxpy
 hmmlearn
+# ML pipeline — all optional, engine degrades gracefully if absent
+arch>=6.0
+pandas-datareader>=0.10
+statsmodels>=0.14
+xgboost>=2.0

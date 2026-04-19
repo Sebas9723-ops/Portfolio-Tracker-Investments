@@ -45,9 +45,11 @@ class QuantResult:
     expected_volatility: float    # annualized
     expected_sharpe: float
     cvar_95: float                # daily CVaR at 95%, positive = loss
-    regime: str                   # "bull" | "bear"
+    regime: str                   # "bull_strong"|"bull_weak"|"bear_mild"|"crisis"
     regime_confidence: float      # 0-1
-    correlation_alerts: list[dict]
+    regime_probs: dict[str, float] = field(default_factory=dict)   # all 4 state probs
+    correlation_alerts: list[dict] = field(default_factory=list)
+    ml_diagnostics: dict = field(default_factory=dict)
     timestamp: datetime = field(default_factory=datetime.utcnow)
 
 
@@ -441,11 +443,14 @@ class QuantEngine:
         # not the (potentially higher) no-sell floor.
         floors = np.minimum(floors, caps)
 
-        # Bear regime: reduce cap by 20% for top-2 return tickers
-        if regime == "bear":
+        # Regime-based cap reduction for top-2 expected-return tickers
+        # bear_mild: -20%  |  crisis: -30%  |  bull_*: no reduction
+        _BEAR_REGIMES = {"bear_mild", "bear", "crisis"}
+        if regime in _BEAR_REGIMES:
+            reduction = _BEAR_CAP_REDUCTION * (1.5 if regime == "crisis" else 1.0)
             top2_idx = np.argsort(mu)[-2:]
             for i in top2_idx:
-                caps[i] = max(floors[i], caps[i] * (1 - _BEAR_CAP_REDUCTION))
+                caps[i] = max(floors[i], caps[i] * (1 - reduction))
 
         # Correlation shifts: reduce cap by 15% for affected tickers
         affected_tickers: set[str] = set()
@@ -539,30 +544,43 @@ class QuantEngine:
             t: float(values[i] / denominator) for i, t in enumerate(tickers)
         }
 
+        # ── Data fetch ────────────────────────────────────────────────────
         log.info("QuantEngine: fetching data for %d tickers", len(tickers))
         returns = self.fetch_data(tickers)
         if returns.empty or len(returns.columns) == 0:
             raise RuntimeError("Could not fetch return data for any ticker")
 
-        # Only optimize on tickers with data
         available = list(returns.columns)
         if set(available) != set(tickers):
             log.warning("Missing data for: %s", set(tickers) - set(available))
         tickers = available
 
-        log.info("QuantEngine: computing covariance")
-        cov_matrix = self.compute_covariance(returns)
+        # ── ML pipeline (GARCH + FF5 + GMM + XGBoost-BL) ────────────────
+        from app.services.ml_engine import MLEngine
+        ml = MLEngine(risk_free_rate=self.rfr)
+        ml_result = ml.run_ml_pipeline(
+            returns=returns,
+            user_bl_views=bl_views,
+            market_ticker="VOO" if "VOO" in tickers else tickers[0],
+        )
 
-        log.info("QuantEngine: detecting regime")
-        regime_info = self.detect_volatility_regime(returns)
+        cov_matrix = ml_result.garch_cov
+        mu = ml_result.ff5_returns
 
+        # Apply BL update using ML-generated + user views as prior update on FF5
+        merged_bl = ml_result.bl_views
+        if merged_bl:
+            mu_updated = _black_litterman_update(
+                mu.values, cov_matrix, tickers, merged_bl
+            )
+            mu = pd.Series(mu_updated, index=tickers)
+
+        # Correlation shifts (kept as structural signal, separate from ML)
         log.info("QuantEngine: detecting correlation shifts")
         corr_alerts = self.detect_correlation_shifts(returns)
 
-        log.info("QuantEngine: computing expected returns")
-        mu = self.compute_expected_returns(returns, bl_views)
-
-        log.info("QuantEngine: optimizing (500 resamples)")
+        # ── Optimize ─────────────────────────────────────────────────────
+        log.info("QuantEngine: optimizing (%d resamples, regime=%s)", _RESAMPLE_ITERS, ml_result.regime)
         optimal_w = self.optimize(
             tickers=tickers,
             current_weights=current_weights,
@@ -571,11 +589,11 @@ class QuantEngine:
             constraints_motor1=constraints_motor1,
             constraints_motor2=constraints_motor2,
             profile=profile,
-            regime=regime_info["regime"],
+            regime=ml_result.regime,
             correlation_shifts=corr_alerts,
         )
 
-        # Compute portfolio metrics from optimal weights
+        # ── Portfolio metrics ─────────────────────────────────────────────
         w_arr = np.array([optimal_w.get(t, 0.0) for t in tickers])
         if w_arr.sum() > 0:
             w_arr = w_arr / w_arr.sum()
@@ -585,7 +603,6 @@ class QuantEngine:
         exp_vol = float(np.sqrt(w_arr @ cov_matrix @ w_arr))
         exp_sharpe = (exp_ret - self.rfr) / exp_vol if exp_vol > 0 else 0.0
 
-        # Daily CVaR parametric
         daily_vol = exp_vol / np.sqrt(252)
         daily_ret = exp_ret / 252
         cvar_95 = float(-(daily_ret - 1.6449 * daily_vol))
@@ -596,9 +613,11 @@ class QuantEngine:
             expected_volatility=round(exp_vol, 6),
             expected_sharpe=round(exp_sharpe, 4),
             cvar_95=round(cvar_95, 6),
-            regime=regime_info["regime"],
-            regime_confidence=regime_info["confidence"],
+            regime=ml_result.regime,
+            regime_confidence=ml_result.regime_confidence,
+            regime_probs=ml_result.regime_probs,
             correlation_alerts=corr_alerts,
+            ml_diagnostics=ml_result.diagnostics,
             timestamp=datetime.utcnow(),
         )
 
