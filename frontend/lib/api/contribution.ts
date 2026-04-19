@@ -55,5 +55,5 @@ export const fetchContributionPlan = (params: {
   profile: string;
 }) =>
   apiClient
-    .post<ContributionPlanResponse>("/api/contribution-plan", params, { timeout: 120_000 })
+    .post<ContributionPlanResponse>("/api/contribution-plan", params, { timeout: 300_000 })
     .then((r) => r.data);

@@ -23,11 +23,11 @@ from app.services.exchange_classifier import PROXY_TICKER_MAP
 
 log = logging.getLogger(__name__)
 
-_WINDOW_DAYS = 504          # 2 years of trading days — enough for LW/HMM, faster fetch
+_WINDOW_DAYS = 1260         # 5 years of trading days
 _RISK_AVERSION = 2.5        # for CAPM equilibrium returns
 _MOMENTUM_WINDOW = 252      # trading days for 12-month momentum
-_RESAMPLE_ITERS = 500
-_OPTIM_TIME_BUDGET = 25.0   # max seconds for the resampling loop
+_RESAMPLE_ITERS = 1000
+_OPTIM_TIME_BUDGET = 90.0   # max seconds for the resampling loop
 _MU_NOISE_STD = 0.02
 _COV_NOISE_STD = 0.01
 _CORR_SHIFT_THRESHOLD = 0.25
