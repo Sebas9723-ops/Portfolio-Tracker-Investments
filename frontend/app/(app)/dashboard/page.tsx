@@ -505,8 +505,8 @@ export default function DashboardPage() {
                 <ComposedChart data={contributionsData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="date" tick={{ fontSize: 9 }} tickLine={false} interval="preserveStartEnd" />
-                  <YAxis tick={{ fontSize: 9 }} tickLine={false} axisLine={false} width={50}
-                    tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
+                  <YAxis tick={{ fontSize: 9 }} tickLine={false} axisLine={false} width={55}
+                    tickFormatter={(v) => v >= 1000 ? `$${(v / 1000).toFixed(1)}k` : `$${v}`} />
                   <Tooltip
                     formatter={(v: number, name: string) => [fmtCurrency(v, ccy), name === "value" ? "Portfolio" : "Invested"]}
                     labelFormatter={(l) => `2026-${l}`}
