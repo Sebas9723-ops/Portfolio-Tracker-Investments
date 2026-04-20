@@ -68,6 +68,7 @@ export default function RebalancingPage() {
   const [msPeriod, setMsPeriod] = useState("2y");
   const [quantData, setQuantData] = useState<ContributionPlanResponse | null>(null);
   const [quantError, setQuantError] = useState<string | null>(null);
+  const [horizon, setHorizon] = useState<"short" | "medium" | "long">("long");
 
   const quantMutation = useMutation({
     mutationFn: fetchContributionPlan,
@@ -295,13 +296,40 @@ export default function RebalancingPage() {
             </p>
             <button
               onClick={() =>
-                quantMutation.mutate({ available_cash: contribution, profile })
+                quantMutation.mutate({ available_cash: contribution, profile, time_horizon: horizon })
               }
               disabled={quantMutation.isPending}
               className="bg-bloomberg-gold text-bloomberg-bg text-[10px] font-bold px-5 py-1.5 hover:opacity-90 disabled:opacity-50 uppercase tracking-wider"
             >
               {quantMutation.isPending ? "OPTIMIZING…" : "RUN OPTIMIZATION"}
             </button>
+          </div>
+
+          {/* Time horizon selector */}
+          <div className="flex items-center gap-3 mb-3">
+            <span className="text-bloomberg-muted text-[10px] uppercase tracking-wider">Time Horizon</span>
+            <div className="flex gap-1">
+              {(["short", "medium", "long"] as const).map((h) => (
+                <button
+                  key={h}
+                  onClick={() => setHorizon(h)}
+                  className={`px-2 py-0.5 text-[10px] uppercase tracking-wider border transition-colors ${
+                    horizon === h
+                      ? "border-bloomberg-gold text-bloomberg-gold bg-bloomberg-gold/10"
+                      : "border-bloomberg-border text-bloomberg-muted hover:border-bloomberg-muted"
+                  }`}
+                >
+                  {h === "short" ? "< 3yr" : h === "medium" ? "3–10yr" : "> 10yr"}
+                </button>
+              ))}
+            </div>
+            <span className="text-bloomberg-muted text-[10px]">
+              {horizon === "short"
+                ? "high λ, strict CVaR, XGB-weighted"
+                : horizon === "medium"
+                ? "balanced λ, moderate CVaR"
+                : "low λ, relaxed CVaR, FF5-weighted"}
+            </span>
           </div>
 
           <p className="text-bloomberg-muted text-[10px] mb-3">

@@ -73,6 +73,9 @@ except ImportError:
 
 _REGIME_LABELS = ["bull_strong", "bull_weak", "bear_mild", "crisis"]
 
+# XGBoost view weight by horizon: short trusts 1-month XGB more, long trusts FF5 more
+_XGB_WEIGHT_BY_HORIZON = {"short": 0.80, "medium": 0.50, "long": 0.25}
+
 # ── TTL Cache ─────────────────────────────────────────────────────────────────
 
 _CACHE_TTL = 14400  # 4 hours
@@ -454,6 +457,7 @@ class MLEngine:
         user_bl_views: dict,
         regime_labels: pd.Series,
         current_regime: str,
+        time_horizon: str = "long",
     ) -> tuple[dict[str, dict], bool]:
         """
         Per-ticker XGBoost predicts 1-month forward return.
@@ -516,13 +520,18 @@ class MLEngine:
                 else:
                     confidence = 0.30
 
-                # Only include if prediction meaningfully differs from FF5
+                # Blend XGB (short-term) with FF5 (long-term fundamental)
+                # Short horizon → trust XGBoost more; long → trust FF5 more
+                xgb_weight = _XGB_WEIGHT_BY_HORIZON.get(time_horizon, 0.50)
                 ff5_ret = float(ff5_returns.get(t, 0.0))
-                if abs(predicted - ff5_ret) > 0.005:
+                blended = xgb_weight * predicted + (1.0 - xgb_weight) * ff5_ret
+
+                if abs(blended - ff5_ret) > 0.005:
                     ml_views[t] = {
-                        "return": round(predicted, 6),
+                        "return": round(blended, 6),
                         "confidence": round(confidence, 4),
                         "source": "xgboost",
+                        "xgb_weight": xgb_weight,
                     }
 
             except Exception as exc:
@@ -571,6 +580,7 @@ class MLEngine:
         returns: pd.DataFrame,
         user_bl_views: dict,
         market_ticker: str = "VOO",
+        time_horizon: str = "long",
     ) -> MLResult:
         """
         Orchestrate all ML modules. Each module is isolated — failures
@@ -581,7 +591,7 @@ class MLEngine:
         On cache miss: runs full pipeline, stores to cache.
         """
         tickers = list(returns.columns)
-        cache_key = (tuple(sorted(tickers)), round(self.rfr, 3))
+        cache_key = (tuple(sorted(tickers)), round(self.rfr, 3), time_horizon)
 
         # ── Cache lookup ──────────────────────────────────────────────────
         with _cache_lock:
@@ -663,7 +673,9 @@ class MLEngine:
         xgb_ml_views, xgb_ok = self.generate_xgb_bl_views(
             returns, ff5_returns, garch_vols, {},
             regime_labels, regime,
+            time_horizon=time_horizon,
         )
+        diag["time_horizon"] = time_horizon
         diag["xgb_ms"] = round((time.monotonic() - t0) * 1000)
         diag["xgb_available"] = xgb_ok
         diag["xgb_views_generated"] = len(xgb_ml_views)

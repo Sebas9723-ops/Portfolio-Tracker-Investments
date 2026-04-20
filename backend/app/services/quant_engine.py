@@ -34,6 +34,16 @@ _KAPPA_BY_REGIME = {"bull_strong": 0.3, "bull_weak": 0.6, "bear_mild": 1.2, "cri
 _MAX_TURNOVER = {"aggressive": 0.70, "base": 0.45, "conservative": 0.30}
 _TAU_ROBUST = 0.10          # uncertainty fraction of cov for robust penalty
 
+# Time-horizon parameters
+_LAMBDA_BY_HORIZON   = {"short": 5.0, "medium": 3.0, "long": 1.5}   # risk aversion in base objective
+_KAPPA_HORIZON_MULT  = {"short": 1.5, "medium": 1.0, "long": 0.7}   # scales regime kappa
+_TURNOVER_HORIZON_MULT = {"short": 0.8, "medium": 1.0, "long": 1.2}  # max turnover multiplier
+_CVAR_LIMITS = {                                                        # daily CVaR by (profile, horizon)
+    ("conservative", "short"): 0.08,  ("conservative", "medium"): 0.10,  ("conservative", "long"): 0.13,
+    ("base",         "short"): 0.12,  ("base",         "medium"): 0.15,  ("base",         "long"): 0.20,
+    ("aggressive",   "short"): 0.17,  ("aggressive",   "medium"): 0.20,  ("aggressive",   "long"): 0.25,
+}
+
 
 # ── Result dataclass ─────────────────────────────────────────────────────────
 
@@ -403,18 +413,20 @@ class QuantEngine:
         profile: str,
         regime: str,
         correlation_shifts: list[dict],
+        time_horizon: str = "long",
     ) -> dict:
         """
         Robust CVXPY optimization (Bertsimas uncertainty set) with:
           - Motor 1 floor/cap per ticker (hard constraints)
           - Motor 2 combination ranges (hard constraints)
           - No-sell: floor = max(motor1_floor, current_weight)
-          - Robust penalty: kappa * ||L_mu^T w||_2 (regime-dependent kappa)
+          - Robust penalty: kappa * ||L_mu^T w||_2 (regime + horizon dependent)
           - TC penalty: 0.005 * sum(pos(w - current_w))
-          - Turnover hard constraint: ||w - w_cur||_1 <= max_turnover
+          - Turnover hard constraint: scaled by horizon
           - Regime bear: reduce cap by 20% for top-2 expected-return tickers
           - Correlation shifts: reduce cap by 15% for affected tickers
-        Single robust solve replaces 1000-sample Michaud resampling.
+          - CVaR limit: table by (profile, horizon)
+          - Lambda (risk aversion): by horizon — short=5.0, medium=3.0, long=1.5
         """
         n = len(tickers)
         mu = np.array([expected_returns.get(t, 0.0) for t in tickers])
@@ -423,8 +435,8 @@ class QuantEngine:
         if cur_w.sum() > 0:
             cur_w = cur_w / cur_w.sum()
 
-        cvar_limits = {"aggressive": 0.20, "balanced": 0.15, "conservative": 0.10}
-        cvar_limit = cvar_limits.get(profile, 0.15)
+        cvar_limit = _CVAR_LIMITS.get((profile, time_horizon),
+                     _CVAR_LIMITS.get(("base", time_horizon), 0.15))
         z_alpha = 1.6449
 
         # Build per-ticker floors/caps
@@ -461,19 +473,22 @@ class QuantEngine:
 
         floors = np.minimum(floors, caps)
 
-        # Robust optimization parameters (regime-dependent)
-        kappa = _KAPPA_BY_REGIME.get(regime, 0.6)
-        max_turnover = _MAX_TURNOVER.get(profile, 0.45)
+        # Robust optimization parameters (regime + horizon dependent)
+        kappa = _KAPPA_BY_REGIME.get(regime, 0.6) * _KAPPA_HORIZON_MULT.get(time_horizon, 1.0)
+        max_turnover = (_MAX_TURNOVER.get(profile, 0.45)
+                        * _TURNOVER_HORIZON_MULT.get(time_horizon, 1.0))
+        lambda_mv = _LAMBDA_BY_HORIZON.get(time_horizon, 3.0)
 
         t0 = time.monotonic()
         w_sol = _solve_robust_cvxpy(
             n, mu, cov, floors, caps, cur_w,
             constraints_motor2, tickers, profile,
             cvar_limit, z_alpha, kappa, max_turnover,
+            lambda_mv=lambda_mv,
         )
         log.info(
-            "QuantEngine: robust optimization done in %.1fs (regime=%s kappa=%.1f)",
-            time.monotonic() - t0, regime, kappa,
+            "QuantEngine: robust opt done in %.1fs (regime=%s horizon=%s kappa=%.2f λ=%.1f)",
+            time.monotonic() - t0, regime, time_horizon, kappa, lambda_mv,
         )
 
         if w_sol is not None:
@@ -493,6 +508,7 @@ class QuantEngine:
         constraints_motor1: dict,
         constraints_motor2: list[dict],
         available_cash: float = 0.0,
+        time_horizon: str = "long",
     ) -> QuantResult:
         """
         Orchestrates all steps:
@@ -533,7 +549,7 @@ class QuantEngine:
         ml_regime = "bull_weak"
         ml_regime_confidence = 0.5
         ml_regime_probs: dict = {"bull_strong": 0.15, "bull_weak": 0.55, "bear_mild": 0.20, "crisis": 0.10}
-        ml_diagnostics: dict = {}
+        ml_diagnostics: dict = {"time_horizon": time_horizon}
 
         try:
             from app.services.ml_engine import MLEngine
@@ -542,6 +558,7 @@ class QuantEngine:
                 returns=returns,
                 user_bl_views=bl_views,
                 market_ticker="VOO" if "VOO" in tickers else tickers[0],
+                time_horizon=time_horizon,
             )
             cov_matrix = ml_result.garch_cov
             mu = ml_result.ff5_returns
@@ -561,7 +578,7 @@ class QuantEngine:
 
         except Exception as exc:
             log.error("ML pipeline failed, using simple fallback: %s", exc, exc_info=True)
-            ml_diagnostics = {"error": str(exc), "fallback": True}
+            ml_diagnostics = {"error": str(exc), "fallback": True, "time_horizon": time_horizon}
             # Simple fallback: Ledoit-Wolf covariance + CAPM + 2-state HMM
             cov_matrix = self.compute_covariance(returns)
             mu = self.compute_expected_returns(returns, bl_views)
@@ -578,7 +595,7 @@ class QuantEngine:
         corr_alerts = self.detect_correlation_shifts(returns)
 
         # ── Optimize ─────────────────────────────────────────────────────
-        log.info("QuantEngine: robust optimization (regime=%s)", ml_regime)
+        log.info("QuantEngine: robust optimization (regime=%s horizon=%s)", ml_regime, time_horizon)
         optimal_w = self.optimize(
             tickers=tickers,
             current_weights=current_weights,
@@ -589,6 +606,7 @@ class QuantEngine:
             profile=profile,
             regime=ml_regime,
             correlation_shifts=corr_alerts,
+            time_horizon=time_horizon,
         )
 
         # ── Portfolio metrics ─────────────────────────────────────────────
@@ -722,6 +740,7 @@ def _solve_robust_cvxpy(
     z_alpha: float,
     kappa: float,
     max_turnover: float,
+    lambda_mv: float = 3.0,
 ) -> Optional[np.ndarray]:
     """
     Robust CVXPY solve (Bertsimas uncertainty set).
@@ -732,6 +751,7 @@ def _solve_robust_cvxpy(
 
     Robust penalty: kappa * ||L_mu^T w||_2  where L_mu = chol(tau_robust * cov).
     Turnover constraint: ||w - cur_w||_1 <= max_turnover (only when cur_w non-trivial).
+    lambda_mv: risk aversion in base objective (horizon-dependent).
 
     Returns weight array or None if infeasible/solver error.
     """
@@ -740,6 +760,7 @@ def _solve_robust_cvxpy(
             n, mu, cov, floors, caps, cur_w,
             constraints_motor2, tickers, profile,
             cvar_limit_daily, z_alpha, kappa, max_turnover,
+            lambda_mv=lambda_mv,
         )
     except Exception as exc:
         log.warning("_solve_robust_cvxpy: unexpected error: %s", exc)
@@ -760,6 +781,7 @@ def _solve_robust_cvxpy_inner(
     z_alpha: float,
     kappa: float,
     max_turnover: float,
+    lambda_mv: float = 3.0,
 ) -> Optional[np.ndarray]:
     w = cp.Variable(n, nonneg=True)
 
@@ -798,7 +820,7 @@ def _solve_robust_cvxpy_inner(
     elif profile == "conservative":
         objective = cp.Minimize(cp.quad_form(w, cov) + robust_penalty + tc_penalty)
     else:  # base / balanced
-        objective = cp.Maximize(mu @ w - robust_penalty - 3.0 * cp.quad_form(w, cov) - tc_penalty)
+        objective = cp.Maximize(mu @ w - robust_penalty - lambda_mv * cp.quad_form(w, cov) - tc_penalty)
 
     # ── Build shared constraint list ─────────────────────────────────────────
     def _base_constraints(cvar_limit: float) -> list:

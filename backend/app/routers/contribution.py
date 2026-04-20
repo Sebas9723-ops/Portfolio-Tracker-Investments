@@ -29,6 +29,7 @@ router = APIRouter(prefix="/api/contribution-plan", tags=["contribution"])
 class ContributionRequest(BaseModel):
     available_cash: float
     profile: str = "base"   # conservative | base | aggressive
+    time_horizon: str = "long"   # short | medium | long
 
 
 @router.post("")
@@ -51,6 +52,7 @@ def run_contribution_plan(
         raise HTTPException(status_code=400, detail="available_cash must be > 0")
 
     profile = req.profile if req.profile in ("conservative", "base", "aggressive") else "base"
+    horizon = req.time_horizon if req.time_horizon in ("short", "medium", "long") else "long"
 
     # ── Load portfolio ────────────────────────────────────────────────────
     summary, tickers, settings = load_portfolio_data(user_id)
@@ -101,6 +103,7 @@ def run_contribution_plan(
             constraints_motor1=constraints_motor1,
             constraints_motor2=constraints_motor2,
             available_cash=req.available_cash,
+            time_horizon=horizon,
         )
     except Exception as exc:
         log.error("QuantEngine failed for user %s: %s", user_id[:8], exc, exc_info=True)
@@ -177,4 +180,5 @@ def run_contribution_plan(
         "slippage_breakdown": slippage,
         "optimization_timestamp": result.timestamp.isoformat(),
         "profile": active_profile,
+        "time_horizon": horizon,
     }

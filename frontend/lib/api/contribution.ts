@@ -73,11 +73,13 @@ export interface ContributionPlanResponse {
   slippage_breakdown: Record<string, SlippageEntry>;
   optimization_timestamp: string;
   profile: string;
+  time_horizon: string;
 }
 
 export const fetchContributionPlan = (params: {
   available_cash: number;
   profile: string;
+  time_horizon: string;
 }) =>
   apiClient
     .post<ContributionPlanResponse>("/api/contribution-plan", params, { timeout: 300_000 })
