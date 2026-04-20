@@ -256,6 +256,8 @@ export interface UserSettings {
   cost_basis_usd?: number | null;
   // Optimization period per profile (e.g. {conservative: "2y", base: "3y"})
   optimization_periods?: Record<string, string>;
+  // Quant engine time horizon (persisted)
+  time_horizon?: "short" | "medium" | "long";
   // Black-Litterman views per profile
   bl_views?: Record<string, { ticker: string; ret: string }[]>;
   // Last frontier result — used by Contribution Planner (profile-aware)

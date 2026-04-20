@@ -1,11 +1,11 @@
 "use client";
-import { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useState, useEffect } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchRebalancing, fetchRequiredForMaxSharpe } from "@/lib/api/analytics";
 import { fetchContributionPlan } from "@/lib/api/contribution";
 import type { ContributionPlanResponse } from "@/lib/api/contribution";
 import { useAIChat } from "@/lib/context/aiChatContext";
-import { fetchSettings } from "@/lib/api/settings";
+import { fetchSettings, updateSettings } from "@/lib/api/settings";
 import { usePortfolio } from "@/lib/hooks/usePortfolio";
 import { useProfileStore } from "@/lib/store/profileStore";
 import { fmtCurrency, fmtPct } from "@/lib/formatters";
@@ -69,6 +69,22 @@ export default function RebalancingPage() {
   const [quantData, setQuantData] = useState<ContributionPlanResponse | null>(null);
   const [quantError, setQuantError] = useState<string | null>(null);
   const [horizon, setHorizon] = useState<"short" | "medium" | "long">("long");
+  const queryClient = useQueryClient();
+  const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: fetchSettings });
+
+  // Sync horizon from persisted settings on load
+  useEffect(() => {
+    if (settings?.time_horizon) {
+      setHorizon(settings.time_horizon);
+    }
+  }, [settings?.time_horizon]);
+
+  const handleSetHorizon = (h: "short" | "medium" | "long") => {
+    setHorizon(h);
+    updateSettings({ time_horizon: h }).then(() => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    });
+  };
 
   const quantMutation = useMutation({
     mutationFn: fetchContributionPlan,
@@ -86,8 +102,6 @@ export default function RebalancingPage() {
   const rows = portfolio?.rows ?? [];
   const totalValue = portfolio?.total_value_base ?? 0;
   const ccy = portfolio?.base_currency ?? "USD";
-
-  const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: fetchSettings });
 
   // Motor 1 & 2 — active constraints for the current profile
   const motor1Rules: Record<string, TickerFloorCap> = settings?.ticker_weight_rules?.[profile] ?? {};
@@ -312,7 +326,7 @@ export default function RebalancingPage() {
               {(["short", "medium", "long"] as const).map((h) => (
                 <button
                   key={h}
-                  onClick={() => setHorizon(h)}
+                  onClick={() => handleSetHorizon(h)}
                   className={`px-2 py-0.5 text-[10px] uppercase tracking-wider border transition-colors ${
                     horizon === h
                       ? "border-bloomberg-gold text-bloomberg-gold bg-bloomberg-gold/10"
