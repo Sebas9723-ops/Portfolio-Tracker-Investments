@@ -26,7 +26,7 @@ def news(tickers: str = Query(..., description="Comma-separated tickers")):
 
     articles = []
     seen_ids: set = set()
-    for ticker in ticker_list[:5]:  # limit to 5 tickers to stay within rate limits
+    for ticker in ticker_list[:15]:  # up to 15 tickers (Finnhub free tier allows burst)
         try:
             items = _fh().company_news(ticker, _from=from_dt, to=to_dt)
             for item in (items or [])[:10]:

@@ -65,6 +65,11 @@ export default function AnalyticsPage() {
     staleTime: 5 * 60 * 1000,
   });
 
+  // Derived from optional data — must be before any early returns (React hooks rules)
+  const vrSeries = volRegime?.series ?? [];
+  const highVolRanges = useMemo(() => getRegimeRanges(vrSeries, "high"), [vrSeries]);
+  const vrChart = useMemo(() => vrSeries.filter((_, i) => i % 2 === 0), [vrSeries]);
+
   if (isLoading) return <div className="text-bloomberg-muted text-xs p-4">Computing analytics…</div>;
   if (!data) return null;
 
@@ -85,13 +90,8 @@ export default function AnalyticsPage() {
   const ext = extended?.extended_ratios ?? {};
   const ff = extended?.fama_french ?? {};
   const perTicker = extended?.per_ticker_sharpe ?? {};
-  const vrSeries = volRegime?.series ?? [];
   const lowThr = volRegime?.low_threshold ?? 0;
   const highThr = volRegime?.high_threshold ?? 0;
-
-  const highVolRanges = useMemo(() => getRegimeRanges(vrSeries, "high"), [vrSeries]);
-  // Downsample vol-regime series to reduce chart points
-  const vrChart = useMemo(() => vrSeries.filter((_, i) => i % 2 === 0), [vrSeries]);
 
   return (
     <div className="space-y-4">

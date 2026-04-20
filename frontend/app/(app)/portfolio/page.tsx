@@ -110,10 +110,11 @@ export default function PortfolioPage() {
   const pieData = (portfolio?.rows ?? []).map((r) => ({ name: r.ticker, value: r.value_base }));
 
   // Weight vs Target from rebalancing
+  // Backend already returns weights as percentages (e.g. 20.76 for 20.76%)
   const weightData = (rebalancing ?? []).map((r) => ({
     ticker: r.ticker,
-    "Current%": parseFloat((r.current_weight * 100).toFixed(2)),
-    "Target%": parseFloat((r.target_weight * 100).toFixed(2)),
+    "Current%": r.current_weight,
+    "Target%": r.target_weight,
   }));
 
   // Performance vs benchmark from analytics

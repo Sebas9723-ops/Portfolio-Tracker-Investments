@@ -13,8 +13,8 @@ export default function NewsPage() {
   ].filter((t, i, a) => a.indexOf(t) === i) || ["VOO"];
 
   const { data: articles, isLoading } = useQuery({
-    queryKey: ["news", tickers.slice(0, 5).sort().join(",")],
-    queryFn: () => fetchNews(tickers.slice(0, 5)),
+    queryKey: ["news", [...tickers].sort().join(",")],
+    queryFn: () => fetchNews(tickers),
     enabled: tickers.length > 0,
     staleTime: 5 * 60 * 1000,
     refetchInterval: 300_000, // 5 min
@@ -23,7 +23,7 @@ export default function NewsPage() {
   return (
     <div className="space-y-4">
       <h1 className="text-bloomberg-gold text-xs font-bold uppercase tracking-widest">
-        News · {tickers.slice(0, 5).join(", ")}
+        News · {tickers.join(", ")}
       </h1>
 
       {isLoading && <div className="text-bloomberg-muted text-xs">Loading…</div>}

@@ -282,14 +282,17 @@ export default function DashboardPage() {
   const bmTicker = analyticsData?.metrics?.benchmark_ticker ?? "VOO";
 
   // Contributions tracker — cumulative invested vs portfolio value
-  const buyTxs = (transactions ?? [])
-    .filter((t) => t.action === "BUY")
+  // cost_basis_usd is the FX-correct total invested (set manually in settings, default 900).
+  // Future BUY transactions in USD are added on top of that baseline.
+  const baseCostBasis = cost_basis_usd ?? 900;
+  const buyTxsUsd = (transactions ?? [])
+    .filter((t) => t.action === "BUY" && t.currency === "USD")
     .sort((a, b) => a.date.localeCompare(b.date));
   const contributionsData = allHistory.map((h) => {
-    const invested = buyTxs
-      .filter((t) => t.date <= h.date)
+    const additionalUsd = buyTxsUsd
+      .filter((t) => t.date > new Date().toISOString().slice(0, 10) && t.date <= h.date)
       .reduce((s, t) => s + t.quantity * t.price_native + t.fee_native, 0);
-    return { date: h.date.slice(5), value: Math.round(h.value), invested: Math.round(invested) };
+    return { date: h.date.slice(5), value: Math.round(h.value), invested: Math.round(baseCostBasis + additionalUsd) };
   });
 
   // Allocation donut
