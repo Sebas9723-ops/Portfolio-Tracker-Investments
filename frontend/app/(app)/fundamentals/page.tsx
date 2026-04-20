@@ -66,7 +66,7 @@ export default function FundamentalsPage() {
             <MetricCard label="Trailing P/E" value={data.trailingPE?.toFixed(1) ?? "—"} />
             <MetricCard label="Forward P/E" value={data.forwardPE?.toFixed(1) ?? "—"} />
             <MetricCard label="P/B Ratio" value={data.priceToBook?.toFixed(2) ?? "—"} />
-            <MetricCard label="Div Yield" value={data.dividendYield != null ? fmtPct(data.dividendYield * 100) : "—"} />
+            <MetricCard label="Div Yield" value={data.dividendYield != null ? fmtPct(data.dividendYield) : "—"} />
             <MetricCard label="Beta" value={data.beta?.toFixed(2) ?? "—"} />
             <MetricCard label="ROE" value={data.returnOnEquity != null ? fmtPct(data.returnOnEquity * 100) : "—"} />
             <MetricCard label="ROA" value={data.returnOnAssets != null ? fmtPct(data.returnOnAssets * 100) : "—"} />

@@ -171,7 +171,7 @@ export default function LookupPage() {
               <MetricCard label="Trailing P/E" value={fund.trailingPE?.toFixed(1) ?? "—"} />
               <MetricCard label="Forward P/E" value={fund.forwardPE?.toFixed(1) ?? "—"} />
               <MetricCard label="P/B Ratio" value={fund.priceToBook?.toFixed(2) ?? "—"} />
-              <MetricCard label="Div Yield" value={fund.dividendYield != null ? fmtPct(fund.dividendYield * 100) : "—"} />
+              <MetricCard label="Div Yield" value={fund.dividendYield != null ? fmtPct(fund.dividendYield) : "—"} />
               <MetricCard label="Beta" value={fund.beta?.toFixed(2) ?? "—"} />
               <MetricCard label="52W High" value={fund.fiftyTwoWeekHigh ? fmtCurrency(fund.fiftyTwoWeekHigh, quote?.currency ?? "USD") : "—"} />
               <MetricCard label="52W Low" value={fund.fiftyTwoWeekLow ? fmtCurrency(fund.fiftyTwoWeekLow, quote?.currency ?? "USD") : "—"} />
