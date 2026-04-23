@@ -6,6 +6,7 @@ from app.compute.optimization import optimize_max_sharpe
 from app.compute.profile import compute_profile_weights, compute_profile_metrics
 from app.models.analytics import RebalancingRow
 from app.services.portfolio_service import load_portfolio_data
+from app.db.quant_results import load_latest_quant_result
 import pandas as pd
 
 router = APIRouter(prefix="/api/rebalancing", tags=["rebalancing"])
@@ -45,8 +46,24 @@ def suggestions(
         } or None
         combination_constraints = combination_ranges.get(profile_key, []) or None
 
-    # Use profile-driven target weights when a recognized profile is active
-    if profile_key:
+    # Priority 1: cached QuantEngine optimal weights (Ledoit-Wolf + BL + HMM + CVaR)
+    target_weights = None
+    try:
+        cached_qr = load_latest_quant_result(user_id)
+        if cached_qr and isinstance(cached_qr.get("optimal_weights"), dict):
+            raw_w = {
+                t: float(w)
+                for t, w in cached_qr["optimal_weights"].items()
+                if t in tickers
+            }
+            wsum = sum(raw_w.values())
+            if wsum > 0.5:  # must cover majority of portfolio
+                target_weights = {t: w / wsum for t, w in raw_w.items()}
+    except Exception:
+        pass
+
+    # Priority 2: profile-driven weights (scipy SLSQP with Motor 1 & 2)
+    if target_weights is None and profile_key:
         try:
             hist = get_historical_multi(tickers, period="2y")
             closes: dict[str, pd.Series] = {}
@@ -65,11 +82,11 @@ def suggestions(
                     per_ticker_bounds,
                     combination_constraints,
                 )
-            else:
-                target_weights = compute_target_weights_from_drift(rows_dicts, threshold)
         except Exception:
-            target_weights = compute_target_weights_from_drift(rows_dicts, threshold)
-    else:
+            pass
+
+    # Priority 3: drift-based fallback
+    if target_weights is None:
         target_weights = compute_target_weights_from_drift(rows_dicts, threshold)
 
     return build_rebalancing_table(

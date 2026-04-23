@@ -420,6 +420,377 @@ export default function RebalancingPage() {
                   </div>
                 </>
               )}
+
+              {/* ── Quant Analytics V2 Panels ── */}
+              {quantData.quant_analytics_v2 && (() => {
+                const qa = quantData.quant_analytics_v2!;
+                const pct = (v: number | null | undefined, d = 1) =>
+                  v == null ? "—" : `${(v * 100).toFixed(d)}%`;
+
+                return (
+                  <>
+                    {/* Panel 1: Execution Plan */}
+                    {qa.rebalancing_bands && qa.rebalancing_bands.trades.length > 0 && (
+                      <div className="bbg-card">
+                        <p className="bbg-header">Execution Plan (Band Rebalancing)</p>
+                        <div className="flex flex-wrap gap-4 text-[10px] mb-2">
+                          <span className="text-bloomberg-muted">
+                            Turnover: <span className="text-bloomberg-gold font-bold">{pct(qa.rebalancing_bands.turnover)}</span>
+                          </span>
+                          <span className="text-bloomberg-muted">
+                            Executable trades: <span className="text-bloomberg-text font-bold">{qa.rebalancing_bands.n_executable}</span>
+                          </span>
+                          {qa.rebalancing_bands.suppressed.length > 0 && (
+                            <span className="text-bloomberg-muted">
+                              Suppressed: <span className="text-bloomberg-muted">{qa.rebalancing_bands.suppressed.join(", ")}</span>
+                            </span>
+                          )}
+                        </div>
+                        <table className="bbg-table text-[10px]">
+                          <thead>
+                            <tr>
+                              <th>Ticker</th>
+                              <th className="text-right">Current%</th>
+                              <th className="text-right">Target%</th>
+                              <th className="text-right">Drift%</th>
+                              <th>Action</th>
+                              <th className="text-right">Est TC</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {qa.rebalancing_bands.trades.map((t) => (
+                              <tr key={t.ticker}>
+                                <td className="text-bloomberg-gold font-medium">{t.ticker}</td>
+                                <td className="text-right">{t.current_w_pct.toFixed(1)}%</td>
+                                <td className="text-right">{t.target_w_pct.toFixed(1)}%</td>
+                                <td className={`text-right font-medium ${t.drift_w_pct > 0 ? "text-red-400" : t.drift_w_pct < 0 ? "text-green-400" : "text-bloomberg-muted"}`}>
+                                  {t.drift_w_pct > 0 ? "+" : ""}{t.drift_w_pct.toFixed(2)}%
+                                </td>
+                                <td className={t.action === "BUY" ? "text-green-400" : t.action === "SELL" ? "text-red-400" : "text-bloomberg-muted"}>
+                                  {t.action}
+                                </td>
+                                <td className="text-right text-bloomberg-muted">{fmtCurrency(t.est_tc)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {/* Panel 2: Net Alpha After Costs */}
+                    {qa.net_alpha && qa.net_alpha.length > 0 && (
+                      <div className="bbg-card">
+                        <p className="bbg-header">Net Alpha After Transaction Costs</p>
+                        <p className="text-bloomberg-muted text-[10px] mb-2">
+                          Trades are suppressed when net alpha after costs is below the minimum edge threshold.
+                        </p>
+                        <table className="bbg-table text-[10px]">
+                          <thead>
+                            <tr>
+                              <th>Ticker</th>
+                              <th className="text-right">Exp. Return</th>
+                              <th className="text-right">TC Drag</th>
+                              <th className="text-right">Net Alpha</th>
+                              <th>Trade?</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {qa.net_alpha.map((row) => (
+                              <tr key={row.ticker}>
+                                <td className="text-bloomberg-gold font-medium">{row.ticker}</td>
+                                <td className="text-right">{pct(row.expected_return)}</td>
+                                <td className="text-right text-red-400">-{pct(row.ann_tc_drag, 3)}</td>
+                                <td className={`text-right font-bold ${row.net_alpha >= 0 ? "text-green-400" : "text-red-400"}`}>
+                                  {pct(row.net_alpha)}
+                                </td>
+                                <td className={row.has_edge ? "text-green-400" : "text-bloomberg-muted"}>
+                                  {row.has_edge ? "YES" : "NO"}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {/* Panel 3: Liquidity Analysis */}
+                    {qa.liquidity && qa.liquidity.length > 0 && (
+                      <div className="bbg-card">
+                        <p className="bbg-header">Liquidity Analysis (30-day ADV)</p>
+                        <table className="bbg-table text-[10px]">
+                          <thead>
+                            <tr>
+                              <th>Ticker</th>
+                              <th className="text-right">Score</th>
+                              <th className="text-right">Days to Liquidate</th>
+                              <th className="text-right">ADV 30d</th>
+                              <th>Flag</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {qa.liquidity.map((row) => (
+                              <tr key={row.ticker}>
+                                <td className="text-bloomberg-gold font-medium">{row.ticker}</td>
+                                <td className={`text-right font-medium ${row.liquidity_score >= 0.8 ? "text-green-400" : row.liquidity_score >= 0.5 ? "text-bloomberg-gold" : "text-red-400"}`}>
+                                  {row.liquidity_score.toFixed(2)}
+                                </td>
+                                <td className="text-right">
+                                  {row.days_to_liquidate != null ? row.days_to_liquidate.toFixed(1) : "∞"}
+                                </td>
+                                <td className="text-right text-bloomberg-muted">
+                                  {row.adv_30d > 0 ? fmtCurrency(row.adv_30d) : "—"}
+                                </td>
+                                <td className={row.flag === "OK" ? "text-green-400" : "text-bloomberg-gold"}>
+                                  {row.flag}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {/* Panel 4: Expected Return Bands */}
+                    {qa.return_bands && qa.return_bands.length > 0 && (
+                      <div className="bbg-card">
+                        <p className="bbg-header">Expected Return Bands (Bootstrap 90% CI)</p>
+                        <table className="bbg-table text-[10px]">
+                          <thead>
+                            <tr>
+                              <th>Ticker</th>
+                              <th className="text-right">Low</th>
+                              <th className="text-right">Median</th>
+                              <th className="text-right">High</th>
+                              <th className="text-right">Sharpe (median)</th>
+                              <th>Reliable</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {qa.return_bands.map((row) => (
+                              <tr key={row.ticker}>
+                                <td className="text-bloomberg-gold font-medium">{row.ticker}</td>
+                                <td className="text-right text-bloomberg-muted">{pct(row.return_low)}</td>
+                                <td className={`text-right font-medium ${row.return_median >= 0 ? "text-green-400" : "text-red-400"}`}>
+                                  {pct(row.return_median)}
+                                </td>
+                                <td className="text-right text-bloomberg-muted">{pct(row.return_high)}</td>
+                                <td className={`text-right ${row.sharpe_median >= 1 ? "text-green-400" : row.sharpe_median >= 0 ? "text-bloomberg-gold" : "text-red-400"}`}>
+                                  {row.sharpe_median.toFixed(2)}
+                                </td>
+                                <td className={row.reliable ? "text-green-400" : "text-bloomberg-muted"}>
+                                  {row.reliable ? "YES" : "LOW CI"}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {/* Panel 5: Walk-Forward Validation */}
+                    {qa.walk_forward && qa.walk_forward.folds && qa.walk_forward.folds.length > 0 && (
+                      <div className="bbg-card">
+                        <p className="bbg-header">Walk-Forward Validation (Out-of-Sample)</p>
+                        <div className="flex flex-wrap gap-4 text-[10px] mb-2">
+                          <span className="text-bloomberg-muted">
+                            OOS Sharpe: <span className={`font-bold ${qa.walk_forward.oos_mean_sharpe >= 0.5 ? "text-green-400" : "text-bloomberg-gold"}`}>
+                              {qa.walk_forward.oos_mean_sharpe.toFixed(3)}
+                            </span>
+                          </span>
+                          <span className="text-bloomberg-muted">
+                            ±{qa.walk_forward.oos_sharpe_std.toFixed(3)}
+                          </span>
+                          <span className="text-bloomberg-muted">
+                            Consistent edge: <span className={qa.walk_forward.consistent_edge ? "text-green-400 font-bold" : "text-red-400 font-bold"}>
+                              {qa.walk_forward.consistent_edge ? "YES" : "NO"}
+                            </span>
+                          </span>
+                          <span className="text-bloomberg-muted">
+                            Positive folds: <span className="text-bloomberg-text">{qa.walk_forward.n_positive_folds}/{qa.walk_forward.folds.length}</span>
+                          </span>
+                        </div>
+                        <table className="bbg-table text-[10px]">
+                          <thead>
+                            <tr>
+                              <th>Fold</th>
+                              <th>Period</th>
+                              <th className="text-right">Ann. Return</th>
+                              <th className="text-right">Sharpe</th>
+                              <th className="text-right">Alpha</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {qa.walk_forward.folds.map((f) => (
+                              <tr key={f.fold}>
+                                <td className="text-bloomberg-muted">{f.fold}</td>
+                                <td className="text-bloomberg-muted text-[9px]">{f.start} → {f.end}</td>
+                                <td className={`text-right ${f.ann_return >= 0 ? "text-green-400" : "text-red-400"}`}>
+                                  {pct(f.ann_return)}
+                                </td>
+                                <td className={`text-right font-medium ${f.sharpe >= 1 ? "text-green-400" : f.sharpe >= 0 ? "text-bloomberg-gold" : "text-red-400"}`}>
+                                  {f.sharpe.toFixed(3)}
+                                </td>
+                                <td className={`text-right ${f.alpha >= 0 ? "text-green-400" : "text-red-400"}`}>
+                                  {pct(f.alpha)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {/* Panel 6: Dynamic Weight Caps */}
+                    {qa.dynamic_caps && Object.keys(qa.dynamic_caps.caps).length > 0 && (
+                      <div className="bbg-card">
+                        <p className="bbg-header">Dynamic Weight Caps</p>
+                        <p className="text-bloomberg-muted text-[10px] mb-2">
+                          Adaptive per-asset caps based on pairwise correlation and concentration.
+                          Top-heavy: <span className="text-bloomberg-gold">{qa.dynamic_caps.top_heavy_tickers.join(", ") || "—"}</span>
+                        </p>
+                        <table className="bbg-table text-[10px]">
+                          <thead>
+                            <tr>
+                              <th>Ticker</th>
+                              <th className="text-right">Suggested Cap</th>
+                              <th className="text-right">Avg Pairwise Corr</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {Object.entries(qa.dynamic_caps.caps)
+                              .sort(([, a], [, b]) => b - a)
+                              .map(([ticker, cap]) => (
+                                <tr key={ticker}>
+                                  <td className="text-bloomberg-gold font-medium">{ticker}</td>
+                                  <td className="text-right text-bloomberg-text">{(cap * 100).toFixed(1)}%</td>
+                                  <td className="text-right text-bloomberg-muted">
+                                    {(qa.dynamic_caps!.mean_pairwise_corr[ticker] ?? 0).toFixed(2)}
+                                  </td>
+                                </tr>
+                              ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {/* Panel 7: Expected Drawdown Profile */}
+                    {qa.drawdown_profile && Object.keys(qa.drawdown_profile).length > 0 && (
+                      <div className="bbg-card">
+                        <p className="bbg-header">Expected Drawdown Profile (Monte Carlo)</p>
+                        <table className="bbg-table text-[10px]">
+                          <thead>
+                            <tr>
+                              <th>Horizon</th>
+                              <th className="text-right">Expected Max DD</th>
+                              <th className="text-right">Worst (p95)</th>
+                              <th className="text-right">Median Recovery</th>
+                              <th className="text-right">P(DD &gt; 20%)</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {Object.entries(qa.drawdown_profile).map(([yr, h]) => (
+                              <tr key={yr}>
+                                <td className="text-bloomberg-gold font-medium">{yr}Y</td>
+                                <td className="text-right text-red-400">{pct(h.expected_max_dd)}</td>
+                                <td className="text-right text-red-400">{pct(h.worst_dd_p95)}</td>
+                                <td className="text-right text-bloomberg-muted">{h.median_recovery_months.toFixed(0)} mo</td>
+                                <td className="text-right text-bloomberg-muted">{(h.prob_drawdown_gt_20pct * 100).toFixed(0)}%</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {/* Panel 8: Model Drift Monitor */}
+                    {qa.model_drift && qa.model_drift.per_asset && Object.keys(qa.model_drift.per_asset).length > 0 && (
+                      <div className="bbg-card">
+                        <p className="bbg-header">Model Parameter Drift Monitor</p>
+                        <div className="flex flex-wrap gap-4 text-[10px] mb-2">
+                          <span className="text-bloomberg-muted">
+                            Engine: <span className={qa.model_drift.engine_healthy ? "text-green-400 font-bold" : "text-red-400 font-bold"}>
+                              {qa.model_drift.engine_healthy ? "STABLE" : "DRIFTING"}
+                            </span>
+                          </span>
+                          <span className="text-bloomberg-muted">
+                            Mean drift: <span className="text-bloomberg-text">{qa.model_drift.mean_drift_score.toFixed(3)}</span>
+                          </span>
+                          {qa.model_drift.n_alerts > 0 && (
+                            <span className="text-red-400 font-bold">{qa.model_drift.n_alerts} alert(s)</span>
+                          )}
+                        </div>
+                        <table className="bbg-table text-[10px]">
+                          <thead>
+                            <tr>
+                              <th>Ticker</th>
+                              <th className="text-right">Sharpe (3mo)</th>
+                              <th className="text-right">Sharpe (12mo)</th>
+                              <th className="text-right">Drift Score</th>
+                              <th>Alert</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {Object.entries(qa.model_drift.per_asset)
+                              .sort(([, a], [, b]) => b.drift_score - a.drift_score)
+                              .map(([ticker, d]) => (
+                                <tr key={ticker}>
+                                  <td className="text-bloomberg-gold font-medium">{ticker}</td>
+                                  <td className={`text-right ${d.sharpe_short >= 0 ? "text-green-400" : "text-red-400"}`}>
+                                    {d.sharpe_short.toFixed(2)}
+                                  </td>
+                                  <td className={`text-right ${d.sharpe_long >= 0 ? "text-green-400" : "text-red-400"}`}>
+                                    {d.sharpe_long.toFixed(2)}
+                                  </td>
+                                  <td className={`text-right font-medium ${d.drift_score > 0.5 ? "text-red-400" : d.drift_score > 0.25 ? "text-bloomberg-gold" : "text-bloomberg-muted"}`}>
+                                    {d.drift_score.toFixed(3)}
+                                  </td>
+                                  <td className={d.alert ? "text-red-400 font-bold" : "text-bloomberg-muted"}>
+                                    {d.alert ? "⚠" : "OK"}
+                                  </td>
+                                </tr>
+                              ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {/* Panel 9: Naive Portfolio Benchmarks */}
+                    {qa.naive_benchmarks && qa.naive_benchmarks.length > 0 && (
+                      <div className="bbg-card">
+                        <p className="bbg-header">Portfolio vs Naive Benchmarks</p>
+                        <table className="bbg-table text-[10px]">
+                          <thead>
+                            <tr>
+                              <th>Model</th>
+                              <th className="text-right">Ann. Return</th>
+                              <th className="text-right">Volatility</th>
+                              <th className="text-right">Sharpe</th>
+                              <th className="text-right">Max DD</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {qa.naive_benchmarks.map((row) => (
+                              <tr key={row.model} className={row.model === "Your Portfolio" ? "border-t-2 border-bloomberg-gold" : ""}>
+                                <td className={row.model === "Your Portfolio" ? "text-bloomberg-gold font-bold" : "text-bloomberg-text"}>
+                                  {row.model}
+                                </td>
+                                <td className={`text-right ${row.ann_return >= 0 ? "text-green-400" : "text-red-400"}`}>
+                                  {pct(row.ann_return)}
+                                </td>
+                                <td className="text-right text-bloomberg-muted">{pct(row.volatility)}</td>
+                                <td className={`text-right font-medium ${row.sharpe >= 1 ? "text-green-400" : row.sharpe >= 0 ? "text-bloomberg-gold" : "text-red-400"}`}>
+                                  {row.sharpe.toFixed(3)}
+                                </td>
+                                <td className="text-right text-red-400">{pct(row.max_dd)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           )}
 

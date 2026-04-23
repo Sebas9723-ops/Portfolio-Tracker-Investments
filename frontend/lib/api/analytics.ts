@@ -78,6 +78,16 @@ export const backtestWeights = (weights: Record<string, number>, period = "1y") 
     )
     .then((r) => r.data);
 
+export const fetchQuantAdvanced = (body: {
+  period?: string;
+  benchmark_ticker?: string;
+  n_bootstrap?: number;
+  n_dd_sims?: number;
+} = {}) =>
+  apiClient
+    .post<Record<string, unknown>>("/api/analytics/quant-advanced", body, { timeout: 300_000 })
+    .then((r) => r.data);
+
 export const fetchBlackLitterman = (body: {
   views: Record<string, number>;
   tau?: number;

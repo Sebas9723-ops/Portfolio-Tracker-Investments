@@ -1,7 +1,10 @@
 "use client";
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchAnalytics, fetchRollingMetrics, fetchExtendedAnalytics, fetchVolRegime } from "@/lib/api/analytics";
+import { fetchAnalytics, fetchRollingMetrics, fetchExtendedAnalytics, fetchVolRegime, fetchQuantAdvanced } from "@/lib/api/analytics";
+import type {
+  FactorRisk, TrackingErrorBudget, QuantRegime, NaiveBenchmarkRow, WalkForward,
+} from "@/lib/api/contribution";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { Card, Metric, Text, BadgeDelta } from "@tremor/react";
 import { fmtPct, fmtDate, MONTHS_SHORT } from "@/lib/formatters";
@@ -65,6 +68,21 @@ export default function AnalyticsPage() {
     staleTime: 5 * 60 * 1000,
   });
 
+  const [qaEnabled, setQaEnabled] = useState(false);
+  const { data: quantAdvancedRaw, isFetching: qaFetching, refetch: refetchQA } = useQuery({
+    queryKey: ["quant-advanced", period, preferred_benchmark],
+    queryFn: () => fetchQuantAdvanced({ period, benchmark_ticker: preferred_benchmark }),
+    enabled: qaEnabled,
+    staleTime: 10 * 60 * 1000,
+  });
+  const qa = quantAdvancedRaw as {
+    factor_risk?: FactorRisk;
+    tracking_error_budget?: TrackingErrorBudget;
+    regime?: QuantRegime;
+    naive_benchmarks?: NaiveBenchmarkRow[];
+    walk_forward?: WalkForward;
+  } | undefined;
+
   // Derived from optional data — must be before any early returns (React hooks rules)
   const vrSeries = volRegime?.series ?? [];
   const highVolRanges = useMemo(() => getRegimeRanges(vrSeries, "high"), [vrSeries]);
@@ -97,16 +115,25 @@ export default function AnalyticsPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-bloomberg-gold text-xs font-bold uppercase tracking-widest">Analytics</h1>
-        <div className="flex gap-1">
-          {PERIODS.map((p) => (
-            <button
-              key={p}
-              onClick={() => setPeriod(p)}
-              className={`text-[10px] px-2 py-1 border ${period === p ? "border-bloomberg-gold text-bloomberg-gold" : "border-bloomberg-border text-bloomberg-muted hover:border-bloomberg-muted"}`}
-            >
-              {p.toUpperCase()}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          <div className="flex gap-1">
+            {PERIODS.map((p) => (
+              <button
+                key={p}
+                onClick={() => setPeriod(p)}
+                className={`text-[10px] px-2 py-1 border ${period === p ? "border-bloomberg-gold text-bloomberg-gold" : "border-bloomberg-border text-bloomberg-muted hover:border-bloomberg-muted"}`}
+              >
+                {p.toUpperCase()}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={() => { setQaEnabled(true); refetchQA(); }}
+            disabled={qaFetching}
+            className="bg-bloomberg-gold text-bloomberg-bg text-[10px] font-bold px-3 py-1 hover:opacity-90 disabled:opacity-50 uppercase tracking-wider"
+          >
+            {qaFetching ? "COMPUTING…" : "QUANT ADVANCED"}
+          </button>
         </div>
       </div>
 
@@ -421,6 +448,242 @@ export default function AnalyticsPage() {
           </table>
         </div>
       )}
+
+      {/* ── Quant Advanced Analytics (manual trigger) ── */}
+      {qa && (() => {
+        const pct = (v: number | null | undefined, d = 1) =>
+          v == null ? "—" : `${(v * 100).toFixed(d)}%`;
+
+        return (
+          <>
+            {/* Factor Risk Decomposition */}
+            {qa.factor_risk && qa.factor_risk.per_asset && Object.keys(qa.factor_risk.per_asset).length > 0 && (
+              <div className="bbg-card">
+                <p className="bbg-header">Factor Risk Decomposition</p>
+                <div className="flex flex-wrap gap-4 text-[10px] mb-2">
+                  <span className="text-bloomberg-muted">
+                    Portfolio vol: <span className="text-bloomberg-gold font-bold">{pct(qa.factor_risk.portfolio_vol)}</span>
+                  </span>
+                  {qa.factor_risk.factor_decomposition?.r_squared != null && (
+                    <>
+                      <span className="text-bloomberg-muted">
+                        Systematic: <span className="text-bloomberg-text">{qa.factor_risk.factor_decomposition.systematic_risk_pct as number}%</span>
+                      </span>
+                      <span className="text-bloomberg-muted">
+                        Idiosyncratic: <span className="text-bloomberg-text">{qa.factor_risk.factor_decomposition.idiosyncratic_risk_pct as number}%</span>
+                      </span>
+                    </>
+                  )}
+                </div>
+                <table className="bbg-table text-[10px]">
+                  <thead>
+                    <tr>
+                      <th>Ticker</th>
+                      <th className="text-right">Weight</th>
+                      <th className="text-right">Vol Contribution</th>
+                      <th className="text-right">% of Portfolio Vol</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(qa.factor_risk.per_asset)
+                      .sort(([, a], [, b]) => b.vol_contribution_pct - a.vol_contribution_pct)
+                      .map(([ticker, a]) => (
+                        <tr key={ticker}>
+                          <td className="text-bloomberg-gold font-medium">{ticker}</td>
+                          <td className="text-right">{(a.weight * 100).toFixed(1)}%</td>
+                          <td className="text-right text-bloomberg-muted">{pct(a.vol_contribution)}</td>
+                          <td className={`text-right font-medium ${a.vol_contribution_pct > 30 ? "text-red-400" : a.vol_contribution_pct > 15 ? "text-bloomberg-gold" : "text-bloomberg-text"}`}>
+                            {a.vol_contribution_pct.toFixed(1)}%
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Tracking Error Budget */}
+            {qa.tracking_error_budget && qa.tracking_error_budget.total_te != null && (
+              <div className="bbg-card">
+                <p className="bbg-header">Tracking Error Budget</p>
+                <div className="flex flex-wrap gap-4 text-[10px] mb-3">
+                  <span className="text-bloomberg-muted">
+                    TE (actual): <span className="text-bloomberg-gold font-bold">{pct(qa.tracking_error_budget.total_te)}</span>
+                  </span>
+                  <span className="text-bloomberg-muted">
+                    Budget: <span className="text-bloomberg-text">{pct(qa.tracking_error_budget.te_budget)}</span>
+                  </span>
+                  <span className="text-bloomberg-muted">
+                    Used: <span className={`font-bold ${qa.tracking_error_budget.within_budget ? "text-green-400" : "text-red-400"}`}>
+                      {qa.tracking_error_budget.budget_used_pct.toFixed(1)}%
+                    </span>
+                  </span>
+                  <span className={qa.tracking_error_budget.within_budget ? "text-green-400 font-bold" : "text-red-400 font-bold"}>
+                    {qa.tracking_error_budget.within_budget ? "WITHIN BUDGET" : "OVER BUDGET"}
+                  </span>
+                </div>
+                {qa.tracking_error_budget.per_asset && Object.keys(qa.tracking_error_budget.per_asset).length > 0 && (
+                  <table className="bbg-table text-[10px]">
+                    <thead>
+                      <tr>
+                        <th>Ticker</th>
+                        <th className="text-right">TE Contribution</th>
+                        <th className="text-right">Share of TE</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(qa.tracking_error_budget.per_asset)
+                        .sort(([, a], [, b]) => b.te_share_pct - a.te_share_pct)
+                        .map(([ticker, te]) => (
+                          <tr key={ticker}>
+                            <td className="text-bloomberg-gold font-medium">{ticker}</td>
+                            <td className="text-right text-bloomberg-muted">{pct(te.te_contribution)}</td>
+                            <td className={`text-right font-medium ${te.te_share_pct > 30 ? "text-red-400" : "text-bloomberg-text"}`}>
+                              {te.te_share_pct.toFixed(1)}%
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+
+            {/* EWMA Regime Analysis */}
+            {qa.regime && qa.regime.current_regime && (
+              <div className="bbg-card">
+                <p className="bbg-header">Quant Regime Analysis (EWMA-based)</p>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                  <div className="bbg-card">
+                    <p className="text-bloomberg-muted text-[10px]">Current Regime</p>
+                    <p className={`text-sm font-bold ${qa.regime.current_regime === "low" ? "text-green-400" : qa.regime.current_regime === "normal" ? "text-bloomberg-gold" : qa.regime.current_regime === "high" ? "text-orange-400" : "text-red-400"}`}>
+                      {qa.regime.current_regime.toUpperCase()}
+                    </p>
+                  </div>
+                  <div className="bbg-card">
+                    <p className="text-bloomberg-muted text-[10px]">Current Vol</p>
+                    <p className="text-bloomberg-text text-sm font-bold">{pct(qa.regime.current_vol)}</p>
+                  </div>
+                  <div className="bbg-card">
+                    <p className="text-bloomberg-muted text-[10px]">Equity Tilt</p>
+                    <p className={`text-sm font-bold ${qa.regime.strategic.equity_tilt >= 0 ? "text-green-400" : "text-red-400"}`}>
+                      {qa.regime.strategic.equity_tilt >= 0 ? "+" : ""}{(qa.regime.strategic.equity_tilt * 100).toFixed(0)}%
+                    </p>
+                  </div>
+                  <div className="bbg-card">
+                    <p className="text-bloomberg-muted text-[10px]">Execution Hold</p>
+                    <p className={`text-sm font-bold ${qa.regime.execution.hold ? "text-red-400" : "text-green-400"}`}>
+                      {qa.regime.execution.hold ? "HOLD" : "GO"}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-3 text-[10px]">
+                  {Object.entries(qa.regime.regime_probabilities).map(([name, prob]) => (
+                    <div key={name} className="flex flex-col items-center">
+                      <span className="text-bloomberg-muted uppercase">{name}</span>
+                      <span className="text-bloomberg-text font-bold">{(prob * 100).toFixed(0)}%</span>
+                    </div>
+                  ))}
+                </div>
+                {qa.regime.execution.hold && qa.regime.execution.reason && (
+                  <p className="text-bloomberg-gold text-[10px] mt-2">
+                    Hold reason: {qa.regime.execution.reason}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Naive Portfolio Benchmarks */}
+            {qa.naive_benchmarks && qa.naive_benchmarks.length > 0 && (
+              <div className="bbg-card">
+                <p className="bbg-header">Portfolio vs Naive Benchmarks</p>
+                <table className="bbg-table text-[10px]">
+                  <thead>
+                    <tr>
+                      <th>Model</th>
+                      <th className="text-right">Ann. Return</th>
+                      <th className="text-right">Volatility</th>
+                      <th className="text-right">Sharpe</th>
+                      <th className="text-right">Cum. Return</th>
+                      <th className="text-right">Max DD</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {qa.naive_benchmarks.map((row) => (
+                      <tr key={row.model} className={row.model === "Your Portfolio" ? "border-t-2 border-bloomberg-gold" : ""}>
+                        <td className={row.model === "Your Portfolio" ? "text-bloomberg-gold font-bold" : "text-bloomberg-text"}>
+                          {row.model}
+                        </td>
+                        <td className={`text-right ${row.ann_return >= 0 ? "text-green-400" : "text-red-400"}`}>
+                          {pct(row.ann_return)}
+                        </td>
+                        <td className="text-right text-bloomberg-muted">{pct(row.volatility)}</td>
+                        <td className={`text-right font-medium ${row.sharpe >= 1 ? "text-green-400" : row.sharpe >= 0 ? "text-bloomberg-gold" : "text-red-400"}`}>
+                          {row.sharpe.toFixed(3)}
+                        </td>
+                        <td className={`text-right ${row.cum_return >= 0 ? "text-green-400" : "text-red-400"}`}>
+                          {pct(row.cum_return)}
+                        </td>
+                        <td className="text-right text-red-400">{pct(row.max_dd)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Walk-Forward Validation */}
+            {qa.walk_forward && qa.walk_forward.folds && qa.walk_forward.folds.length > 0 && (
+              <div className="bbg-card">
+                <p className="bbg-header">Walk-Forward Validation (Out-of-Sample)</p>
+                <div className="flex flex-wrap gap-4 text-[10px] mb-2">
+                  <span className="text-bloomberg-muted">
+                    OOS Sharpe: <span className={`font-bold ${qa.walk_forward.oos_mean_sharpe >= 0.5 ? "text-green-400" : "text-bloomberg-gold"}`}>
+                      {qa.walk_forward.oos_mean_sharpe.toFixed(3)} ±{qa.walk_forward.oos_sharpe_std.toFixed(3)}
+                    </span>
+                  </span>
+                  <span className="text-bloomberg-muted">
+                    Consistent edge: <span className={qa.walk_forward.consistent_edge ? "text-green-400 font-bold" : "text-red-400 font-bold"}>
+                      {qa.walk_forward.consistent_edge ? "YES" : "NO"}
+                    </span>
+                  </span>
+                  <span className="text-bloomberg-muted">
+                    Positive folds: <span className="text-bloomberg-text">{qa.walk_forward.n_positive_folds}/{qa.walk_forward.folds.length}</span>
+                  </span>
+                </div>
+                <table className="bbg-table text-[10px]">
+                  <thead>
+                    <tr>
+                      <th>Fold</th>
+                      <th>Period</th>
+                      <th className="text-right">Ann. Return</th>
+                      <th className="text-right">Sharpe</th>
+                      <th className="text-right">Alpha</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {qa.walk_forward.folds.map((f) => (
+                      <tr key={f.fold}>
+                        <td className="text-bloomberg-muted">{f.fold}</td>
+                        <td className="text-bloomberg-muted text-[9px]">{f.start} → {f.end}</td>
+                        <td className={`text-right ${f.ann_return >= 0 ? "text-green-400" : "text-red-400"}`}>
+                          {pct(f.ann_return)}
+                        </td>
+                        <td className={`text-right font-medium ${f.sharpe >= 1 ? "text-green-400" : f.sharpe >= 0 ? "text-bloomberg-gold" : "text-red-400"}`}>
+                          {f.sharpe.toFixed(3)}
+                        </td>
+                        <td className={`text-right ${f.alpha >= 0 ? "text-green-400" : "text-red-400"}`}>
+                          {pct(f.alpha)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        );
+      })()}
     </div>
   );
 }
