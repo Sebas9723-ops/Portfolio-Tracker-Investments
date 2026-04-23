@@ -325,18 +325,33 @@ def _render_ff3(ff3):
     if not ff3:
         return
 
-    info_section(
-        "Fama-French 3-Factor Exposure",
+    has_umd = "umd_beta" in ff3
+    title = "Carhart 4-Factor Exposure" if has_umd else "Fama-French 3-Factor Exposure"
+    desc = (
+        "OLS regression on Market (Mkt-RF), Size (SMB), Value (HML), and Momentum (UMD) factors. "
+        "Proxied by IVV / IWM / IVE / IVW / MTUM ETFs. t-stats shown as tooltip."
+        if has_umd else
         "OLS regression of portfolio excess returns on Market (Mkt-RF), Size (SMB), and Value (HML) factors. "
-        "Factors are proxied by IVV / IWM / IVE / IVW ETFs. t-stats shown as tooltip.",
+        "Factors are proxied by IVV / IWM / IVE / IVW ETFs. t-stats shown as tooltip."
     )
-    c1, c2, c3, c4, c5 = st.columns(5)
+    info_section(title, desc)
+
     alpha_ann = float(ff3.get("alpha", 0))
-    info_metric(c1, "FF3 Alpha (ann.)", _fmt(alpha_ann), f"t = {ff3.get('alpha_tstat', 0):.2f}")
-    info_metric(c2, "Market β", _fmt(ff3.get("mkt_beta"), ".2f"), f"t = {ff3.get('mkt_tstat', 0):.2f}")
-    info_metric(c3, "SMB β (Size)", _fmt(ff3.get("smb_beta"), ".2f"), f"t = {ff3.get('smb_tstat', 0):.2f}  (+) = small-cap tilt")
-    info_metric(c4, "HML β (Value)", _fmt(ff3.get("hml_beta"), ".2f"), f"t = {ff3.get('hml_tstat', 0):.2f}  (+) = value tilt")
-    info_metric(c5, "R²", _fmt(ff3.get("r_squared"), ".2%"), f"{ff3.get('n_obs', 0)} observations")
+    if has_umd:
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        info_metric(c1, "Alpha (ann.)", _fmt(alpha_ann), f"t = {ff3.get('alpha_tstat', 0):.2f}")
+        info_metric(c2, "Market β", _fmt(ff3.get("mkt_beta"), ".2f"), f"t = {ff3.get('mkt_tstat', 0):.2f}")
+        info_metric(c3, "SMB β (Size)", _fmt(ff3.get("smb_beta"), ".2f"), f"t = {ff3.get('smb_tstat', 0):.2f}  (+) = small-cap tilt")
+        info_metric(c4, "HML β (Value)", _fmt(ff3.get("hml_beta"), ".2f"), f"t = {ff3.get('hml_tstat', 0):.2f}  (+) = value tilt")
+        info_metric(c5, "UMD β (Mom.)", _fmt(ff3.get("umd_beta"), ".2f"), f"t = {ff3.get('umd_tstat', 0):.2f}  (+) = momentum tilt")
+        info_metric(c6, "R²", _fmt(ff3.get("r_squared"), ".2%"), f"{ff3.get('n_obs', 0)} observations")
+    else:
+        c1, c2, c3, c4, c5 = st.columns(5)
+        info_metric(c1, "FF3 Alpha (ann.)", _fmt(alpha_ann), f"t = {ff3.get('alpha_tstat', 0):.2f}")
+        info_metric(c2, "Market β", _fmt(ff3.get("mkt_beta"), ".2f"), f"t = {ff3.get('mkt_tstat', 0):.2f}")
+        info_metric(c3, "SMB β (Size)", _fmt(ff3.get("smb_beta"), ".2f"), f"t = {ff3.get('smb_tstat', 0):.2f}  (+) = small-cap tilt")
+        info_metric(c4, "HML β (Value)", _fmt(ff3.get("hml_beta"), ".2f"), f"t = {ff3.get('hml_tstat', 0):.2f}  (+) = value tilt")
+        info_metric(c5, "R²", _fmt(ff3.get("r_squared"), ".2%"), f"{ff3.get('n_obs', 0)} observations")
     st.caption(f"Factor proxy source: {ff3.get('source', 'ETF Proxy')}")
 
 

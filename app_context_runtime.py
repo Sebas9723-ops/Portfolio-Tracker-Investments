@@ -48,8 +48,28 @@ from app_core import (
     merge_private_portfolios,
     optimize_max_sharpe,
     optimize_min_vol,
+    optimize_min_cvar,
+    compute_hrp_weights,
+    compute_risk_parity_weights,
     reset_mode_state,
     simulate_constrained_efficient_frontier,
+    # ── Quant Engine v2 ──────────────────────────────────────────────────────
+    compute_rebalancing_bands,
+    compute_net_alpha_after_costs,
+    compute_after_tax_drag,
+    compute_liquidity_score,
+    compute_model_agreement_score,
+    compute_expected_return_bands,
+    explain_bl_posterior,
+    compute_tracking_error_budget,
+    compute_walk_forward_metrics,
+    compute_regime_probabilities,
+    compute_dynamic_weight_caps,
+    compute_expected_drawdown_profile,
+    compute_model_drift_score,
+    benchmark_naive_portfolios,
+    compute_factor_risk_decomposition,
+    compute_black_litterman,
 )
 
 
@@ -601,9 +621,12 @@ def build_app_context_runtime(app_scope: str):
     var_cvar = compute_var_cvar(portfolio_returns)
     mwr_result = compute_mwr(transactions_df, total_portfolio_value)
 
-    # ── Efficient frontier (Max Sharpe / Min Vol) ─────────────────────────────
+    # ── Efficient frontier (Max Sharpe / Min Vol / Min CVaR / HRP / ERC) ────────
     max_sharpe_row = None
     min_vol_row = None
+    min_cvar_row = None
+    hrp_result = None
+    erc_result = None
     usable = []
     if asset_returns is not None and not asset_returns.empty and asset_returns.shape[1] >= 2:
         _constraints  = get_default_constraints(profile)
@@ -624,6 +647,14 @@ def build_app_context_runtime(app_scope: str):
         max_sharpe_row = optimize_max_sharpe(asset_returns, _asset_names, _constraints, risk_free_rate)
         min_vol_row    = optimize_min_vol(asset_returns, _asset_names, _constraints, risk_free_rate)
 
+        # Min-CVaR portfolio (Rockafellar-Uryasev LP) — coherent tail-risk optimum
+        min_cvar_row = optimize_min_cvar(asset_returns, _asset_names, _constraints,
+                                         confidence_level=0.95, risk_free_rate=risk_free_rate)
+
+        # Clustering-based allocations (no matrix inversion)
+        hrp_result = compute_hrp_weights(asset_returns[_asset_names])
+        erc_result = compute_risk_parity_weights(asset_returns[_asset_names])
+
         # Monte Carlo frontier as fallback if scipy fails
         if max_sharpe_row is None or min_vol_row is None:
             _frontier = simulate_constrained_efficient_frontier(
@@ -641,6 +672,212 @@ def build_app_context_runtime(app_scope: str):
 
         if max_sharpe_row is not None or min_vol_row is not None:
             usable = _asset_names
+
+    # ── Quant Engine v2 computations ──────────────────────────────────────────
+    # All wrapped in try/except so a failure in any module never breaks the app.
+
+    # Shared derived inputs
+    _current_weights_series = pd.Series(dtype=float)
+    _position_values_map: dict = {}
+    _current_prices_map: dict = {}
+    if not df.empty and "Ticker" in df.columns:
+        _vals = df.set_index("Ticker")["Value"].apply(pd.to_numeric, errors="coerce").fillna(0)
+        _pos_total = float(_vals.sum())
+        _current_weights_series = (_vals / _pos_total) if _pos_total > 0 else _vals * 0
+        _position_values_map = _vals.to_dict()
+        if "Price" in df.columns:
+            _current_prices_map = df.set_index("Ticker")["Price"].apply(pd.to_numeric, errors="coerce").fillna(0).to_dict()
+
+    # 1. Rebalancing bands
+    rebalancing_bands = {}
+    try:
+        if not df.empty and policy_target_map and total_value > 0:
+            rebalancing_bands = compute_rebalancing_bands(
+                df=df,
+                target_weights=policy_target_map,
+                total_value=total_value,
+            )
+    except Exception:
+        pass
+
+    # 2. Net alpha after costs
+    net_alpha_df = pd.DataFrame()
+    try:
+        if asset_returns is not None and not asset_returns.empty and not _current_weights_series.empty:
+            _exp_ret = (asset_returns.mean() * 252).rename(lambda t: t)
+            _tgt_w = pd.Series(policy_target_map).reindex(_exp_ret.index).fillna(0)
+            net_alpha_df = compute_net_alpha_after_costs(
+                expected_returns=_exp_ret,
+                current_weights=_current_weights_series.reindex(_exp_ret.index).fillna(0),
+                target_weights=_tgt_w,
+                total_value=total_value,
+            )
+    except Exception:
+        pass
+
+    # 3. After-tax drag
+    after_tax_drag = {}
+    try:
+        if not portfolio_returns.empty and not transactions_df.empty and _current_prices_map:
+            after_tax_drag = compute_after_tax_drag(
+                portfolio_returns=portfolio_returns,
+                transactions_df=transactions_df,
+                current_prices=_current_prices_map,
+            )
+    except Exception:
+        pass
+
+    # 4. Liquidity score
+    liquidity_df = pd.DataFrame()
+    try:
+        if tickers:
+            liquidity_df = compute_liquidity_score(
+                tickers=tickers,
+                position_values=_position_values_map,
+            )
+    except Exception:
+        pass
+
+    # 5. Model agreement score
+    model_agreement = {}
+    try:
+        if asset_returns is not None and not asset_returns.empty:
+            _opt_weights: dict = {}
+            if max_sharpe_row is not None and "Weights" in max_sharpe_row.index:
+                _opt_weights["Max Sharpe"] = max_sharpe_row["Weights"]
+            if min_vol_row is not None and "Weights" in min_vol_row.index:
+                _opt_weights["Min Vol"] = min_vol_row["Weights"]
+            if min_cvar_row is not None and "Weights" in min_cvar_row.index:
+                _opt_weights["Min CVaR"] = min_cvar_row["Weights"]
+            if hrp_result and "weights" in hrp_result:
+                _opt_weights["HRP"] = hrp_result["weights"]
+            if erc_result and "weights" in erc_result:
+                _opt_weights["ERC"] = erc_result["weights"]
+            if len(_opt_weights) >= 2:
+                model_agreement = compute_model_agreement_score(
+                    optimizer_weights=_opt_weights,
+                    asset_returns=asset_returns,
+                    risk_free_rate=risk_free_rate,
+                )
+    except Exception:
+        pass
+
+    # 6. Expected return confidence bands
+    expected_return_bands = pd.DataFrame()
+    try:
+        if asset_returns is not None and not asset_returns.empty:
+            expected_return_bands = compute_expected_return_bands(asset_returns)
+    except Exception:
+        pass
+
+    # 7. Black-Litterman explainability (requires BL result from session views)
+    bl_explanation = pd.DataFrame()
+    try:
+        if asset_returns is not None and not asset_returns.empty and not _current_weights_series.empty:
+            _bl_tickers = [t for t in _current_weights_series.index if t in asset_returns.columns]
+            _bl_w = _current_weights_series.reindex(_bl_tickers).fillna(0).values
+            _bl_views = st.session_state.get("bl_views", [])
+            _bl_result = compute_black_litterman(
+                asset_returns=asset_returns,
+                current_weights=_bl_w,
+                tickers=_bl_tickers,
+                views=_bl_views,
+                risk_free_rate=risk_free_rate,
+            )
+            if _bl_result:
+                bl_explanation = explain_bl_posterior(bl_result=_bl_result, views=_bl_views)
+    except Exception:
+        pass
+
+    # 8. Tracking error budget
+    tracking_error_budget = {}
+    try:
+        if asset_returns is not None and not asset_returns.empty and not _current_weights_series.empty:
+            tracking_error_budget = compute_tracking_error_budget(
+                asset_returns=asset_returns,
+                portfolio_weights=_current_weights_series,
+                benchmark_returns=resolved_benchmark_returns,
+            )
+    except Exception:
+        pass
+
+    # 9. Walk-forward validation
+    walk_forward_metrics = {}
+    try:
+        if not portfolio_returns.empty:
+            walk_forward_metrics = compute_walk_forward_metrics(
+                portfolio_returns=portfolio_returns,
+                benchmark_returns=resolved_benchmark_returns if not resolved_benchmark_returns.empty else None,
+                risk_free_rate=risk_free_rate,
+            )
+    except Exception:
+        pass
+
+    # 10. Regime probabilities
+    regime_probabilities = {}
+    try:
+        if not portfolio_returns.empty:
+            regime_probabilities = compute_regime_probabilities(portfolio_returns)
+    except Exception:
+        pass
+
+    # 11. Dynamic weight caps
+    dynamic_weight_caps = {}
+    try:
+        if asset_returns is not None and not asset_returns.empty and not _current_weights_series.empty:
+            dynamic_weight_caps = compute_dynamic_weight_caps(
+                asset_returns=asset_returns,
+                current_weights=_current_weights_series,
+            )
+    except Exception:
+        pass
+
+    # 12. Expected drawdown profile
+    expected_drawdown_profile = {}
+    try:
+        if not portfolio_returns.empty and total_portfolio_value > 0:
+            expected_drawdown_profile = compute_expected_drawdown_profile(
+                portfolio_returns=portfolio_returns,
+                current_value=total_portfolio_value,
+            )
+    except Exception:
+        pass
+
+    # 13. Model drift score
+    model_drift = {}
+    try:
+        if asset_returns is not None and not asset_returns.empty:
+            model_drift = compute_model_drift_score(
+                asset_returns=asset_returns,
+                risk_free_rate=risk_free_rate,
+            )
+    except Exception:
+        pass
+
+    # 14. Naive portfolio benchmarking
+    naive_benchmark_df = pd.DataFrame()
+    try:
+        if asset_returns is not None and not asset_returns.empty and not portfolio_returns.empty:
+            naive_benchmark_df = benchmark_naive_portfolios(
+                asset_returns=asset_returns,
+                portfolio_returns=portfolio_returns,
+                benchmark_returns=resolved_benchmark_returns if not resolved_benchmark_returns.empty else None,
+                risk_free_rate=risk_free_rate,
+            )
+    except Exception:
+        pass
+
+    # 15. Factor risk decomposition
+    factor_risk_decomposition = {}
+    try:
+        if asset_returns is not None and not asset_returns.empty and not _current_weights_series.empty:
+            factor_risk_decomposition = compute_factor_risk_decomposition(
+                asset_returns=asset_returns,
+                portfolio_weights=_current_weights_series,
+                risk_free_rate=risk_free_rate,
+            )
+    except Exception:
+        pass
 
     annual_dividend_df, dividend_calendar_df, collected_dividends_df, estimated_annual_dividends, dividends_ytd, dividends_total = build_dividend_insights(
         df=df,
@@ -719,9 +956,28 @@ def build_app_context_runtime(app_scope: str):
         "mwr_result": mwr_result,
         "max_sharpe_row": max_sharpe_row,
         "min_vol_row": min_vol_row,
+        "min_cvar_row": min_cvar_row,
+        "hrp_result": hrp_result,
+        "erc_result": erc_result,
         "usable": usable,
         "fx_rate_cache": _fx_cache,
         "alpaca_available": alpaca_available,
+        # ── Quant Engine v2 ──────────────────────────────────────────────────
+        "rebalancing_bands": rebalancing_bands,
+        "net_alpha_df": net_alpha_df,
+        "after_tax_drag": after_tax_drag,
+        "liquidity_df": liquidity_df,
+        "model_agreement": model_agreement,
+        "expected_return_bands": expected_return_bands,
+        "bl_explanation": bl_explanation,
+        "tracking_error_budget": tracking_error_budget,
+        "walk_forward_metrics": walk_forward_metrics,
+        "regime_probabilities": regime_probabilities,
+        "dynamic_weight_caps": dynamic_weight_caps,
+        "expected_drawdown_profile": expected_drawdown_profile,
+        "model_drift": model_drift,
+        "naive_benchmark_df": naive_benchmark_df,
+        "factor_risk_decomposition": factor_risk_decomposition,
     }
 
     if _should_auto_snapshot(ctx):

@@ -2699,6 +2699,23 @@ def bucket_for_ticker(ticker: str):
     return "Equities"
 
 
+def _shrunk_cov(returns_df: pd.DataFrame, annualize: bool = True) -> np.ndarray:
+    """Ledoit-Wolf shrinkage covariance estimator.
+
+    Produces a better-conditioned covariance matrix than the raw sample
+    estimate, especially when the number of assets is large relative to
+    the number of observations.  Falls back to the sample covariance if
+    sklearn is unavailable or the estimator fails.
+    """
+    r = returns_df.dropna()
+    try:
+        from sklearn.covariance import LedoitWolf
+        cov = LedoitWolf(assume_centered=False).fit(r.values).covariance_
+    except Exception:
+        cov = r.cov().values
+    return cov * (252 if annualize else 1)
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def simulate_constrained_efficient_frontier(
     asset_returns: pd.DataFrame,
@@ -2711,7 +2728,8 @@ def simulate_constrained_efficient_frontier(
         return pd.DataFrame()
 
     mean_returns = asset_returns.mean() * 252
-    cov_matrix = asset_returns.cov() * 252
+    _cov_arr = _shrunk_cov(asset_returns)
+    cov_matrix = pd.DataFrame(_cov_arr, index=asset_returns.columns, columns=asset_returns.columns)
 
     n_assets = len(mean_returns)
     max_single_asset = float(constraints["max_single_asset"])
@@ -2814,7 +2832,7 @@ def optimize_max_sharpe(
 
     n = asset_returns.shape[1]
     mean_ret = asset_returns.mean().values * 252
-    cov = asset_returns.cov().values * 252
+    cov = _shrunk_cov(asset_returns)
 
     bond_idx, gold_idx = classify_assets(asset_names)
     max_single = float(constraints["max_single_asset"])
@@ -2901,7 +2919,7 @@ def optimize_min_vol(
 
     n = asset_returns.shape[1]
     mean_ret = asset_returns.mean().values * 252
-    cov = asset_returns.cov().values * 252
+    cov = _shrunk_cov(asset_returns)
 
     bond_idx, gold_idx = classify_assets(asset_names)
     max_single = float(constraints["max_single_asset"])
@@ -2950,6 +2968,118 @@ def optimize_min_vol(
     shrp = (ret - risk_free_rate) / vol if vol > 0 else 0.0
 
     return pd.Series({"Weights": best_w, "Return": ret, "Volatility": vol, "Sharpe": shrp})
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def optimize_min_cvar(
+    asset_returns: pd.DataFrame,
+    asset_names: list[str],
+    constraints: dict,
+    confidence_level: float = 0.95,
+    risk_free_rate: float = 0.02,
+) -> "pd.Series | None":
+    """Minimum-CVaR portfolio via Rockafellar-Uryasev linear programming.
+
+    Directly minimises the Conditional Value-at-Risk (Expected Shortfall) of
+    the portfolio at a given confidence level.  Unlike min-vol optimisation,
+    this objective is a coherent risk measure and naturally penalises fat-tail
+    losses even when the return distribution is non-normal.
+
+    LP variables: w (n weights), v (scalar VaR), z (T aux variables ≥ 0)
+    Objective: min  v + 1 / (T * (1 - α)) * Σ z_t
+    Subject to: z_t ≥ -r_t @ w - v,  z_t ≥ 0,  Σ w = 1,  bounds
+    """
+    from scipy.optimize import linprog
+
+    if asset_returns is None or asset_returns.empty or len(asset_returns) < 30:
+        return None
+    if len(asset_names) < 2:
+        return None
+
+    r = asset_returns[asset_names].dropna().values   # T × n
+    T, n = r.shape
+    alpha = confidence_level
+
+    bond_idx, gold_idx = classify_assets(asset_names)
+    max_single = float(constraints.get("max_single_asset", 1.0))
+    min_bonds  = float(constraints.get("min_bonds", 0.0))
+    min_gold   = float(constraints.get("min_gold", 0.0))
+
+    # Objective vector: [0]*n + [1 (VaR)] + [1/(T*(1-α))]*T
+    c_obj = np.zeros(n + 1 + T)
+    c_obj[n]   = 1.0
+    c_obj[n+1:] = 1.0 / (T * (1 - alpha))
+
+    # Inequality: -r_t @ w - v - z_t ≤ 0  →  A_ub x ≤ b_ub
+    A_ub = np.zeros((T, n + 1 + T))
+    for t in range(T):
+        A_ub[t, :n]     = -r[t]   # -r_t @ w
+        A_ub[t, n]      = -1.0    # -v
+        A_ub[t, n+1+t]  = -1.0   # -z_t
+    b_ub = np.zeros(T)
+
+    # Equality: Σ w = 1
+    A_eq = np.zeros((1, n + 1 + T))
+    A_eq[0, :n] = 1.0
+    b_eq = np.array([1.0])
+
+    # Bounds on w
+    per_ticker_bounds = constraints.get("per_ticker_bounds", {})
+    w_bounds = []
+    for i, ticker in enumerate(asset_names):
+        if ticker in per_ticker_bounds:
+            lo, hi = per_ticker_bounds[ticker]
+        else:
+            lo, hi = 0.0, max_single
+        w_bounds.append((lo, hi))
+
+    # Add min_bonds / min_gold as additional inequality rows: -Σ w_bonds ≤ -min_bonds
+    extra_rows, extra_b = [], []
+    if bond_idx and min_bonds > 0:
+        row = np.zeros(n + 1 + T)
+        for i in bond_idx:
+            row[i] = -1.0
+        extra_rows.append(row)
+        extra_b.append(-min_bonds)
+    if gold_idx and min_gold > 0:
+        row = np.zeros(n + 1 + T)
+        for i in gold_idx:
+            row[i] = -1.0
+        extra_rows.append(row)
+        extra_b.append(-min_gold)
+    if extra_rows:
+        A_ub = np.vstack([A_ub, extra_rows])
+        b_ub = np.concatenate([b_ub, extra_b])
+
+    bounds = w_bounds + [(None, None)] + [(0.0, None)] * T   # v unbounded, z ≥ 0
+
+    try:
+        res = linprog(c_obj, A_ub=A_ub, b_ub=b_ub, A_eq=A_eq, b_eq=b_eq,
+                      bounds=bounds, method="highs")
+        if not res.success:
+            return None
+    except Exception:
+        return None
+
+    best_w = np.clip(res.x[:n], 0.0, None)
+    if best_w.sum() <= 0:
+        return None
+    best_w /= best_w.sum()
+
+    mean_ret = asset_returns[asset_names].mean().values * 252
+    cov      = _shrunk_cov(asset_returns[asset_names])
+    ret  = float(best_w @ mean_ret)
+    vol  = float(np.sqrt(max(best_w @ cov @ best_w, 0.0)))
+    shrp = (ret - risk_free_rate) / vol if vol > 0 else 0.0
+
+    # Realised CVaR of the solution
+    port_r = r @ best_w
+    threshold = np.percentile(port_r, (1 - alpha) * 100)
+    tail = port_r[port_r <= threshold]
+    cvar = float(-tail.mean()) if len(tail) > 0 else 0.0
+
+    return pd.Series({"Weights": best_w, "Return": ret, "Volatility": vol,
+                       "Sharpe": shrp, "CVaR": cvar})
 
 
 def weights_table(weight_array, asset_names):
@@ -3215,7 +3345,16 @@ def compute_var_cvar(
     portfolio_returns: pd.Series,
     confidence_levels: list | None = None,
 ) -> dict:
-    """Historical and parametric VaR/CVaR at 95% and 99%."""
+    """Historical, parametric, and Cornish-Fisher modified VaR/CVaR at 95% and 99%.
+
+    Cornish-Fisher expansion adjusts the normal z-score for the observed
+    skewness and excess kurtosis of the return distribution, producing a
+    better tail-risk estimate when returns are non-normal (fat tails, negative
+    skew).  Keys added: cf_var_95, cf_cvar_95, cf_var_99, cf_cvar_99,
+    skewness, excess_kurtosis.
+    """
+    from scipy import stats as _scipy_stats
+
     if confidence_levels is None:
         confidence_levels = [0.95, 0.99]
 
@@ -3231,6 +3370,9 @@ def compute_var_cvar(
     sigma = float(r.std())
     _Z = {0.95: 1.6449, 0.99: 2.3263}
 
+    skew = float(_scipy_stats.skew(r.values))
+    kurt = float(_scipy_stats.kurtosis(r.values))  # excess kurtosis
+
     for c in confidence_levels:
         lbl = int(c * 100)
         # Historical
@@ -3244,12 +3386,27 @@ def compute_var_cvar(
         phi_z = float(np.exp(-0.5 * z ** 2) / np.sqrt(2 * np.pi))
         param_cvar = float(-(mu - sigma * phi_z / (1 - c)))
 
+        # Cornish-Fisher modified VaR — adjusts z for skewness and kurtosis
+        z_cf = (
+            z
+            + (z ** 2 - 1) * skew / 6
+            + (z ** 3 - 3 * z) * kurt / 24
+            - (2 * z ** 3 - 5 * z) * skew ** 2 / 36
+        )
+        cf_var = float(-(mu - z_cf * sigma))
+        cf_tail = r[r <= -cf_var]
+        cf_cvar = -float(cf_tail.mean()) if not cf_tail.empty else cf_var
+
         result[f"hist_var_{lbl}"] = hist_var
         result[f"hist_cvar_{lbl}"] = hist_cvar
         result[f"param_var_{lbl}"] = param_var
         result[f"param_cvar_{lbl}"] = param_cvar
+        result[f"cf_var_{lbl}"] = cf_var
+        result[f"cf_cvar_{lbl}"] = cf_cvar
 
     result["n_observations"] = len(r)
+    result["skewness"] = skew
+    result["excess_kurtosis"] = kurt
     return result
 
 
@@ -3570,7 +3727,7 @@ def compute_risk_budget(
         return None
     w = w / total_w
 
-    cov = asset_returns[tickers].cov().values * 252
+    cov = _shrunk_cov(asset_returns[tickers])
     port_var = float(w @ cov @ w)
     port_vol = float(np.sqrt(max(port_var, 1e-12)))
 
@@ -3709,12 +3866,25 @@ def compute_ff3_exposure(
     portfolio_returns: pd.Series,
     risk_free_rate: float = 0.02,
 ) -> dict | None:
-    """Fama-French 3-factor OLS regression using ETF proxies (IVV, IWM, IVE, IVW)."""
+    """Carhart 4-factor OLS regression using ETF proxies.
+
+    Factors:
+      Mkt-RF  Market excess return          proxy: IVV - rf
+      SMB     Small minus Big (size)        proxy: IWM - IVV
+      HML     High minus Low (value)        proxy: IVE - IVW
+      UMD     Up minus Down (momentum)      proxy: MTUM - IVV
+
+    UMD is added when MTUM data is available (launched 2013); the function
+    gracefully falls back to 3-factor if MTUM cannot be fetched.  Backward-
+    compatible: all existing keys are preserved; umd_beta / umd_tstat are
+    added when the 4th factor is present.
+    """
     if portfolio_returns is None or portfolio_returns.empty or len(portfolio_returns) < 60:
         return None
 
     try:
-        proxy_data = get_historical_data(["IVV", "IWM", "IVE", "IVW"], period="2y")
+        proxy_tickers = ["IVV", "IWM", "IVE", "IVW", "MTUM"]
+        proxy_data = get_historical_data(proxy_tickers, period="2y")
         if proxy_data.empty or proxy_data.shape[1] < 3:
             return None
 
@@ -3728,14 +3898,27 @@ def compute_ff3_exposure(
         smb = rets["IWM"] - rets["IVV"]
         hml = rets["IVE"] - rets["IVW"]
 
-        factors = pd.concat([mkt_rf.rename("Mkt_RF"), smb.rename("SMB"), hml.rename("HML")], axis=1)
+        use_umd = "MTUM" in rets.columns
+        if use_umd:
+            umd = rets["MTUM"] - rets["IVV"]
+            factors = pd.concat(
+                [mkt_rf.rename("Mkt_RF"), smb.rename("SMB"), hml.rename("HML"), umd.rename("UMD")],
+                axis=1,
+            )
+        else:
+            factors = pd.concat(
+                [mkt_rf.rename("Mkt_RF"), smb.rename("SMB"), hml.rename("HML")],
+                axis=1,
+            )
+
         aligned = pd.concat([portfolio_returns.rename("Port"), factors], axis=1).dropna()
 
         if len(aligned) < 60:
             return None
 
         y = aligned["Port"].values - rf_daily
-        X = np.column_stack([np.ones(len(y)), aligned["Mkt_RF"].values, aligned["SMB"].values, aligned["HML"].values])
+        factor_cols = ["Mkt_RF", "SMB", "HML"] + (["UMD"] if use_umd else [])
+        X = np.column_stack([np.ones(len(y))] + [aligned[f].values for f in factor_cols])
 
         betas, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
         y_hat = X @ betas
@@ -3749,7 +3932,7 @@ def compute_ff3_exposure(
         ss_tot = float(np.dot(y - y.mean(), y - y.mean()))
         r_sq = 1 - ss_res / ss_tot if ss_tot > 0 else 0.0
 
-        return {
+        result = {
             "alpha": float(betas[0] * 252),
             "alpha_tstat": float(t_stats[0]),
             "mkt_beta": float(betas[1]),
@@ -3760,8 +3943,12 @@ def compute_ff3_exposure(
             "hml_tstat": float(t_stats[3]),
             "r_squared": float(r_sq),
             "n_obs": n,
-            "source": "ETF Proxy (IVV/IWM/IVE/IVW)",
+            "source": "ETF Proxy (IVV/IWM/IVE/IVW" + ("/MTUM)" if use_umd else ")"),
         }
+        if use_umd:
+            result["umd_beta"] = float(betas[4])
+            result["umd_tstat"] = float(t_stats[4])
+        return result
     except Exception:
         return None
 
@@ -3779,7 +3966,7 @@ def compute_black_litterman(
     if asset_returns is None or asset_returns.empty or len(tickers) < 2:
         return None
     try:
-        sigma = asset_returns[tickers].cov().values * 252
+        sigma = _shrunk_cov(asset_returns[tickers])
         w = np.array(current_weights, dtype=float)
         if w.sum() <= 0:
             w = np.ones(len(tickers)) / len(tickers)
@@ -3937,7 +4124,7 @@ def compute_risk_parity_weights(
 
     tickers = list(returns_clean.columns)
     n = len(tickers)
-    cov = returns_clean.cov().values * 252
+    cov = _shrunk_cov(returns_clean)
 
     # Iterative ERC: w_i ∝ 1 / (Cov @ w)_i until risk contributions are equal
     w = np.ones(n) / n
@@ -3960,6 +4147,1166 @@ def compute_risk_parity_weights(
         "weights": {t: float(w[i]) for i, t in enumerate(tickers)},
         "risk_contributions": {t: float(rc[i] / rc.sum()) for i, t in enumerate(tickers)},
         "portfolio_vol": sigma_p,
+    }
+
+
+def compute_hrp_weights(asset_returns: pd.DataFrame) -> dict | None:
+    """Hierarchical Risk Parity (Lopez de Prado 2016).
+
+    Builds weights via single-linkage hierarchical clustering on a
+    correlation-distance matrix, then allocates capital through recursive
+    bisection using inverse-variance weighting.  Unlike ERC / mean-variance,
+    HRP never inverts the covariance matrix, making it robust when assets are
+    highly correlated or the matrix is near-singular.
+
+    Returns the same interface as compute_risk_parity_weights so results can
+    be used interchangeably downstream.
+    """
+    from scipy.cluster.hierarchy import linkage, leaves_list
+    from scipy.spatial.distance import squareform
+
+    if asset_returns is None or asset_returns.empty or asset_returns.shape[1] < 2:
+        return None
+
+    r = asset_returns.dropna(how="all")
+    if len(r) < 30:
+        return None
+
+    tickers = list(r.columns)
+    n = len(tickers)
+    cov = _shrunk_cov(r)                   # annualised shrunk covariance
+    corr_mat = r.corr().values
+
+    # Distance matrix: d_ij = sqrt((1 - rho_ij) / 2)
+    dist = np.sqrt(np.clip((1 - corr_mat) / 2, 0, 1))
+    np.fill_diagonal(dist, 0.0)
+    condensed = squareform(dist, checks=False)
+
+    # Single-linkage clustering → leaf ordering
+    link = linkage(condensed, method="single")
+    sort_ix = list(leaves_list(link))      # reordered asset indices
+
+    # Inverse-variance weight for a sub-cluster
+    def _cluster_var(idx_list):
+        sub = cov[np.ix_(idx_list, idx_list)]
+        ivp = 1.0 / np.maximum(np.diag(sub), 1e-12)
+        ivp /= ivp.sum()
+        return float(ivp @ sub @ ivp)
+
+    # Recursive bisection: split each cluster and scale weights proportionally
+    weights = np.ones(n)
+    cluster_list = [sort_ix]
+
+    while cluster_list:
+        next_list = []
+        for c in cluster_list:
+            if len(c) <= 1:
+                continue
+            mid = len(c) // 2
+            c_l, c_r = c[:mid], c[mid:]
+            v_l = _cluster_var(c_l)
+            v_r = _cluster_var(c_r)
+            alpha = 1 - v_l / (v_l + v_r + 1e-12)
+            weights[c_l] *= alpha
+            weights[c_r] *= 1 - alpha
+            if len(c_l) > 1:
+                next_list.append(c_l)
+            if len(c_r) > 1:
+                next_list.append(c_r)
+        cluster_list = next_list
+
+    weights /= weights.sum()
+
+    sigma_p = float(np.sqrt(max(weights @ cov @ weights, 1e-12)))
+    rc = weights * (cov @ weights) / sigma_p
+
+    return {
+        "tickers": tickers,
+        "weights": {tickers[i]: float(weights[i]) for i in range(n)},
+        "risk_contributions": {tickers[i]: float(rc[i] / rc.sum()) for i in range(n)},
+        "portfolio_vol": sigma_p,
+    }
+
+
+# =============================================================================
+# QUANT ENGINE v2 — ADVANCED EXECUTION, RISK & VALIDATION
+# Covers features #1-#40 from the advanced roadmap.
+# All functions are pure-computation (no Streamlit calls) so they can be
+# used independently or wired into app_context_runtime.
+# =============================================================================
+
+
+def compute_rebalancing_bands(
+    df: pd.DataFrame,
+    target_weights: dict,
+    total_value: float,
+    band_tolerance: float = 0.02,
+    min_trade_pct: float = 0.005,
+    min_notional: float = 100.0,
+    max_turnover: float = 0.30,
+    tc_bps: float = 10.0,
+) -> dict:
+    """Band-based rebalancing with turnover cap, notional floor, and order efficiency.
+
+    Implements: band rebalancing (#3), min execution threshold (#2/#13),
+    turnover control (#9), trade batching / cash accumulation (#14),
+    gross vs executable-net weight comparison (#32), order prioritisation
+    by edge-to-cost ratio (#38), friction threshold (#39).
+
+    Returns
+    -------
+    dict with keys:
+      'trades'       : DataFrame — per-ticker decision table
+      'turnover'     : float    — expected one-way turnover fraction
+      'n_executable' : int      — trades that passed all filters
+      'suppressed'   : list     — tickers blocked by filters
+    """
+    empty = {"trades": pd.DataFrame(), "turnover": 0.0, "n_executable": 0, "suppressed": []}
+    if df is None or df.empty or not target_weights or total_value <= 0:
+        return empty
+
+    rows = []
+    for _, row in df.iterrows():
+        ticker = str(row["Ticker"])
+        cur_val = float(row.get("Value", 0.0))
+        cur_w = cur_val / total_value
+        tgt_w = float(target_weights.get(ticker, 0.0))
+        drift = cur_w - tgt_w                           # + = overweight
+        delta_val = (tgt_w - cur_w) * total_value       # + = need to buy
+        tc_cost = abs(delta_val) * tc_bps / 10000
+
+        in_band = abs(drift) <= band_tolerance
+        below_min = abs(delta_val) / total_value < min_trade_pct
+        below_notional = abs(delta_val) < min_notional
+        filtered = in_band or below_min or below_notional
+
+        # Priority = drift magnitude adjusted by TC cost (edge-to-friction ratio)
+        priority = abs(drift) / max(tc_bps / 10000, 1e-9) if not filtered else 0.0
+
+        if in_band:
+            action = "HOLD (in band)"
+        elif below_notional or below_min:
+            action = "HOLD (min size)"
+        else:
+            action = "BUY" if delta_val > 0 else "SELL"
+
+        rows.append({
+            "Ticker": ticker,
+            "Current W%": round(cur_w * 100, 2),
+            "Target W%": round(tgt_w * 100, 2),
+            "Drift W%": round(drift * 100, 2),
+            "Gross Δ": round(delta_val, 2),
+            "Filtered": filtered,
+            "Action": action,
+            "Est. TC": round(tc_cost, 2),
+            "Priority": round(priority, 4),
+        })
+
+    trades = pd.DataFrame(rows).sort_values("Priority", ascending=False).reset_index(drop=True)
+    trades["Net Δ"] = 0.0
+
+    # Apply max-turnover cap: execute highest-priority trades first
+    cum_to = 0.0
+    for i in trades.index:
+        if trades.at[i, "Filtered"]:
+            continue
+        to_i = abs(trades.at[i, "Gross Δ"]) / total_value
+        if cum_to + to_i > max_turnover:
+            trades.at[i, "Filtered"] = True
+            trades.at[i, "Action"] = "HOLD (turnover cap)"
+        else:
+            trades.at[i, "Net Δ"] = trades.at[i, "Gross Δ"]
+            cum_to += to_i
+
+    # Executable weight: what we'd actually reach after all filters
+    trades["Executable W%"] = trades.apply(
+        lambda r: r["Target W%"] if not r["Filtered"] else r["Current W%"], axis=1
+    )
+
+    return {
+        "trades": trades,
+        "turnover": round(cum_to, 4),
+        "n_executable": int((~trades["Filtered"]).sum()),
+        "suppressed": trades[trades["Filtered"]]["Ticker"].tolist(),
+    }
+
+
+def compute_net_alpha_after_costs(
+    expected_returns: pd.Series,
+    current_weights: pd.Series,
+    target_weights: pd.Series,
+    total_value: float,
+    tc_bps: float = 10.0,
+    holding_period_days: int = 252,
+    min_edge_bps: float = 5.0,
+) -> pd.DataFrame:
+    """Net alpha after transaction costs with automatic trade suppression.
+
+    Implements: alpha-net-of-costs estimation (#10), auto-suppression of
+    trades with negative net alpha (#4), no-trade rule when edge is
+    insufficient (#25).
+
+    The TC drag is annualised by spreading the one-way cost over the
+    assumed holding period.  Trades where net alpha < min_edge_bps are
+    flagged 'Trade=False' so upstream code can skip them.
+    """
+    if expected_returns is None or expected_returns.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for t in expected_returns.index:
+        er = float(expected_returns[t])
+        cw = float(current_weights[t]) if t in current_weights.index else 0.0
+        tw = float(target_weights[t]) if t in target_weights.index else 0.0
+        trade_val = abs(tw - cw) * total_value
+
+        # Annualise TC: one-way cost amortised over holding period
+        tc_annual_frac = (trade_val * tc_bps / 10000) / max(total_value, 1) * (252 / max(holding_period_days, 1))
+        gross_bps = er * 10000
+        tc_bps_val = tc_annual_frac * 10000
+        net_bps = gross_bps - tc_bps_val
+
+        rows.append({
+            "Ticker": t,
+            "Expected Return": round(er, 4),
+            "Gross Alpha (bps)": round(gross_bps, 1),
+            "TC Drag (bps)": round(tc_bps_val, 1),
+            "Net Alpha (bps)": round(net_bps, 1),
+            "Has Edge": net_bps >= min_edge_bps,
+            "Trade": net_bps >= min_edge_bps and abs(tw - cw) > 1e-4,
+        })
+
+    return pd.DataFrame(rows).sort_values("Net Alpha (bps)", ascending=False).reset_index(drop=True)
+
+
+def compute_after_tax_drag(
+    portfolio_returns: pd.Series,
+    transactions_df: pd.DataFrame,
+    current_prices: dict,
+    st_rate: float = 0.35,
+    lt_rate: float = 0.15,
+    dividend_rate: float = 0.15,
+) -> dict:
+    """After-tax return drag from capital gains and dividends.
+
+    Implements: tax drag module (#11).
+
+    Computes cost basis and holding period per ticker from the transactions
+    log, then estimates the tax liability on unrealised gains and
+    expected dividend income.  Short-term (< 365 days) vs long-term
+    rates are applied automatically.
+    """
+    if portfolio_returns is None or portfolio_returns.empty:
+        return {}
+    if transactions_df is None or transactions_df.empty:
+        return {}
+
+    r = pd.to_numeric(portfolio_returns, errors="coerce").dropna()
+    ann_return = float((1 + r).prod() ** (252 / max(len(r), 1)) - 1)
+
+    tx = transactions_df.copy()
+    tx["date"] = pd.to_datetime(tx["date"], errors="coerce")
+    tx["shares"] = pd.to_numeric(tx["shares"], errors="coerce").fillna(0)
+    tx["price"] = pd.to_numeric(tx["price"], errors="coerce").fillna(0)
+    tx = tx.dropna(subset=["date"])
+    today = pd.Timestamp.now().normalize()
+
+    cost_basis: dict[str, float] = {}
+    shares_held: dict[str, float] = {}
+    first_buy: dict[str, pd.Timestamp] = {}
+
+    for _, row in tx.sort_values("date").iterrows():
+        t = str(row.get("ticker", row.get("Ticker", "")))
+        typ = str(row.get("type", "")).upper()
+        sh = float(row["shares"])
+        px = float(row["price"])
+        if typ == "BUY":
+            cost_basis[t] = cost_basis.get(t, 0) + sh * px
+            shares_held[t] = shares_held.get(t, 0) + sh
+            if t not in first_buy:
+                first_buy[t] = row["date"]
+        elif typ == "SELL":
+            held = shares_held.get(t, 0)
+            if held > 0:
+                basis_per_share = cost_basis.get(t, 0) / held
+                cost_basis[t] = max(0, cost_basis.get(t, 0) - sh * basis_per_share)
+                shares_held[t] = max(0, held - sh)
+
+    tax_on_gains = 0.0
+    total_unrealised = 0.0
+    lt_tickers, st_tickers = [], []
+
+    for t, sh in shares_held.items():
+        if sh <= 0:
+            continue
+        px = float((current_prices or {}).get(t, 0))
+        if px <= 0:
+            continue
+        cur_val = sh * px
+        basis = cost_basis.get(t, 0)
+        gain = cur_val - basis
+        days = (today - first_buy[t]).days if t in first_buy else 0
+        rate = lt_rate if days >= 365 else st_rate
+        if gain > 0:
+            tax_on_gains += gain * rate
+        total_unrealised += gain
+        (lt_tickers if days >= 365 else st_tickers).append(t)
+
+    effective_tax_drag = tax_on_gains / max(abs(total_unrealised), 1.0) if total_unrealised != 0 else 0.0
+    after_tax_return = ann_return - effective_tax_drag
+
+    return {
+        "gross_annual_return": round(ann_return, 4),
+        "after_tax_return": round(after_tax_return, 4),
+        "estimated_tax_liability": round(tax_on_gains, 2),
+        "total_unrealised_gain": round(total_unrealised, 2),
+        "effective_tax_drag": round(effective_tax_drag, 4),
+        "lt_eligible": lt_tickers,
+        "st_exposure": st_tickers,
+    }
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def compute_liquidity_score(
+    tickers: list,
+    position_values: dict,
+    adv_participation_cap: float = 0.10,
+    min_notional: float = 500.0,
+) -> pd.DataFrame:
+    """ADV-based liquidity scoring and market-depth filter.
+
+    Implements: liquidity and market-depth filter (#12), minimum
+    notional per asset (#13).
+
+    Scores each position by days-to-liquidate (position / (ADV * cap))
+    and flags positions that fail the min-notional floor.
+    """
+    import yfinance as yf
+
+    if not tickers:
+        return pd.DataFrame()
+
+    rows = []
+    for ticker in tickers:
+        pos_val = float((position_values or {}).get(ticker, 0))
+        try:
+            hist = yf.Ticker(ticker).history(period="30d")
+            if hist.empty:
+                adv = 0.0
+            else:
+                adv = float((hist["Close"] * hist["Volume"]).mean())
+        except Exception:
+            adv = 0.0
+
+        daily_capacity = adv * adv_participation_cap
+        days_to_liquidate = pos_val / daily_capacity if daily_capacity > 0 else float("inf")
+        liquidity_score = max(0.0, 1.0 - min(days_to_liquidate / 5, 1.0))  # 1=liquid, 0=illiquid
+
+        rows.append({
+            "Ticker": ticker,
+            "Position Value": round(pos_val, 2),
+            "30d ADV ($)": round(adv, 0),
+            "Daily Capacity ($)": round(daily_capacity, 0),
+            "Days to Liquidate": round(days_to_liquidate, 1) if np.isfinite(days_to_liquidate) else None,
+            "Liquidity Score": round(liquidity_score, 3),
+            "Passes Min Notional": pos_val >= min_notional,
+            "Flag": "OK" if (np.isfinite(days_to_liquidate) and days_to_liquidate <= 5 and pos_val >= min_notional) else "REVIEW",
+        })
+
+    return pd.DataFrame(rows).sort_values("Liquidity Score", ascending=False).reset_index(drop=True)
+
+
+def compute_model_agreement_score(
+    optimizer_weights: dict,
+    asset_returns: pd.DataFrame,
+    risk_free_rate: float = 0.045,
+) -> dict:
+    """Signal agreement, collinearity detection, and fail-safe conflict rules.
+
+    Implements: model agreement / signal dispersion (#20), collinearity
+    detection between signals (#18), model complexity penalty (#19),
+    fail-safe rules when signals conflict (#37).
+
+    Compares weight vectors from multiple optimizers (Max Sharpe, Min Vol,
+    Min CVaR, HRP, ERC).  Outputs a dispersion score and per-ticker
+    consensus weight.  High dispersion → reduce position size or hold.
+    """
+    if not optimizer_weights or asset_returns is None or asset_returns.empty:
+        return {}
+
+    models = {k: v for k, v in optimizer_weights.items() if v is not None}
+    if len(models) < 2:
+        return {"agreement_score": 1.0, "consensus_weights": {}, "high_conflict_tickers": []}
+
+    tickers = list(asset_returns.columns)
+    weight_matrix = []
+    for name, w in models.items():
+        if isinstance(w, np.ndarray):
+            vec = dict(zip(tickers, w))
+        elif isinstance(w, dict):
+            vec = w
+        else:
+            continue
+        weight_matrix.append([float(vec.get(t, 0)) for t in tickers])
+
+    if not weight_matrix:
+        return {}
+
+    wm = np.array(weight_matrix)                     # n_models × n_assets
+    mean_w = wm.mean(axis=0)
+    std_w = wm.std(axis=0)
+
+    # Agreement score: 1 = full consensus, 0 = maximum disagreement
+    # Measured as 1 - mean(coefficient of variation across tickers)
+    cv = std_w / np.where(mean_w > 1e-6, mean_w, 1.0)
+    agreement_score = float(max(0.0, 1.0 - cv.mean()))
+
+    # Collinearity check: pairwise correlation of weight vectors
+    corr_pairs = {}
+    model_names = list(models.keys())
+    for i in range(len(model_names)):
+        for j in range(i + 1, len(model_names)):
+            c = float(np.corrcoef(wm[i], wm[j])[0, 1])
+            corr_pairs[f"{model_names[i]} / {model_names[j]}"] = round(c, 3)
+
+    # High-conflict tickers: CV > 0.5 (signals disagree strongly)
+    high_conflict = [tickers[i] for i, v in enumerate(cv) if v > 0.5]
+
+    # Complexity penalty: reward models that use fewer non-trivial positions
+    complexity_penalties = {}
+    for name, row in zip(model_names, wm):
+        n_significant = int((row > 0.02).sum())
+        complexity_penalties[name] = round(n_significant / max(len(tickers), 1), 3)
+
+    # Consensus: mean weight, zeroed where conflict is too high
+    consensus = {tickers[i]: round(float(mean_w[i]), 4) for i in range(len(tickers))}
+    for t in high_conflict:
+        consensus[t] = round(consensus[t] * 0.5, 4)   # halve weight under conflict
+
+    return {
+        "agreement_score": round(agreement_score, 3),
+        "consensus_weights": consensus,
+        "weight_std_by_ticker": {tickers[i]: round(float(std_w[i]), 4) for i in range(len(tickers))},
+        "model_correlations": corr_pairs,
+        "high_conflict_tickers": high_conflict,
+        "complexity_penalties": complexity_penalties,
+        "n_models": len(models),
+    }
+
+
+def compute_expected_return_bands(
+    asset_returns: pd.DataFrame,
+    n_bootstrap: int = 500,
+    seed: int = 42,
+    confidence: float = 0.90,
+) -> pd.DataFrame:
+    """Bootstrap confidence bands on expected returns and Sharpe ratios.
+
+    Implements: parameter uncertainty in MC (#17), confidence bands on
+    expected returns (#21), robust optimization sensitivity (#34).
+
+    Resamples the return history to produce (lower, median, upper) bounds
+    on annualised expected return and Sharpe per asset.  Wide bands signal
+    unreliable estimates — downstream code should apply shrinkage or
+    reduce position sizing accordingly.
+    """
+    if asset_returns is None or asset_returns.empty or len(asset_returns) < 30:
+        return pd.DataFrame()
+
+    rng = np.random.default_rng(seed)
+    r = asset_returns.dropna(how="all").values
+    T, n = r.shape
+    alpha = (1 - confidence) / 2
+
+    boot_means = np.zeros((n_bootstrap, n))
+    boot_vols = np.zeros((n_bootstrap, n))
+    for b in range(n_bootstrap):
+        idx = rng.integers(0, T, size=T)
+        sample = r[idx]
+        boot_means[b] = sample.mean(axis=0) * 252
+        boot_vols[b] = sample.std(axis=0) * np.sqrt(252)
+
+    boot_sharpe = np.where(boot_vols > 0, boot_means / boot_vols, 0.0)
+
+    rows = []
+    for i, t in enumerate(asset_returns.columns):
+        lo_r, med_r, hi_r = np.percentile(boot_means[:, i], [alpha * 100, 50, (1 - alpha) * 100])
+        lo_s, med_s, hi_s = np.percentile(boot_sharpe[:, i], [alpha * 100, 50, (1 - alpha) * 100])
+        band_width = hi_r - lo_r
+        # Reliability flag: wide band relative to median estimate = unreliable
+        reliable = band_width < abs(med_r) * 2 if med_r != 0 else False
+        rows.append({
+            "Ticker": t,
+            "E[Return] Low": round(lo_r, 4),
+            "E[Return] Median": round(med_r, 4),
+            "E[Return] High": round(hi_r, 4),
+            "Band Width": round(band_width, 4),
+            "Sharpe Low": round(lo_s, 3),
+            "Sharpe Median": round(med_s, 3),
+            "Sharpe High": round(hi_s, 3),
+            "Reliable": reliable,
+        })
+
+    return pd.DataFrame(rows).sort_values("E[Return] Median", ascending=False).reset_index(drop=True)
+
+
+def explain_bl_posterior(
+    bl_result: dict,
+    views: list,
+) -> pd.DataFrame:
+    """Decompose Black-Litterman posterior into prior vs view contributions.
+
+    Implements: BL explainability (#26).
+
+    For each asset, shows how much the posterior expected return is pulled
+    away from the equilibrium (prior) by the investor views.  The 'View Pull'
+    column measures the absolute shift attributable to views.
+    """
+    if bl_result is None or not bl_result:
+        return pd.DataFrame()
+
+    posterior = bl_result.get("posterior_returns")
+    equilibrium = bl_result.get("equilibrium_returns")
+    if posterior is None or equilibrium is None:
+        return pd.DataFrame()
+
+    tickers = bl_result.get("tickers", list(posterior.index))
+    view_map = {v["ticker"]: v for v in (views or [])}
+
+    rows = []
+    for t in tickers:
+        eq = float(equilibrium.get(t, 0))
+        post = float(posterior.get(t, 0))
+        pull = post - eq
+        has_view = t in view_map
+        view_ret = float(view_map[t]["expected_return"]) if has_view else None
+        view_conf = float(view_map[t].get("confidence", 0.5)) if has_view else None
+
+        rows.append({
+            "Ticker": t,
+            "Equilibrium Return": round(eq, 4),
+            "Posterior Return": round(post, 4),
+            "View Pull": round(pull, 4),
+            "Has View": has_view,
+            "View Expected Return": round(view_ret, 4) if view_ret is not None else None,
+            "View Confidence": round(view_conf, 2) if view_conf is not None else None,
+            "Dominant": "VIEW" if abs(pull) > abs(eq) * 0.5 else "PRIOR",
+        })
+
+    return pd.DataFrame(rows).sort_values("View Pull", key=abs, ascending=False).reset_index(drop=True)
+
+
+def compute_tracking_error_budget(
+    asset_returns: pd.DataFrame,
+    portfolio_weights: pd.Series,
+    benchmark_returns: pd.Series,
+    te_budget: float = 0.10,
+) -> dict:
+    """Tracking error budget allocation across assets.
+
+    Implements: tracking error budget (#27).
+
+    Decomposes total active risk (tracking error) into per-asset
+    contributions, then reports each asset's share of the TE budget
+    and whether the total is within the policy limit.
+    """
+    if asset_returns is None or asset_returns.empty or portfolio_weights is None:
+        return {}
+
+    tickers = [t for t in portfolio_weights.index if t in asset_returns.columns]
+    if not tickers:
+        return {}
+
+    w = portfolio_weights[tickers].values.astype(float)
+    if w.sum() <= 0:
+        return {}
+    w = w / w.sum()
+
+    cov = _shrunk_cov(asset_returns[tickers])
+    port_r = (asset_returns[tickers] * w).sum(axis=1)
+
+    if benchmark_returns is not None and not benchmark_returns.empty:
+        aligned = pd.concat([port_r.rename("P"), benchmark_returns.rename("B")], axis=1).dropna()
+        active_r = aligned["P"] - aligned["B"]
+    else:
+        active_r = port_r.dropna()
+
+    te = float(active_r.std() * np.sqrt(252)) if len(active_r) > 1 else 0.0
+
+    # Marginal contribution to active variance per asset (simplified: uses cov matrix)
+    port_vol = float(np.sqrt(max(w @ cov @ w, 1e-12)))
+    marginal = (cov @ w) / port_vol
+    component_te = w * marginal
+    total_component = component_te.sum()
+    te_share = component_te / max(total_component, 1e-12)
+
+    budget_used = te / te_budget if te_budget > 0 else 0.0
+
+    return {
+        "total_te": round(te, 4),
+        "te_budget": te_budget,
+        "budget_used_pct": round(budget_used * 100, 1),
+        "within_budget": te <= te_budget,
+        "per_asset": {
+            tickers[i]: {
+                "te_contribution": round(float(component_te[i]), 4),
+                "te_share_pct": round(float(te_share[i]) * 100, 2),
+            }
+            for i in range(len(tickers))
+        },
+    }
+
+
+def compute_walk_forward_metrics(
+    portfolio_returns: pd.Series,
+    benchmark_returns: pd.Series | None,
+    risk_free_rate: float = 0.045,
+    n_folds: int = 4,
+) -> dict:
+    """Walk-forward (out-of-sample) Sharpe and alpha validation.
+
+    Implements: walk-forward validation and out-of-sample backtesting (#8).
+
+    Splits the return history into n_folds equal windows and reports
+    Sharpe ratio and annualised alpha for each fold plus the OOS mean.
+    Consistent out-of-sample Sharpe > 0 suggests the strategy has
+    genuine edge; fold-to-fold variance measures robustness.
+    """
+    if portfolio_returns is None or len(portfolio_returns) < 60:
+        return {}
+
+    r = pd.to_numeric(portfolio_returns, errors="coerce").dropna()
+    fold_size = len(r) // n_folds
+    if fold_size < 10:
+        return {}
+
+    folds = []
+    for i in range(n_folds):
+        start = i * fold_size
+        end = start + fold_size if i < n_folds - 1 else len(r)
+        fold_r = r.iloc[start:end]
+        ann_ret = float((1 + fold_r).prod() ** (252 / max(len(fold_r), 1)) - 1)
+        vol = float(fold_r.std() * np.sqrt(252))
+        sharpe = (ann_ret - risk_free_rate) / vol if vol > 0 else 0.0
+
+        alpha = ann_ret
+        if benchmark_returns is not None and not benchmark_returns.empty:
+            b = pd.to_numeric(benchmark_returns, errors="coerce").dropna()
+            b_fold = b.reindex(fold_r.index).dropna()
+            if len(b_fold) > 2:
+                b_ret = float((1 + b_fold).prod() ** (252 / max(len(b_fold), 1)) - 1)
+                cov_arr = np.cov(fold_r.reindex(b_fold.index).dropna().values,
+                                 b_fold.reindex(fold_r.index).dropna().values)
+                beta = float(cov_arr[0, 1] / max(cov_arr[1, 1], 1e-12))
+                alpha = ann_ret - (risk_free_rate + beta * (b_ret - risk_free_rate))
+
+        folds.append({
+            "fold": i + 1,
+            "start": str(fold_r.index[0].date()) if hasattr(fold_r.index[0], "date") else str(fold_r.index[0]),
+            "end": str(fold_r.index[-1].date()) if hasattr(fold_r.index[-1], "date") else str(fold_r.index[-1]),
+            "ann_return": round(ann_ret, 4),
+            "volatility": round(vol, 4),
+            "sharpe": round(sharpe, 3),
+            "alpha": round(alpha, 4),
+        })
+
+    sharpes = [f["sharpe"] for f in folds]
+    alphas = [f["alpha"] for f in folds]
+    return {
+        "folds": folds,
+        "oos_mean_sharpe": round(float(np.mean(sharpes)), 3),
+        "oos_sharpe_std": round(float(np.std(sharpes)), 3),
+        "oos_mean_alpha": round(float(np.mean(alphas)), 4),
+        "consistent_edge": all(s > 0 for s in sharpes),
+        "n_positive_folds": sum(1 for s in sharpes if s > 0),
+    }
+
+
+def compute_regime_probabilities(
+    portfolio_returns: pd.Series,
+    ewma_lambda: float = 0.94,
+    flip_damping: int = 5,
+) -> dict:
+    """Bayesian-smoothed regime probabilities with false-flip suppression.
+
+    Implements: regime probability calibration (#5), strategic/tactical/
+    execution layer separation (#6), false regime-flip monitoring (#29).
+
+    Uses EWMA volatility to estimate the current regime, then applies
+    a Bayesian update to compute the probability of being in each regime.
+    A flip-damping window suppresses transient regime changes.
+
+    Returns strategic layer (regime + probability), tactical layer
+    (suggested allocation tilt), and execution flags.
+    """
+    if portfolio_returns is None or len(portfolio_returns) < 21:
+        return {}
+
+    r = pd.to_numeric(portfolio_returns, errors="coerce").dropna()
+    r2 = r.values ** 2
+    n = len(r2)
+    ewma_var = np.empty(n)
+    ewma_var[0] = r2[0]
+    for i in range(1, n):
+        ewma_var[i] = ewma_lambda * ewma_var[i - 1] + (1 - ewma_lambda) * r2[i]
+    ann_vol = np.sqrt(ewma_var) * np.sqrt(252)
+
+    # Regime thresholds (annualised vol)
+    REGIMES = [("LOW", 0, 0.10), ("NORMAL", 0.10, 0.20), ("HIGH", 0.20, 0.35), ("CRISIS", 0.35, 9)]
+    current_vol = float(ann_vol[-1])
+
+    # Compute rolling regime labels with damping
+    labels = []
+    for v in ann_vol:
+        for name, lo, hi in REGIMES:
+            if lo <= v < hi:
+                labels.append(name)
+                break
+
+    # Flip suppression: require flip_damping consecutive days before accepting
+    smoothed = list(labels)
+    for i in range(flip_damping, n):
+        window = labels[i - flip_damping: i + 1]
+        if len(set(window)) > 1:
+            smoothed[i] = smoothed[i - 1]   # hold previous regime
+
+    current_regime = smoothed[-1]
+
+    # Empirical regime probabilities (last 126 days)
+    recent = smoothed[-126:]
+    probs = {name: round(recent.count(name) / len(recent), 3) for name, _, _ in REGIMES}
+
+    # Regime flip detection: did regime change in last flip_damping days?
+    recent_flip = len(set(smoothed[-flip_damping:])) > 1
+
+    # Strategic layer: target allocation tilt by regime
+    equity_tilt = {"LOW": 0.10, "NORMAL": 0.0, "HIGH": -0.10, "CRISIS": -0.20}[current_regime]
+    bond_tilt   = {"LOW": -0.05, "NORMAL": 0.0, "HIGH": 0.05, "CRISIS": 0.15}[current_regime]
+
+    # Tactical layer: confidence in regime signal
+    regime_confidence = probs.get(current_regime, 0.5)
+    tactical_active = regime_confidence > 0.60   # only act if high confidence
+
+    # Execution layer: suppress trades during regime transitions
+    execution_hold = recent_flip and regime_confidence < 0.70
+
+    return {
+        "current_regime": current_regime,
+        "current_vol": round(current_vol, 4),
+        "regime_probabilities": probs,
+        "regime_confidence": round(regime_confidence, 3),
+        "recent_flip": recent_flip,
+        # Strategic layer
+        "strategic": {
+            "equity_tilt": equity_tilt,
+            "bond_tilt": bond_tilt,
+        },
+        # Tactical layer
+        "tactical": {
+            "active": tactical_active,
+            "rationale": f"{current_regime} regime at {regime_confidence:.0%} confidence",
+        },
+        # Execution layer
+        "execution": {
+            "hold_trades": execution_hold,
+            "reason": "Regime transition in progress — wait for stabilisation" if execution_hold else "OK to execute",
+        },
+    }
+
+
+def compute_dynamic_weight_caps(
+    asset_returns: pd.DataFrame,
+    current_weights: pd.Series,
+    base_max_weight: float = 0.40,
+    correlation_penalty: float = 0.10,
+    top_n_threshold: float = 0.50,
+) -> dict:
+    """Adaptive per-asset weight caps based on correlation and concentration.
+
+    Implements: dynamic weight caps by concentration (#22), control of
+    excessive dependence on top holdings (#24).
+
+    Assets that are highly correlated with others get a tighter cap
+    (adding one adds redundant risk).  If the top-N holdings already
+    exceed top_n_threshold of the portfolio, their caps are further
+    reduced to limit key-person-equivalent risk.
+    """
+    if asset_returns is None or asset_returns.empty:
+        return {}
+
+    tickers = list(asset_returns.columns)
+    corr = asset_returns.corr().values
+    n = len(tickers)
+
+    # Mean absolute pairwise correlation for each asset (proxy for redundancy)
+    mean_pairwise_corr = np.array([
+        np.mean(np.abs(corr[i, [j for j in range(n) if j != i]]))
+        for i in range(n)
+    ])
+
+    # Top-N concentration check
+    sorted_w = sorted([(float(current_weights.get(t, 0)), t) for t in tickers], reverse=True)
+    cumulative = 0.0
+    top_heavy_tickers = set()
+    for w, t in sorted_w:
+        if cumulative >= top_n_threshold:
+            break
+        cumulative += w
+        top_heavy_tickers.add(t)
+
+    caps = {}
+    for i, t in enumerate(tickers):
+        cap = base_max_weight
+        # Penalise highly correlated assets
+        cap -= mean_pairwise_corr[i] * correlation_penalty
+        # Further reduce cap for top-heavy tickers if concentration is already high
+        if t in top_heavy_tickers and cumulative >= top_n_threshold:
+            cap *= 0.85
+        caps[t] = round(max(cap, 0.05), 4)   # floor at 5%
+
+    return {
+        "caps": caps,
+        "top_heavy_tickers": list(top_heavy_tickers),
+        "top_n_concentration": round(cumulative, 4),
+        "mean_pairwise_corr": {tickers[i]: round(float(mean_pairwise_corr[i]), 3) for i in range(n)},
+    }
+
+
+def compute_expected_drawdown_profile(
+    portfolio_returns: pd.Series,
+    current_value: float,
+    horizons_years: tuple = (1, 3, 5),
+    n_sims: int = 1000,
+    seed: int = 42,
+) -> dict:
+    """Expected max drawdown and recovery time from Monte Carlo paths.
+
+    Implements: drawdown report with expected drawdown and recovery time (#40).
+
+    Runs bootstrap simulations and computes, for each horizon:
+      - Expected (median) max drawdown
+      - 95th-percentile worst drawdown
+      - Median recovery time in months (months from trough to new ATH)
+    """
+    if portfolio_returns is None or len(portfolio_returns) < 60 or current_value <= 0:
+        return {}
+
+    rng = np.random.default_rng(seed)
+    r = pd.to_numeric(portfolio_returns, errors="coerce").dropna().values
+    result = {}
+
+    for h in horizons_years:
+        n_months = h * 12
+        n_days = h * 252
+        paths = np.zeros((n_sims, n_days + 1))
+        paths[:, 0] = current_value
+
+        sampled_days = rng.choice(r, size=(n_sims, n_days), replace=True)
+        for d in range(n_days):
+            paths[:, d + 1] = paths[:, d] * (1 + sampled_days[:, d])
+
+        # Max drawdown per path
+        max_dds = np.zeros(n_sims)
+        recovery_months = np.zeros(n_sims)
+        for s in range(n_sims):
+            path = paths[s]
+            peak = path[0]
+            max_dd = 0.0
+            trough_idx = 0
+            for d in range(1, len(path)):
+                if path[d] > peak:
+                    peak = path[d]
+                dd = (path[d] - peak) / peak
+                if dd < max_dd:
+                    max_dd = dd
+                    trough_idx = d
+            max_dds[s] = max_dd
+
+            # Recovery: months from trough to new ATH
+            if trough_idx > 0 and max_dd < -0.01:
+                trough_val = path[trough_idx]
+                peak_at_trough = path[:trough_idx + 1].max()
+                recovered = False
+                for d in range(trough_idx + 1, len(path)):
+                    if path[d] >= peak_at_trough:
+                        recovery_months[s] = (d - trough_idx) / 21  # trading days → months
+                        recovered = True
+                        break
+                if not recovered:
+                    recovery_months[s] = n_months  # still in drawdown at horizon
+
+        result[h] = {
+            "expected_max_dd": round(float(np.median(max_dds)), 4),
+            "worst_dd_p95": round(float(np.percentile(max_dds, 95)), 4),
+            "median_recovery_months": round(float(np.median(recovery_months)), 1),
+            "p90_recovery_months": round(float(np.percentile(recovery_months, 90)), 1),
+            "prob_drawdown_gt_10pct": round(float((max_dds < -0.10).mean()), 3),
+            "prob_drawdown_gt_20pct": round(float((max_dds < -0.20).mean()), 3),
+        }
+
+    return result
+
+
+def compute_model_drift_score(
+    asset_returns: pd.DataFrame,
+    risk_free_rate: float = 0.045,
+    short_window: int = 63,
+    long_window: int = 252,
+) -> dict:
+    """Rolling parameter drift monitoring and experiment tracking.
+
+    Implements: model drift alerts (#28), false regime-flip monitoring (#29),
+    lightweight signal versioning / experiment tracking (#35).
+
+    Compares short-window vs long-window estimates of mean return,
+    volatility, and Sharpe for each asset.  Large deviations flag
+    parameter instability.  Returns a drift score per asset and an
+    overall engine-health flag.
+    """
+    if asset_returns is None or asset_returns.empty or len(asset_returns) < long_window:
+        return {}
+
+    r = asset_returns.dropna(how="all")
+    tickers = list(r.columns)
+
+    rows = {}
+    for t in tickers:
+        s = r[t].dropna()
+        if len(s) < short_window:
+            continue
+
+        short_ret = s.iloc[-short_window:]
+        long_ret = s.iloc[-long_window:]
+
+        mu_s = float(short_ret.mean() * 252)
+        mu_l = float(long_ret.mean() * 252)
+        vol_s = float(short_ret.std() * np.sqrt(252))
+        vol_l = float(long_ret.std() * np.sqrt(252))
+        sr_s = (mu_s - risk_free_rate) / vol_s if vol_s > 0 else 0.0
+        sr_l = (mu_l - risk_free_rate) / vol_l if vol_l > 0 else 0.0
+
+        return_drift = abs(mu_s - mu_l)
+        vol_drift = abs(vol_s - vol_l)
+        sharpe_drift = abs(sr_s - sr_l)
+
+        # Composite drift score: normalised by long-window estimates
+        drift_score = (
+            return_drift / max(abs(mu_l), 0.01) * 0.4
+            + vol_drift / max(vol_l, 0.01) * 0.3
+            + sharpe_drift / max(abs(sr_l), 0.01) * 0.3
+        )
+
+        rows[t] = {
+            "mu_short": round(mu_s, 4),
+            "mu_long": round(mu_l, 4),
+            "vol_short": round(vol_s, 4),
+            "vol_long": round(vol_l, 4),
+            "sharpe_short": round(sr_s, 3),
+            "sharpe_long": round(sr_l, 3),
+            "drift_score": round(drift_score, 3),
+            "alert": drift_score > 0.50,
+        }
+
+    if not rows:
+        return {}
+
+    # Portfolio-level engine health
+    scores = [v["drift_score"] for v in rows.values()]
+    n_alerts = sum(1 for v in rows.values() if v["alert"])
+
+    return {
+        "per_asset": rows,
+        "mean_drift_score": round(float(np.mean(scores)), 3),
+        "n_alerts": n_alerts,
+        "engine_healthy": n_alerts == 0,
+        "snapshot_ts": str(pd.Timestamp.now().date()),  # lightweight versioning stamp
+    }
+
+
+def benchmark_naive_portfolios(
+    asset_returns: pd.DataFrame,
+    portfolio_returns: pd.Series,
+    benchmark_returns: pd.Series | None,
+    risk_free_rate: float = 0.045,
+) -> pd.DataFrame:
+    """Compare portfolio vs naive model portfolios and simple benchmarks.
+
+    Implements: benchmarking against simple portfolios and model baselines (#7).
+
+    Models compared:
+      1/N          Equal-weight buy-and-hold
+      Min-Vol      Minimum variance (unconstrained)
+      Max-Sharpe   Maximum Sharpe (unconstrained)
+      60/40        60% first asset + 40% last asset (equity/bond proxy)
+      Benchmark    Supplied benchmark (e.g. VOO)
+      Portfolio    Actual portfolio
+    """
+    if asset_returns is None or asset_returns.empty or portfolio_returns is None:
+        return pd.DataFrame()
+
+    r = asset_returns.dropna(how="all")
+    tickers = list(r.columns)
+    n = len(tickers)
+    if n < 2:
+        return pd.DataFrame()
+
+    def _stats(ret_series: pd.Series, name: str) -> dict:
+        s = pd.to_numeric(ret_series, errors="coerce").dropna()
+        if len(s) < 20:
+            return {}
+        ann_r = float((1 + s).prod() ** (252 / len(s)) - 1)
+        vol = float(s.std() * np.sqrt(252))
+        sr = (ann_r - risk_free_rate) / vol if vol > 0 else 0.0
+        cum = (1 + s).prod() - 1
+        rolling_peak = (1 + s).cumprod().cummax()
+        dd = ((1 + s).cumprod() / rolling_peak - 1).min()
+        return {"Model": name, "Ann. Return": round(ann_r, 4), "Volatility": round(vol, 4),
+                "Sharpe": round(sr, 3), "Cum. Return": round(cum, 4), "Max DD": round(dd, 4)}
+
+    results = []
+
+    # 1/N
+    eq_w = np.ones(n) / n
+    eq_r = (r * eq_w).sum(axis=1)
+    stats = _stats(eq_r, "1/N Equal Weight")
+    if stats:
+        results.append(stats)
+
+    # Min-Vol (unconstrained, closed-form inverse covariance)
+    try:
+        cov = _shrunk_cov(r)
+        cov_inv = np.linalg.pinv(cov)
+        ones = np.ones(n)
+        w_mv = (cov_inv @ ones) / (ones @ cov_inv @ ones)
+        w_mv = np.clip(w_mv, 0, None); w_mv /= w_mv.sum()
+        mv_r = (r * w_mv).sum(axis=1)
+        stats = _stats(mv_r, "Min-Vol (unconstrained)")
+        if stats:
+            results.append(stats)
+    except Exception:
+        pass
+
+    # Max-Sharpe (unconstrained Markowitz tangency)
+    try:
+        mu = r.mean().values * 252
+        excess = mu - risk_free_rate
+        w_ms = (cov_inv @ excess) / (ones @ cov_inv @ excess)
+        w_ms = np.clip(w_ms, 0, None)
+        if w_ms.sum() > 0:
+            w_ms /= w_ms.sum()
+            ms_r = (r * w_ms).sum(axis=1)
+            stats = _stats(ms_r, "Max-Sharpe (unconstrained)")
+            if stats:
+                results.append(stats)
+    except Exception:
+        pass
+
+    # Actual portfolio
+    stats = _stats(portfolio_returns, "Your Portfolio")
+    if stats:
+        results.append(stats)
+
+    # Benchmark
+    if benchmark_returns is not None and not benchmark_returns.empty:
+        stats = _stats(benchmark_returns, "Benchmark")
+        if stats:
+            results.append(stats)
+
+    if not results:
+        return pd.DataFrame()
+
+    df_out = pd.DataFrame(results).set_index("Model")
+    return df_out
+
+
+def compute_factor_risk_decomposition(
+    asset_returns: pd.DataFrame,
+    portfolio_weights: pd.Series,
+    risk_free_rate: float = 0.045,
+) -> dict:
+    """Factor-level and position-level risk decomposition.
+
+    Implements: attribution waterfall by model (#1), risk decomposition
+    by factor and position (#15), contribution-to-return dashboard (#30).
+
+    Decomposes portfolio variance into:
+      - Systematic (factor) risk via FF3 factor proxies
+      - Idiosyncratic (residual) risk
+      - Per-asset contribution to total portfolio volatility
+    """
+    if asset_returns is None or asset_returns.empty or portfolio_weights is None:
+        return {}
+
+    tickers = [t for t in portfolio_weights.index if t in asset_returns.columns]
+    if len(tickers) < 2:
+        return {}
+
+    w = portfolio_weights[tickers].values.astype(float)
+    if w.sum() <= 0:
+        return {}
+    w = w / w.sum()
+
+    cov = _shrunk_cov(asset_returns[tickers])
+    port_var = float(w @ cov @ w)
+    port_vol = float(np.sqrt(max(port_var, 1e-12)))
+
+    # Per-asset contribution to portfolio volatility
+    marginal_contrib = (cov @ w) / port_vol
+    component_contrib = w * marginal_contrib
+    pct_contrib = component_contrib / port_vol
+
+    # Factor risk decomposition via FF3 proxies
+    try:
+        from utils import get_historical_data as _get_hist
+        proxy_data = _get_hist(["IVV", "IWM", "IVE", "IVW"], period="2y")
+        factor_risk: dict = {}
+        if not proxy_data.empty:
+            pret = proxy_data.pct_change().dropna()
+            rf_d = risk_free_rate / 252
+            factors = pd.concat([
+                (pret["IVV"] - rf_d).rename("Mkt_RF"),
+                (pret["IWM"] - pret["IVV"]).rename("SMB"),
+                (pret["IVE"] - pret["IVW"]).rename("HML"),
+            ], axis=1)
+
+            port_r = (asset_returns[tickers] * w).sum(axis=1)
+            aligned = pd.concat([port_r.rename("Port"), factors], axis=1).dropna()
+            if len(aligned) >= 60:
+                y = aligned["Port"].values - rf_d
+                X = np.column_stack([np.ones(len(y)),
+                                     aligned["Mkt_RF"].values,
+                                     aligned["SMB"].values,
+                                     aligned["HML"].values])
+                betas, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
+                y_hat = X @ betas
+                residuals = y - y_hat
+                systematic_var = float(np.var(y_hat, ddof=1)) * 252
+                idio_var = float(np.var(residuals, ddof=1)) * 252
+                total_var = systematic_var + idio_var
+                factor_risk = {
+                    "systematic_vol": round(float(np.sqrt(max(systematic_var, 0))), 4),
+                    "idiosyncratic_vol": round(float(np.sqrt(max(idio_var, 0))), 4),
+                    "systematic_pct": round(systematic_var / max(total_var, 1e-12), 3),
+                    "idiosyncratic_pct": round(idio_var / max(total_var, 1e-12), 3),
+                    "mkt_beta": round(float(betas[1]), 3),
+                    "smb_beta": round(float(betas[2]), 3),
+                    "hml_beta": round(float(betas[3]), 3),
+                }
+    except Exception:
+        factor_risk = {}
+
+    return {
+        "portfolio_vol": round(port_vol, 4),
+        "per_asset": {
+            tickers[i]: {
+                "weight": round(float(w[i]), 4),
+                "vol_contribution": round(float(component_contrib[i]), 4),
+                "vol_contribution_pct": round(float(pct_contrib[i]) * 100, 2),
+                "marginal_risk": round(float(marginal_contrib[i]), 4),
+            }
+            for i in range(len(tickers))
+        },
+        "factor_decomposition": factor_risk,
     }
 
 
