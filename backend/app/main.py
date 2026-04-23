@@ -12,6 +12,7 @@ from app.routers import (
 from app.routers import profile as profile_router
 from app.routers.settings import wl_router, alerts_router
 from app.routers import contribution as contribution_router
+from app.routers import quant_analytics as quant_analytics_router
 
 
 @asynccontextmanager
@@ -68,6 +69,7 @@ app.include_router(technicals.router)
 app.include_router(news.router)
 app.include_router(profile_router.router)
 app.include_router(contribution_router.router)
+app.include_router(quant_analytics_router.router)
 
 
 @app.get("/health")
