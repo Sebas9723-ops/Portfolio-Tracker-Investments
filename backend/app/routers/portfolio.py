@@ -250,6 +250,46 @@ def get_portfolio_history(
         delta = qty if tx.get("action") == "BUY" else -qty
         changes.setdefault(tx_date, {})[ticker] = changes.get(tx_date, {}).get(ticker, 0) + delta
 
+    # ── Capital invested step function from BUY transactions ──────────────────
+    # Accumulate invested capital using historical FX at each transaction date.
+    # BUY transactions before start_date count toward the opening balance.
+    has_buy_txs = any(tx.get("action") == "BUY" for tx in transactions)
+    cumulative_invested = 0.0
+    if has_buy_txs:
+        for tx in transactions:
+            if tx.get("action") != "BUY":
+                continue
+            tx_date = (tx.get("date") or "")[:10]
+            if tx_date >= start:
+                break
+            qty = float(tx.get("quantity", 0))
+            price_n = float(tx.get("price_native", 0) or 0)
+            fee_n = float(tx.get("fee_native", 0) or 0)
+            tx_ticker = tx.get("ticker", "")
+            tx_ccy = tx.get("currency") or get_native_currency(tx_ticker)
+            # Use current FX as best approximation for pre-window transactions
+            fx_cur = _FALLBACK_RATES.get(tx_ccy, 1.0) if base_currency != tx_ccy else 1.0
+            cumulative_invested += (qty * price_n + fee_n) * fx_cur
+
+    # Index BUY transactions >= start_date for the day loop
+    capital_changes: dict[str, list[dict]] = {}
+    if has_buy_txs:
+        for tx in transactions:
+            if tx.get("action") != "BUY":
+                continue
+            tx_date = (tx.get("date") or "")[:10]
+            if tx_date < start:
+                continue
+            tx_ticker = tx.get("ticker", "")
+            qty = float(tx.get("quantity", 0))
+            price_n = float(tx.get("price_native", 0) or 0)
+            fee_n = float(tx.get("fee_native", 0) or 0)
+            tx_ccy = tx.get("currency") or get_native_currency(tx_ticker)
+            capital_changes.setdefault(tx_date, []).append({
+                "amount_native": qty * price_n + fee_n,
+                "currency": tx_ccy,
+            })
+
     # ── Build daily series ─────────────────────────────────────────────────────
     result = []
     for day in price_df.index:
@@ -258,6 +298,20 @@ def get_portfolio_history(
         if day_str in changes:
             for ticker, delta in changes[day_str].items():
                 running[ticker] = max(0.0, running.get(ticker, 0) + delta)
+
+        # Apply capital events for this day using historical FX
+        if day_str in capital_changes:
+            for event in capital_changes[day_str]:
+                ccy = event["currency"]
+                if base_currency == ccy:
+                    fx_inv = 1.0
+                elif ccy in fx_df.columns:
+                    fx_inv = float(fx_df[ccy].get(day, _FALLBACK_RATES.get(ccy, 1.0)))
+                    if pd.isna(fx_inv):
+                        fx_inv = _FALLBACK_RATES.get(ccy, 1.0)
+                else:
+                    fx_inv = _FALLBACK_RATES.get(ccy, 1.0)
+                cumulative_invested += event["amount_native"] * fx_inv
 
         total = 0.0
         for ticker in tickers:
@@ -274,7 +328,10 @@ def get_portfolio_history(
             total += shares * float(price) * fx
 
         if total > 0:
-            result.append({"date": day_str, "value": round(total, 2)})
+            point: dict = {"date": day_str, "value": round(total, 2)}
+            if has_buy_txs and cumulative_invested > 0:
+                point["invested"] = round(cumulative_invested, 2)
+            result.append(point)
 
     # Guarantee strict ascending order and no duplicate dates so the chart
     # never throws an assertion error regardless of yfinance quirks.

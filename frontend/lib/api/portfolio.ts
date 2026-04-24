@@ -15,7 +15,7 @@ export const saveSnapshot = (notes?: string) =>
 
 export const fetchPortfolioHistory = (start = "2026-03-01") =>
   apiClient
-    .get<{ date: string; value: number }[]>("/api/portfolio/history", { params: { start } })
+    .get<{ date: string; value: number; invested?: number }[]>("/api/portfolio/history", { params: { start } })
     .then((r) => r.data);
 
 export const upsertPosition = (data: Partial<Position> & { ticker: string }) =>
