@@ -70,6 +70,7 @@ export default function RebalancingPage() {
   const [quantError, setQuantError] = useState<string | null>(null);
   const [qaV2Data, setQaV2Data] = useState<QuantAnalyticsV2 | null>(null);
   const [qaV2Loading, setQaV2Loading] = useState(false);
+  const [qaV2Error, setQaV2Error] = useState<string | null>(null);
   const [horizon, setHorizon] = useState<"short" | "medium" | "long">("long");
   const queryClient = useQueryClient();
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: fetchSettings });
@@ -95,10 +96,14 @@ export default function RebalancingPage() {
       setQuantError(null);
       // Auto-fire quant-advanced analytics (separate call so contribution plan isn't blocked)
       setQaV2Data(null);
+      setQaV2Error(null);
       setQaV2Loading(true);
-      fetchQuantAdvanced()
+      fetchQuantAdvanced({ n_bootstrap: 200, n_dd_sims: 500 })
         .then((qa) => setQaV2Data(qa))
-        .catch(() => {/* analytics failure is non-fatal */})
+        .catch((err) => {
+          const msg = err?.response?.data?.detail ?? err?.message ?? "Advanced analytics failed";
+          setQaV2Error(String(msg));
+        })
         .finally(() => setQaV2Loading(false));
     },
     onError: (err: Error) => {
@@ -434,6 +439,11 @@ export default function RebalancingPage() {
               {qaV2Loading && (
                 <div className="text-bloomberg-muted text-[10px] py-2 animate-pulse">
                   Running 14 advanced analytics modules…
+                </div>
+              )}
+              {qaV2Error && (
+                <div className="text-red-400 text-[10px] py-2 border border-red-900/40 px-3">
+                  Analytics error: {qaV2Error}
                 </div>
               )}
               {qaV2Data && (() => {
