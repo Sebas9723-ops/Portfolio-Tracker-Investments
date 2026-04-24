@@ -153,7 +153,7 @@ const PositionRow = memo(function PositionRow({ row, ccy }: { row: PortfolioRow;
       <td className="py-2.5 text-right">
         <p className="text-bloomberg-text font-medium">{fmtCurrency(row.value_base, ccy)}</p>
         <p className="text-bloomberg-muted text-[10px]">
-          {fmtCurrency(row.price_native, row.currency)}
+          {fmtCurrency(row.price_base, ccy)}
           {row.change_pct_1d != null && (
             <span className={row.change_pct_1d >= 0 ? " text-green-400" : " text-red-400"}>
               {" "}{fmtPct(row.change_pct_1d)}
