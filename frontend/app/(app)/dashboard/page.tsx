@@ -288,29 +288,12 @@ export default function DashboardPage() {
     ? portfolio.total_invested_base
     : (cost_basis_usd ?? 0);
 
-  const allBuyTxs = (transactions ?? [])
-    .filter((t) => t.action === "BUY")
-    .sort((a, b) => a.date.localeCompare(b.date));
-
-  // If backend already computed invested per day (from BUY transactions with historical FX), use that.
-  // Otherwise fall back to autoInvested (flat line, only where portfolio has value).
-  const historyHasInvested = allHistory.some((h) => (h as any).invested > 0);
-
-  const contributionsData = allHistory.map((h) => {
-    const hAny = h as any;
-    let investedOnDate: number;
-    if (historyHasInvested) {
-      investedOnDate = hAny.invested ?? 0;
-    } else if (allBuyTxs.length > 0) {
-      const cumulative = allBuyTxs
-        .filter((t) => t.date <= h.date)
-        .reduce((s, t) => s + t.quantity * t.price_native + (t.fee_native || 0), 0);
-      investedOnDate = cumulative > 0 ? cumulative : (h.value > 0 ? autoInvested : 0);
-    } else {
-      investedOnDate = h.value > 0 ? autoInvested : 0;
-    }
-    return { date: h.date.slice(5), value: Math.round(h.value), invested: Math.round(investedOnDate) };
-  });
+  // Capital invested = shares × avg_cost per position (from Manage), flat line.
+  const contributionsData = allHistory.map((h) => ({
+    date: h.date.slice(5),
+    value: Math.round(h.value),
+    invested: Math.round(autoInvested),
+  }));
 
   // Allocation donut
   const pieData = portfolio.rows.map((r) => ({ name: r.ticker, value: r.value_base }));
