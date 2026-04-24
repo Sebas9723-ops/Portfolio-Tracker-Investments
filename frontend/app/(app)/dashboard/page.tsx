@@ -299,9 +299,10 @@ export default function DashboardPage() {
       const cumulative = allBuyTxs
         .filter((t) => t.date <= h.date)
         .reduce((s, t) => s + t.quantity * t.price_native + (t.fee_native || 0), 0);
-      investedOnDate = cumulative > 0 ? cumulative : autoInvested;
+      investedOnDate = cumulative > 0 ? cumulative : (h.value > 0 ? autoInvested : 0);
     } else {
-      investedOnDate = autoInvested;
+      // No transaction history: show capital only on dates where the portfolio had value
+      investedOnDate = h.value > 0 ? autoInvested : 0;
     }
     return { date: h.date.slice(5), value: Math.round(h.value), invested: Math.round(investedOnDate) };
   });
