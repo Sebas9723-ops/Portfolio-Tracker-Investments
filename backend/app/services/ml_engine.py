@@ -309,8 +309,13 @@ class MLEngine:
             log.warning("FF5 fetch failed: %s — using CAPM", exc)
             return self._capm_returns(returns), {}, False
 
-        # Trailing annualized factor premiums (use full available history)
-        factor_premia = ff5[FACTORS].mean() * 252
+        # Factor premiums: blend full-history (structural) with recent 252d (cyclical).
+        # 60/40 weighting gives better out-of-sample premium estimates.
+        recent_days = min(252, len(ff5))
+        factor_premia = (
+            0.60 * ff5.tail(recent_days)[FACTORS].mean() * 252
+            + 0.40 * ff5[FACTORS].mean() * 252
+        )
         rf_annual = float(ff5["RF"].mean()) * 252
 
         expected: dict[str, float] = {}
@@ -338,6 +343,10 @@ class MLEngine:
                     mdl = Ridge(alpha=0.01).fit(X.values, y.values)
                     alpha = float((y - X.values @ mdl.coef_).mean()) * 252
                     betas = {FACTORS[i]: float(mdl.coef_[i]) for i in range(5)}
+
+                # Blume (1975) beta adjustment: shrink market beta toward 1.0.
+                # β_adj = 1/3 + 2/3 * β_OLS  — reduces over-fitting on short histories.
+                betas["Mkt-RF"] = 1/3 + 2/3 * betas["Mkt-RF"]
 
                 exp_ret = (
                     rf_annual + alpha
@@ -406,14 +415,29 @@ class MLEngine:
             scaler = StandardScaler()
             X = scaler.fit_transform(features.values)
 
-            model = hmmlib.GaussianHMM(
-                n_components=4,
-                covariance_type="full",
-                n_iter=100,
-                random_state=42,
-                tol=1e-4,
-            )
-            model.fit(X)
+            # Multiple restarts — GaussianHMM is sensitive to initialisation.
+            # Pick the run with highest log-likelihood to avoid local optima.
+            best_model = None
+            best_score = -np.inf
+            for seed in [42, 7, 123, 0, 314]:
+                try:
+                    m = hmmlib.GaussianHMM(
+                        n_components=4,
+                        covariance_type="full",
+                        n_iter=100,
+                        random_state=seed,
+                        tol=1e-4,
+                    )
+                    m.fit(X)
+                    s = float(m.score(X))
+                    if s > best_score:
+                        best_score = s
+                        best_model = m
+                except Exception:
+                    continue
+            if best_model is None:
+                return _default
+            model = best_model
 
             hidden_states = model.predict(X)
             posteriors = model.predict_proba(X)
@@ -485,43 +509,66 @@ class MLEngine:
                 if feats is None or len(feats) < 80:
                     continue
 
-                # Target: annualized 21-day forward return
-                fwd = series.shift(-21).rolling(21).sum() * (252 / 21)
-                idx = feats.index.intersection(fwd.dropna().index)
+                # ── Risk-adjusted target: forward Sharpe proxy ─────────────
+                # Teaches XGB to predict alpha per unit of risk (more stationary
+                # and regime-stable than raw 21d forward return).
+                fwd_ret = series.shift(-21).rolling(21).sum() * (252 / 21)
+                fwd_vol = series.rolling(21).std().shift(-21) * np.sqrt(252)
+                fwd_sharpe = fwd_ret / (fwd_vol.clip(lower=0.05) + 1e-8)
+
+                idx = feats.index.intersection(fwd_sharpe.dropna().index)
                 if len(idx) < 80:
                     continue
 
                 X = feats.loc[idx].values
-                y = fwd.loc[idx].values
+                y = fwd_sharpe.loc[idx].values  # dimensionless Sharpe target
 
-                # Walk-forward split: train on all but last 63 days
+                # Walk-forward split: reserve last 63 days for out-of-sample validation
                 split = max(60, len(X) - 63)
                 X_tr, y_tr = X[:split], y[:split]
+                X_val, y_val = X[split:], y[split:]
                 X_cur = feats.iloc[[-1]].values
 
+                # Inner early-stopping split (last 20% of training)
+                es_split = max(30, int(len(X_tr) * 0.80))
+                X_es_tr,  y_es_tr  = X_tr[:es_split],  y_tr[:es_split]
+                X_es_val, y_es_val = X_tr[es_split:],  y_tr[es_split:]
+
                 xgb = XGBRegressor(
-                    n_estimators=150,
+                    n_estimators=300,
                     max_depth=3,
-                    learning_rate=0.05,
+                    learning_rate=0.04,
                     subsample=0.8,
-                    colsample_bytree=0.8,
+                    colsample_bytree=0.7,
                     min_child_weight=5,
+                    reg_alpha=0.1,          # L1 — sparsity
+                    reg_lambda=1.0,         # L2 — shrinkage
                     random_state=42,
                     verbosity=0,
+                    early_stopping_rounds=25,
                 )
-                xgb.fit(X_tr, y_tr)
-                predicted = float(xgb.predict(X_cur)[0])
+                xgb.fit(
+                    X_es_tr, y_es_tr,
+                    eval_set=[(X_es_val, y_es_val)],
+                    verbose=False,
+                )
+                predicted_sharpe = float(xgb.predict(X_cur)[0])
 
-                # Confidence from validation MAE
-                if len(X) > split + 5:
-                    y_val_pred = xgb.predict(X[split:])
-                    mae = float(np.mean(np.abs(y_val_pred - y[split:])))
-                    confidence = float(np.clip(1.0 / (1.0 + mae * 4), 0.10, 0.70))
+                # ── Scale back to annualized return view ──────────────────
+                # predicted_return = predicted_Sharpe × current_GARCH_vol
+                cur_vol = float(garch_vols.get(t, series.rolling(20).std().iloc[-1] * np.sqrt(252)))
+                predicted = predicted_sharpe * max(cur_vol, 0.05)
+
+                # ── Confidence from OOS Sharpe-MAE ────────────────────────
+                if len(X_val) >= 5:
+                    y_val_pred = xgb.predict(X_val)
+                    mae = float(np.mean(np.abs(y_val_pred - y_val)))
+                    # MAE in Sharpe units: 0.5 is good, 2.0 is noisy
+                    confidence = float(np.clip(1.0 / (1.0 + mae * 1.5), 0.10, 0.72))
                 else:
                     confidence = 0.30
 
-                # Blend XGB (short-term) with FF5 (long-term fundamental)
-                # Short horizon → trust XGBoost more; long → trust FF5 more
+                # ── Blend with FF5 (horizon-dependent) ───────────────────
                 xgb_weight = _XGB_WEIGHT_BY_HORIZON.get(time_horizon, 0.50)
                 ff5_ret = float(ff5_returns.get(t, 0.0))
                 blended = xgb_weight * predicted + (1.0 - xgb_weight) * ff5_ret
@@ -546,30 +593,68 @@ class MLEngine:
         regime_labels: pd.Series,
         current_regime: str,
     ) -> Optional[pd.DataFrame]:
-        """Feature matrix for XGBoost BL prediction, including regime one-hot columns."""
+        """
+        Feature matrix for XGBoost BL prediction.
+
+        Momentum: 1m/3m/6m/12m log-return sums
+        Volatility: GARCH vol, 20d/60d/120d rolling vol, vol-ratio, vol-accel
+        Risk-adjusted momentum: rolling Sharpe (21d, 63d)
+        Mean-reversion: z-score vs 60d mean
+        Oscillator: RSI(14)
+        Tail: rolling skewness (60d), 63d max-drawdown proxy
+        Regime: rolling 20-bar frequency per state (smoother than one-hot)
+        """
         if len(series) < 130:
             return None
         f = pd.DataFrame(index=series.index)
-        f["mom_1m"] = series.rolling(21).sum()
-        f["mom_3m"] = series.rolling(63).sum()
-        f["mom_6m"] = series.rolling(126).sum()
+
+        # ── Momentum ──────────────────────────────────────────────────────
+        f["mom_1m"]  = series.rolling(21).sum()
+        f["mom_3m"]  = series.rolling(63).sum()
+        f["mom_6m"]  = series.rolling(126).sum()
         f["mom_12m"] = series.rolling(252).sum()
-        f["vol_20"] = series.rolling(20).std() * np.sqrt(252)
-        f["vol_60"] = series.rolling(60).std() * np.sqrt(252)
-        f["vol_ratio"] = f["vol_20"] / (f["vol_60"] + 1e-8)
+
+        # ── Volatility ────────────────────────────────────────────────────
+        vol20  = series.rolling(20).std()  * np.sqrt(252)
+        vol60  = series.rolling(60).std()  * np.sqrt(252)
+        vol120 = series.rolling(120).std() * np.sqrt(252)
+        f["vol_20"]    = vol20
+        f["vol_60"]    = vol60
+        f["vol_ratio"] = vol20 / (vol60  + 1e-8)   # short/mid vol term structure
+        f["vol_accel"] = vol20 / (vol120 + 1e-8)   # short/long — picks up vol spikes
+        f["garch_vol"] = garch_vol                  # GARCH 1-step forecast (cross-sectional signal)
+
+        # ── Risk-adjusted momentum (rolling Sharpe) ───────────────────────
+        f["sharpe_21"] = (series.rolling(21).mean() * 252) / (vol20 + 1e-8)
+        f["sharpe_63"] = (series.rolling(63).mean() * 252) / (vol60 + 1e-8)
+
+        # ── Mean-reversion z-score ─────────────────────────────────────────
         f["zscore"] = (
             (series.rolling(21).mean() - series.rolling(60).mean())
             / (series.rolling(60).std() + 1e-8)
         )
-        f["garch_vol"] = garch_vol  # constant per ticker, encodes cross-sectional vol signal
 
-        # Regime one-hot features
-        for lbl in ["bull_strong", "bull_weak", "bear_mild", "crisis"]:
-            if not regime_labels.empty:
-                reg_aligned = regime_labels.reindex(series.index, method="ffill")
-                f[f"regime_{lbl}"] = (reg_aligned == lbl).astype(float)
-            else:
-                f[f"regime_{lbl}"] = 1.0 if lbl == current_regime else 0.0
+        # ── RSI(14) momentum oscillator ───────────────────────────────────
+        delta = series.diff()
+        gain  = delta.clip(lower=0).rolling(14).mean()
+        loss  = (-delta.clip(upper=0)).rolling(14).mean()
+        f["rsi_14"] = 100 - 100 / (1 + gain / (loss + 1e-8))
+
+        # ── Tail risk signals ─────────────────────────────────────────────
+        f["skew_60"] = series.rolling(60).skew()                  # negative = crash risk
+        f["dd_63"]   = series.rolling(63).apply(                  # cummax drawdown proxy
+            lambda x: float(np.nanmin(np.cumprod(1 + x) / np.maximum.accumulate(np.cumprod(1 + x))) - 1),
+            raw=True,
+        )
+
+        # ── Regime features (rolling frequency = smoother than one-hot) ──
+        if not regime_labels.empty:
+            reg_aligned = regime_labels.reindex(series.index, method="ffill")
+            for lbl in _REGIME_LABELS:
+                f[f"reg_freq_{lbl}"] = (reg_aligned == lbl).rolling(20).mean()
+        else:
+            for lbl in _REGIME_LABELS:
+                f[f"reg_freq_{lbl}"] = 1.0 if lbl == current_regime else 0.0
 
         return f.dropna()
 
@@ -630,9 +715,9 @@ class MLEngine:
         diag["garch_available"] = garch_ok
         diag["garch_vols"] = {t: round(v, 4) for t, v in garch_vols.items()}
 
-        # 2. DCC(1,1) covariance
+        # 2. DCC(1,1) covariance + EWMA blend
         t1 = time.monotonic()
-        log.info("ML: DCC(1,1) dynamic correlations")
+        log.info("ML: DCC(1,1) + EWMA(0.94) covariance blend")
         try:
             dcc_cov = self.fit_dcc_covariance(tickers, garch_vols, garch_std_resids)
             dcc_ok = True
@@ -640,11 +725,17 @@ class MLEngine:
             log.warning("DCC covariance failed: %s — using GARCH+LW fallback", exc)
             dcc_cov = fallback_cov
             dcc_ok = False
+
+        # Blend DCC (or fallback) with EWMA for better responsiveness to recent vol.
+        # 70% DCC (structural dynamics) + 30% EWMA (recent regime sensitivity).
+        try:
+            ewma = _ewma_cov(returns)
+            garch_cov = _psd(0.70 * (dcc_cov if dcc_ok else fallback_cov) + 0.30 * ewma)
+        except Exception:
+            garch_cov = dcc_cov if dcc_ok else fallback_cov
+
         diag["dcc_ms"] = round((time.monotonic() - t1) * 1000)
         diag["dcc_available"] = dcc_ok
-
-        # Use DCC cov if available, else fallback to GARCH+LW
-        garch_cov = dcc_cov if dcc_ok else fallback_cov
 
         # 3. FF5 expected returns
         t0 = time.monotonic()
@@ -736,3 +827,25 @@ def _psd(matrix: np.ndarray, eps: float = 1e-8) -> np.ndarray:
     eigvals, eigvecs = np.linalg.eigh(sym)
     eigvals = np.maximum(eigvals, eps)
     return eigvecs @ np.diag(eigvals) @ eigvecs.T
+
+
+def _ewma_cov(returns: pd.DataFrame, lambda_: float = 0.94) -> np.ndarray:
+    """
+    RiskMetrics (1994) EWMA covariance estimator (annualised).
+
+    More responsive to recent volatility than Ledoit-Wolf; useful as a
+    complement to DCC in the covariance blend.
+    """
+    r = returns.dropna(how="all").fillna(0).values
+    T, n = r.shape
+    if T < 10:
+        return np.eye(n) * 0.04
+    # Initialise with sample covariance of first min(60, T) observations
+    init = r[:min(60, T)]
+    cov = np.cov(init.T) if init.shape[0] > 1 else np.eye(n) * 0.01
+    if cov.ndim == 0:
+        cov = np.array([[float(cov)]])
+    for t in range(T):
+        rt = r[t:t + 1].T           # (n, 1)
+        cov = lambda_ * cov + (1 - lambda_) * (rt @ rt.T)
+    return _psd(cov * 252)
