@@ -469,6 +469,76 @@ def save_capital_snapshot(user_id: str = Depends(get_user_id)):
     return {"snapshot_date": snapshot_date, "invested_base": round(invested, 2)}
 
 
+@router.post("/capital-snapshot/backfill", status_code=200)
+def backfill_capital_snapshots(user_id: str = Depends(get_user_id)):
+    """
+    One-time backfill: reads all positions with their created_at dates,
+    builds a cumulative capital step function, and inserts snapshots for
+    each date a new position was added. Skips dates already in snapshots.
+    Uses current FX as best approximation for historical invested amounts.
+    """
+    db = get_admin_client()
+    settings = _get_settings_for_user(user_id)
+    base_currency = settings.get("base_currency", "USD")
+
+    pos_res = db.table("positions").select("*").eq("user_id", user_id).execute()
+    positions = [p for p in (pos_res.data or []) if float(p.get("shares", 0)) > 0 and p.get("avg_cost_native")]
+
+    if not positions:
+        return {"created": 0}
+
+    # Build FX rates once using current rates
+    all_ccys = list({p.get("currency") or get_native_currency(p["ticker"]) for p in positions})
+    fx_rates = get_fx_rates(all_ccys, base=base_currency) if all_ccys else {}
+
+    # Sort positions by created_at date
+    def pos_date(p: dict) -> str:
+        raw = p.get("created_at") or ""
+        return raw[:10]  # YYYY-MM-DD
+
+    positions_sorted = sorted(positions, key=pos_date)
+
+    # Build cumulative invested at each unique date
+    # Group by date → sum up all positions created on or before each date
+    unique_dates = sorted({pos_date(p) for p in positions_sorted if pos_date(p)})
+
+    # Check which dates already have snapshots
+    existing_res = (
+        db.table("portfolio_snapshots")
+        .select("snapshot_date")
+        .eq("user_id", user_id)
+        .not_.is_("invested_base", "null")
+        .execute()
+    )
+    existing_dates = {r["snapshot_date"] for r in (existing_res.data or [])}
+
+    created = 0
+    for d in unique_dates:
+        if d in existing_dates:
+            continue
+        # Sum invested for all positions created on or before this date
+        invested = 0.0
+        for p in positions_sorted:
+            if pos_date(p) > d:
+                break
+            shares = float(p.get("shares", 0))
+            avg_cost = float(p.get("avg_cost_native") or 0)
+            pos_ccy = p.get("currency") or get_native_currency(p["ticker"])
+            fx = fx_rates.get(pos_ccy, 1.0)
+            invested += shares * avg_cost * fx
+
+        if invested > 0:
+            db.table("portfolio_snapshots").insert({
+                "user_id": user_id,
+                "snapshot_date": d,
+                "base_currency": base_currency,
+                "invested_base": round(invested, 2),
+            }).execute()
+            created += 1
+
+    return {"created": created, "dates": unique_dates}
+
+
 # ── ETF region override map (explicit overrides, takes priority) ──────────────
 _REGION_OVERRIDES: dict[str, dict[str, float]] = {
     "VWCE.DE": {"North America": 0.62, "Europe": 0.18, "Pacific": 0.11, "Emerging Markets": 0.09},

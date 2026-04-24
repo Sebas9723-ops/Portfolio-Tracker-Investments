@@ -32,3 +32,6 @@ export const fetchRealizedPnl = () =>
 
 export const saveCapitalSnapshot = () =>
   apiClient.post<{ snapshot_date: string; invested_base: number }>("/api/portfolio/capital-snapshot").then((r) => r.data);
+
+export const backfillCapitalSnapshots = () =>
+  apiClient.post<{ created: number; dates: string[] }>("/api/portfolio/capital-snapshot/backfill").then((r) => r.data);

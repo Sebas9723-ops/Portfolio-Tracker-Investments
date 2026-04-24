@@ -1,9 +1,10 @@
 "use client";
-import { useState, memo } from "react";
+import { useState, memo, useEffect } from "react";
 import dynamic from "next/dynamic";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { usePortfolio, usePortfolioHistory } from "@/lib/hooks/usePortfolio";
 import { fetchTransactions } from "@/lib/api/transactions";
+import { backfillCapitalSnapshots } from "@/lib/api/portfolio";
 import { fetchPortfolioBreakdown, fetchAnalytics } from "@/lib/api/analytics";
 import { updateSettings } from "@/lib/api/settings";
 import { fmtCurrency, fmtPct, fmtDate } from "@/lib/formatters";
@@ -193,7 +194,7 @@ export default function DashboardPage() {
   const [donutView, setDonutView] = useState<"weights" | "sectors" | "regions">("weights");
 
   const { data: portfolio, isLoading, isFetching } = usePortfolio();
-  const { data: historyData, isLoading: historyLoading } = usePortfolioHistory();
+  const { data: historyData, isLoading: historyLoading, refetch: refetchHistory } = usePortfolioHistory();
   const { data: transactions } = useQuery({ queryKey: ["transactions"], queryFn: fetchTransactions });
   const { data: breakdown } = useQuery({ queryKey: ["portfolioBreakdown"], queryFn: fetchPortfolioBreakdown, staleTime: 60 * 60 * 1000 });
   const { data: analyticsData } = useQuery({
@@ -206,6 +207,15 @@ export default function DashboardPage() {
   const base_currency = useSettingsStore((s) => s.base_currency);
   const cost_basis_usd = useSettingsStore((s) => s.cost_basis_usd);
   const setSettings = useSettingsStore((s) => s.setSettings);
+
+  // Run backfill once if history has no invested data yet (existing positions without snapshots)
+  useEffect(() => {
+    if (!historyData || historyData.length === 0) return;
+    const hasInvested = historyData.some((h) => (h as any).invested > 0);
+    if (!hasInvested) {
+      backfillCapitalSnapshots().then(() => refetchHistory()).catch(() => {});
+    }
+  }, [historyData]);
 
   const { mutate: saveBasis } = useMutation({
     mutationFn: (v: number) => updateSettings({ cost_basis_usd: v }),
