@@ -288,11 +288,12 @@ export default function DashboardPage() {
     ? portfolio.total_invested_base
     : (cost_basis_usd ?? 0);
 
-  // Capital invested = shares × avg_cost per position (from Manage), flat line.
+  // Capital invested: use backend-persisted snapshot (step function) when available,
+  // fall back to flat autoInvested (shares × avg_cost today).
   const contributionsData = allHistory.map((h) => ({
     date: h.date.slice(5),
     value: Math.round(h.value),
-    invested: Math.round(autoInvested),
+    invested: Math.round((h as any).invested ?? autoInvested),
   }));
 
   // Allocation donut

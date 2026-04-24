@@ -76,5 +76,6 @@ class Snapshot(BaseModel):
     snapshot_date: str
     total_value_usd: Optional[float]
     total_value_base: Optional[float]
+    invested_base: Optional[float] = None
     base_currency: str
     created_at: datetime

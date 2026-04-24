@@ -29,3 +29,6 @@ export const deletePosition = (ticker: string) =>
 
 export const fetchRealizedPnl = () =>
   apiClient.get<{ ticker: string; realized_pnl: number; trades: number }[]>("/api/portfolio/realized-pnl").then((r) => r.data);
+
+export const saveCapitalSnapshot = () =>
+  apiClient.post<{ snapshot_date: string; invested_base: number }>("/api/portfolio/capital-snapshot").then((r) => r.data);

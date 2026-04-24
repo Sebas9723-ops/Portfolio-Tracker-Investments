@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { fetchPositions, upsertPosition, updatePosition, deletePosition } from "@/lib/api/portfolio";
+import { fetchPositions, upsertPosition, updatePosition, deletePosition, saveCapitalSnapshot } from "@/lib/api/portfolio";
 import { fetchTransactions, createTransaction, fetchCash, upsertCash, deleteCash } from "@/lib/api/transactions";
 import { fmtCurrency, fmtDate } from "@/lib/formatters";
 import { Pencil, Trash2, Plus, Check, X, AlertCircle } from "lucide-react";
@@ -55,6 +55,7 @@ export default function ManagePage() {
     mutationFn: ({ ticker, data }: { ticker: string; data: { shares?: number; avg_cost_native?: number; name?: string; currency?: string } }) =>
       updatePosition(ticker, data),
     onSuccess: (_, vars) => {
+      saveCapitalSnapshot().catch(() => {});
       qc.invalidateQueries({ queryKey: ["positions"] });
       qc.invalidateQueries({ queryKey: ["portfolio"] });
       qc.invalidateQueries({ queryKey: ["rebalancing"] });
@@ -94,6 +95,7 @@ export default function ManagePage() {
           comment: "Auto-registered from position entry",
         } as Parameters<typeof createTransaction>[0]);
       }
+      saveCapitalSnapshot().catch(() => {});
       qc.invalidateQueries({ queryKey: ["positions"] });
       qc.invalidateQueries({ queryKey: ["portfolio"] });
       qc.invalidateQueries({ queryKey: ["rebalancing"] });

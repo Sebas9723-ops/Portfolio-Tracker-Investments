@@ -328,10 +328,33 @@ def get_portfolio_history(
             total += shares * float(price) * fx
 
         if total > 0:
-            point: dict = {"date": day_str, "value": round(total, 2)}
-            if has_buy_txs and cumulative_invested > 0:
-                point["invested"] = round(cumulative_invested, 2)
-            result.append(point)
+            result.append({"date": day_str, "value": round(total, 2)})
+
+    # ── Load capital snapshots and interpolate invested per day ───────────────
+    snap_res = (
+        db.table("portfolio_snapshots")
+        .select("snapshot_date,invested_base")
+        .eq("user_id", user_id)
+        .not_.is_("invested_base", "null")
+        .order("snapshot_date")
+        .execute()
+    )
+    capital_snaps = {s["snapshot_date"]: s["invested_base"] for s in (snap_res.data or []) if s.get("invested_base")}
+
+    if capital_snaps:
+        # Forward-fill: for each day, use the most recent snapshot on or before that date
+        snap_dates = sorted(capital_snaps.keys())
+        for point in result:
+            d = point["date"]
+            # Find last snapshot <= d
+            invested_val = None
+            for sd in snap_dates:
+                if sd <= d:
+                    invested_val = capital_snaps[sd]
+                else:
+                    break
+            if invested_val is not None:
+                point["invested"] = round(invested_val, 2)
 
     # Guarantee strict ascending order and no duplicate dates so the chart
     # never throws an assertion error regardless of yfinance quirks.
@@ -389,6 +412,61 @@ def save_snapshot(body: SnapshotCreate, user_id: str = Depends(get_user_id)):
     }
     res = db.table("portfolio_snapshots").upsert(row, on_conflict="user_id,snapshot_date").execute()
     return res.data[0] if res.data else row
+
+
+# ── Capital snapshot (auto-saved when positions change in Manage) ─────────────
+
+@router.post("/capital-snapshot", status_code=200)
+def save_capital_snapshot(user_id: str = Depends(get_user_id)):
+    """
+    Calculates total_invested_base (shares × avg_cost × FX) for the current
+    positions and upserts it into portfolio_snapshots for today's date.
+    Called automatically by the frontend whenever a position is saved.
+    """
+    snapshot_date = str(date.today())
+    db = get_admin_client()
+    settings = _get_settings_for_user(user_id)
+    base_currency = settings.get("base_currency", "USD")
+
+    pos_res = db.table("positions").select("*").eq("user_id", user_id).execute()
+    positions = pos_res.data or []
+
+    tickers = [p["ticker"] for p in positions if float(p.get("shares", 0)) > 0]
+    exchange_currencies = [get_native_currency(t) for t in tickers]
+    pos_currencies = [p.get("currency") or get_native_currency(p["ticker"]) for p in positions]
+    currencies = list(set(exchange_currencies + pos_currencies))
+    fx_rates = get_fx_rates(currencies, base=base_currency) if currencies else {}
+
+    invested = 0.0
+    for p in positions:
+        shares = float(p.get("shares", 0))
+        avg_cost = float(p.get("avg_cost_native") or 0)
+        if shares <= 0 or avg_cost <= 0:
+            continue
+        pos_ccy = p.get("currency") or get_native_currency(p["ticker"])
+        fx = fx_rates.get(pos_ccy, 1.0)
+        invested += shares * avg_cost * fx
+
+    # Upsert: if a snapshot already exists for today, update invested_base only
+    existing = (
+        db.table("portfolio_snapshots")
+        .select("id")
+        .eq("user_id", user_id)
+        .eq("snapshot_date", snapshot_date)
+        .maybe_single()
+        .execute()
+    )
+    if existing.data:
+        db.table("portfolio_snapshots").update({"invested_base": round(invested, 2)}).eq("id", existing.data["id"]).execute()
+    else:
+        db.table("portfolio_snapshots").insert({
+            "user_id": user_id,
+            "snapshot_date": snapshot_date,
+            "base_currency": base_currency,
+            "invested_base": round(invested, 2),
+        }).execute()
+
+    return {"snapshot_date": snapshot_date, "invested_base": round(invested, 2)}
 
 
 # ── ETF region override map (explicit overrides, takes priority) ──────────────
