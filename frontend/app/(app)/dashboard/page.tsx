@@ -281,18 +281,29 @@ export default function DashboardPage() {
   const bmBenchmarkSeries = analyticsData?.benchmark_series ? normSeries(analyticsData.benchmark_series) : undefined;
   const bmTicker = analyticsData?.metrics?.benchmark_ticker ?? "VOO";
 
-  // Contributions tracker — cumulative invested vs portfolio value
-  // cost_basis_usd is the FX-correct total invested (set manually in settings, default 900).
-  // Future BUY transactions in USD are added on top of that baseline.
-  const baseCostBasis = cost_basis_usd ?? 900;
-  const buyTxsUsd = (transactions ?? [])
-    .filter((t) => t.action === "BUY" && t.currency === "USD")
+  // Contributions tracker — cumulative invested vs portfolio value.
+  // Primary source: BUY transactions sorted by date → true step function.
+  // Fallback: total_invested_base (backend auto-computes from avg_cost × shares × FX).
+  const autoInvested = (portfolio.total_invested_base && portfolio.total_invested_base > 0)
+    ? portfolio.total_invested_base
+    : (cost_basis_usd ?? 0);
+
+  const allBuyTxs = (transactions ?? [])
+    .filter((t) => t.action === "BUY")
     .sort((a, b) => a.date.localeCompare(b.date));
+
   const contributionsData = allHistory.map((h) => {
-    const additionalUsd = buyTxsUsd
-      .filter((t) => t.date > new Date().toISOString().slice(0, 10) && t.date <= h.date)
-      .reduce((s, t) => s + t.quantity * t.price_native + t.fee_native, 0);
-    return { date: h.date.slice(5), value: Math.round(h.value), invested: Math.round(baseCostBasis + additionalUsd) };
+    let investedOnDate: number;
+    if (allBuyTxs.length > 0) {
+      // Sum all BUY amounts up to this date (native currency amounts)
+      const cumulative = allBuyTxs
+        .filter((t) => t.date <= h.date)
+        .reduce((s, t) => s + t.quantity * t.price_native + (t.fee_native || 0), 0);
+      investedOnDate = cumulative > 0 ? cumulative : autoInvested;
+    } else {
+      investedOnDate = autoInvested;
+    }
+    return { date: h.date.slice(5), value: Math.round(h.value), invested: Math.round(investedOnDate) };
   });
 
   // Allocation donut
@@ -325,7 +336,9 @@ export default function DashboardPage() {
   // Falls back to backend's total_invested_base (current-FX, may drift).
   const invested = portfolio.total_invested_base ?? 0;
   const INCEPTION_DATE = "2026-03-26";
-  const basis = cost_basis_usd ?? invested;
+  const basis = (portfolio.total_invested_base && portfolio.total_invested_base > 0)
+    ? portfolio.total_invested_base
+    : (cost_basis_usd ?? 0);
   const priceGain = basis > 0 ? totalValue - basis : (portfolio.total_unrealized_pnl ?? 0);
   const priceGainPct = basis > 0 ? ((totalValue - basis) / basis) * 100 : (portfolio.total_unrealized_pnl_pct ?? 0);
   const totalReturn = priceGain + totalDivReceived;
