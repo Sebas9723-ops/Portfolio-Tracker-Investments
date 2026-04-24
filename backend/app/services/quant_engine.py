@@ -67,6 +67,7 @@ class QuantResult:
 class QuantEngine:
     def __init__(self, risk_free_rate: float = 0.045):
         self.rfr = risk_free_rate
+        self.last_returns: "pd.DataFrame | None" = None  # set after run_full_optimization
 
     # ── 1. Data fetch ──────────────────────────────────────────────────────
 
@@ -538,6 +539,7 @@ class QuantEngine:
         returns = self.fetch_data(tickers)
         if returns.empty or len(returns.columns) == 0:
             raise RuntimeError("Could not fetch return data for any ticker")
+        self.last_returns = returns  # expose for callers (e.g. analytics modules)
 
         available = list(returns.columns)
         if set(available) != set(tickers):
