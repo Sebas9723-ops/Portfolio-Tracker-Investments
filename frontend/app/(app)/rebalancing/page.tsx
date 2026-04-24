@@ -1,9 +1,9 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { fetchRebalancing, fetchRequiredForMaxSharpe } from "@/lib/api/analytics";
+import { fetchRebalancing, fetchRequiredForMaxSharpe, fetchQuantAdvanced } from "@/lib/api/analytics";
 import { fetchContributionPlan } from "@/lib/api/contribution";
-import type { ContributionPlanResponse } from "@/lib/api/contribution";
+import type { ContributionPlanResponse, QuantAnalyticsV2 } from "@/lib/api/contribution";
 import { useAIChat } from "@/lib/context/aiChatContext";
 import { fetchSettings, updateSettings } from "@/lib/api/settings";
 import { usePortfolio } from "@/lib/hooks/usePortfolio";
@@ -68,6 +68,8 @@ export default function RebalancingPage() {
   const [msPeriod, setMsPeriod] = useState("2y");
   const [quantData, setQuantData] = useState<ContributionPlanResponse | null>(null);
   const [quantError, setQuantError] = useState<string | null>(null);
+  const [qaV2Data, setQaV2Data] = useState<QuantAnalyticsV2 | null>(null);
+  const [qaV2Loading, setQaV2Loading] = useState(false);
   const [horizon, setHorizon] = useState<"short" | "medium" | "long">("long");
   const queryClient = useQueryClient();
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: fetchSettings });
@@ -91,6 +93,13 @@ export default function RebalancingPage() {
     onSuccess: (data) => {
       setQuantData(data);
       setQuantError(null);
+      // Auto-fire quant-advanced analytics (separate call so contribution plan isn't blocked)
+      setQaV2Data(null);
+      setQaV2Loading(true);
+      fetchQuantAdvanced()
+        .then((qa) => setQaV2Data(qa))
+        .catch(() => {/* analytics failure is non-fatal */})
+        .finally(() => setQaV2Loading(false));
     },
     onError: (err: Error) => {
       setQuantError(err.message ?? "Optimization failed");
@@ -422,8 +431,13 @@ export default function RebalancingPage() {
               )}
 
               {/* ── Quant Analytics V2 Panels ── */}
-              {quantData.quant_analytics_v2 && (() => {
-                const qa = quantData.quant_analytics_v2!;
+              {qaV2Loading && (
+                <div className="text-bloomberg-muted text-[10px] py-2 animate-pulse">
+                  Running 14 advanced analytics modules…
+                </div>
+              )}
+              {qaV2Data && (() => {
+                const qa = qaV2Data;
                 const pct = (v: number | null | undefined, d = 1) =>
                   v == null ? "—" : `${(v * 100).toFixed(d)}%`;
 

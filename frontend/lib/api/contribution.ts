@@ -280,7 +280,6 @@ export interface ContributionPlanResponse {
   optimization_timestamp: string;
   profile: string;
   time_horizon: string;
-  quant_analytics_v2?: QuantAnalyticsV2;
 }
 
 export const fetchContributionPlan = (params: {
