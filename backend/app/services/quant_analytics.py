@@ -344,14 +344,11 @@ def compute_expected_return_bands(
     T, n = r.shape
     alpha = (1 - confidence) / 2
 
-    boot_means = np.zeros((n_bootstrap, n))
-    boot_vols = np.zeros((n_bootstrap, n))
-    for b in range(n_bootstrap):
-        idx = rng.integers(0, T, size=T)
-        sample = r[idx]
-        boot_means[b] = sample.mean(axis=0) * 252
-        boot_vols[b] = sample.std(axis=0) * np.sqrt(252)
-
+    # Fully vectorised bootstrap — no Python loop
+    all_idx = rng.integers(0, T, size=(n_bootstrap, T))  # (B, T)
+    samples = r[all_idx]                                  # (B, T, n)
+    boot_means = samples.mean(axis=1) * 252               # (B, n)
+    boot_vols = samples.std(axis=1) * np.sqrt(252)        # (B, n)
     boot_sharpe = np.where(boot_vols > 0, boot_means / boot_vols, 0.0)
 
     rows = []
@@ -664,31 +661,26 @@ def compute_expected_drawdown_profile(
     for h in horizons_years:
         n_days = h * 252
         sampled = rng.choice(r, size=(n_sims, n_days), replace=True)
-        paths = np.cumprod(1 + sampled, axis=1) * current_value
+        # full_paths: (n_sims, n_days+1) — prepend starting value
+        cum = np.cumprod(1 + sampled, axis=1) * current_value
+        full_paths = np.hstack([np.full((n_sims, 1), current_value), cum])
 
-        max_dds = np.zeros(n_sims)
-        recovery_months = np.zeros(n_sims)
+        # Vectorised max-drawdown (no Python loops)
+        running_max = np.maximum.accumulate(full_paths, axis=1)
+        drawdowns = (full_paths - running_max) / running_max        # <= 0
+        max_dds = drawdowns.min(axis=1)                             # (n_sims,)
+        trough_idx = drawdowns.argmin(axis=1)                       # (n_sims,)
+
+        # Recovery: for each sim find first step after trough where value >= peak at trough
+        recovery_months = np.full(n_sims, float(h * 12))
         for s in range(n_sims):
-            path = np.concatenate([[current_value], paths[s]])
-            peak = path[0]
-            max_dd = 0.0
-            trough_idx = 0
-            for d in range(1, len(path)):
-                if path[d] > peak:
-                    peak = path[d]
-                dd = (path[d] - peak) / peak
-                if dd < max_dd:
-                    max_dd = dd
-                    trough_idx = d
-            max_dds[s] = max_dd
-            if trough_idx > 0 and max_dd < -0.01:
-                peak_at_trough = path[:trough_idx + 1].max()
-                for d in range(trough_idx + 1, len(path)):
-                    if path[d] >= peak_at_trough:
-                        recovery_months[s] = (d - trough_idx) / 21
-                        break
-                else:
-                    recovery_months[s] = h * 12
+            ti = trough_idx[s]
+            if max_dds[s] < -0.01 and ti < n_days:
+                peak_val = running_max[s, ti]
+                after = full_paths[s, ti:]
+                rec = np.argmax(after >= peak_val)
+                if rec > 0:
+                    recovery_months[s] = rec / 21.0
 
         result[str(h)] = {
             "expected_max_dd": round(float(np.median(max_dds)), 4),
