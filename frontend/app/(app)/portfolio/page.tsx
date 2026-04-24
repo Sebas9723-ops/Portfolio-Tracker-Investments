@@ -323,7 +323,7 @@ export default function PortfolioPage() {
                   <td className="text-bloomberg-gold font-medium">{p.ticker}</td>
                   <td className="text-bloomberg-muted">{p.name}</td>
                   <td className="text-right">{p.shares.toFixed(4)}</td>
-                  <td className="text-right">{p.avg_cost_native != null ? fmtCurrency(p.avg_cost_native, p.currency) : "—"}</td>
+                  <td className="text-right">{p.avg_cost_native != null ? fmtCurrency(p.avg_cost_native, p.cost_currency) : "—"}</td>
                   <td>{p.currency}</td>
                   <td className="text-bloomberg-muted">{p.market}</td>
                   <td>

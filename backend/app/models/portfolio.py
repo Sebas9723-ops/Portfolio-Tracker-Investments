@@ -30,7 +30,8 @@ class PortfolioRow(BaseModel):
     ticker: str
     name: str
     shares: float
-    currency: str
+    currency: str          # exchange currency (EUR for .DE, GBP for .L, USD for US)
+    cost_currency: str = "USD"  # currency in which avg_cost_native was entered
     market: str
     price_native: float
     price_base: float

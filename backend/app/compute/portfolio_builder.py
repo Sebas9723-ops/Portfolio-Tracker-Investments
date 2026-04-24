@@ -67,6 +67,7 @@ def build_portfolio(
             name=pos.get("name") or ticker,
             shares=shares,
             currency=exchange_currency,
+            cost_currency=pos_currency,
             market=pos.get("market", "US"),
             price_native=price_native,
             price_base=price_base,

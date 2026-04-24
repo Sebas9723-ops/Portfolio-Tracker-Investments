@@ -143,8 +143,8 @@ const PositionRow = memo(function PositionRow({ row, ccy }: { row: PortfolioRow;
       <td className="py-2.5 text-right hidden sm:table-cell">
         {totalBuyIn != null ? (
           <>
-            <p className="text-bloomberg-text">{fmtCurrency(totalBuyIn, row.currency)}</p>
-            <p className="text-bloomberg-muted text-[10px]">{fmtCurrency(row.avg_cost_native!, row.currency)} avg</p>
+            <p className="text-bloomberg-text">{fmtCurrency(totalBuyIn, row.cost_currency)}</p>
+            <p className="text-bloomberg-muted text-[10px]">{fmtCurrency(row.avg_cost_native!, row.cost_currency)} avg</p>
           </>
         ) : (
           <span className="text-bloomberg-muted">—</span>

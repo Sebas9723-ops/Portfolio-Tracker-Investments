@@ -41,6 +41,7 @@ export interface PortfolioRow {
   name: string;
   shares: number;
   currency: string;
+  cost_currency: string;
   market: string;
   price_native: number;
   price_base: number;
