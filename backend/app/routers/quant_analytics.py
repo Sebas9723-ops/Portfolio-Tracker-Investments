@@ -56,13 +56,17 @@ class QuantAdvancedRequest(BaseModel):
     benchmark_ticker: str = "VOO"
 
 
-def _build_asset_returns(tickers: list[str], period: str) -> pd.DataFrame:
-    hist = get_historical_multi(tickers, period=period)
+def _closes_from_hist(hist: dict) -> dict[str, pd.Series]:
     closes: dict[str, pd.Series] = {}
     for t, df in hist.items():
         if not df.empty:
             col = "Close" if "Close" in df.columns else df.columns[0]
             closes[t] = df[col].dropna()
+    return closes
+
+
+def _returns_from_hist(hist: dict) -> pd.DataFrame:
+    closes = _closes_from_hist(hist)
     return pd.DataFrame(closes).dropna(how="all").ffill().pct_change().dropna()
 
 
@@ -110,18 +114,17 @@ def quant_advanced(
         r.ticker: float(getattr(r, "price_base", 0) or 0) for r in summary.rows
     }
 
-    # ── Load returns ──────────────────────────────────────────────────────────
+    # ── Load returns — single download, reused everywhere ────────────────────
     try:
-        asset_returns = _build_asset_returns(tickers, body.period)
+        hist = get_historical_multi(tickers, period=body.period)
+        asset_returns = _returns_from_hist(hist)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Return data unavailable: {exc}")
 
     if asset_returns.empty:
         raise HTTPException(status_code=422, detail="No return history available")
 
-    portfolio_returns = build_portfolio_returns(
-        get_historical_multi(tickers, period=body.period), current_weights
-    )
+    portfolio_returns = build_portfolio_returns(hist, current_weights)
     benchmark_returns = _build_benchmark_returns(body.benchmark_ticker, body.period)
 
     # ── Load transactions for tax drag ───────────────────────────────────────
@@ -183,14 +186,13 @@ def quant_advanced(
         log.warning("after_tax_drag failed: %s", exc)
         result["after_tax_drag"] = None
 
-    # 4. Liquidity score (uses pre-fetched ADV from asset data)
+    # 4. Liquidity score (ADV approximated from the already-downloaded hist)
     try:
-        # ADV approximation from historical data already loaded
-        hist_raw = get_historical_multi(tickers, period="1mo")
         adv_map: dict[str, float] = {}
-        for t, df in hist_raw.items():
+        for t, df in hist.items():
             if not df.empty and "Volume" in df.columns and "Close" in df.columns:
-                adv_map[t] = float((df["Close"] * df["Volume"]).mean())
+                # Use last 30 rows as ADV proxy (avoids extra yfinance call)
+                adv_map[t] = float((df["Close"].iloc[-30:] * df["Volume"].iloc[-30:]).mean())
         result["liquidity"] = compute_liquidity_score(
             tickers=tickers,
             adv_map=adv_map,
