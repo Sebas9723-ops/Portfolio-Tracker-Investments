@@ -83,9 +83,13 @@ export const fetchQuantAdvanced = (body: {
   benchmark_ticker?: string;
   n_bootstrap?: number;
   n_dd_sims?: number;
+  horizons_years?: number[];
+  band_tolerance?: number;
+  te_budget?: number;
+  bl_views?: Record<string, { return: number; confidence: number }>;
 } = {}) =>
   apiClient
-    .post<Record<string, unknown>>("/api/analytics/quant-advanced", body, { timeout: 300_000 })
+    .post<import("./contribution").QuantAnalyticsV2>("/api/analytics/quant-advanced", body, { timeout: 300_000 })
     .then((r) => r.data);
 
 export const fetchBlackLitterman = (body: {

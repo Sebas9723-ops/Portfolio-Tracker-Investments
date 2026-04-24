@@ -640,6 +640,74 @@ export default function RebalancingPage() {
                       </div>
                     )}
 
+                    {/* Panel 5b: After-Tax Drag */}
+                    {qa.after_tax_drag && (qa.after_tax_drag.tax_drag > 0 || qa.after_tax_drag.positions.length > 0) && (
+                      <div className="bbg-card">
+                        <p className="bbg-header">After-Tax Drag</p>
+                        <div className="flex flex-wrap gap-4 text-[10px] mb-2">
+                          <span className="text-bloomberg-muted">After-tax return: <span className={`font-bold ${qa.after_tax_drag.after_tax_return >= 0 ? "text-green-400" : "text-red-400"}`}>{pct(qa.after_tax_drag.after_tax_return)}</span></span>
+                          <span className="text-bloomberg-muted">Tax drag: <span className="text-red-400 font-bold">-{pct(qa.after_tax_drag.tax_drag)}</span></span>
+                          <span className="text-bloomberg-muted">Est. tax liability: <span className="text-bloomberg-text">{fmtCurrency(qa.after_tax_drag.total_tax_liability)}</span></span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Panel 5c: Model Agreement */}
+                    {qa.model_agreement && (
+                      <div className="bbg-card">
+                        <p className="bbg-header">Model Agreement (Quant Engine vs Equal Weight)</p>
+                        <div className="flex flex-wrap gap-4 text-[10px] mb-2">
+                          <span className="text-bloomberg-muted">Agreement score: <span className={`font-bold ${qa.model_agreement.agreement_score >= 0.7 ? "text-green-400" : qa.model_agreement.agreement_score >= 0.4 ? "text-bloomberg-gold" : "text-red-400"}`}>{qa.model_agreement.agreement_score.toFixed(3)}</span></span>
+                          {qa.model_agreement.high_conflict_tickers.length > 0 && (
+                            <span className="text-bloomberg-muted">Conflicts: <span className="text-bloomberg-gold">{qa.model_agreement.high_conflict_tickers.join(", ")}</span></span>
+                          )}
+                        </div>
+                        <table className="bbg-table text-[10px]">
+                          <thead><tr><th>Ticker</th><th className="text-right">Consensus Weight</th><th className="text-right">Std Dev</th></tr></thead>
+                          <tbody>
+                            {Object.entries(qa.model_agreement.consensus_weights)
+                              .sort(([, a], [, b]) => b - a)
+                              .map(([ticker, w]) => (
+                                <tr key={ticker}>
+                                  <td className="text-bloomberg-gold font-medium">{ticker}</td>
+                                  <td className="text-right">{(w * 100).toFixed(1)}%</td>
+                                  <td className="text-right text-bloomberg-muted">±{((qa.model_agreement!.weight_std_by_ticker[ticker] ?? 0) * 100).toFixed(1)}%</td>
+                                </tr>
+                              ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {/* Panel 5d: Tracking Error Budget */}
+                    {qa.tracking_error_budget && qa.tracking_error_budget.total_te != null && (
+                      <div className="bbg-card">
+                        <p className="bbg-header">Tracking Error Budget</p>
+                        <div className="flex flex-wrap gap-4 text-[10px] mb-2">
+                          <span className="text-bloomberg-muted">TE actual: <span className="text-bloomberg-gold font-bold">{pct(qa.tracking_error_budget.total_te)}</span></span>
+                          <span className="text-bloomberg-muted">Budget: <span className="text-bloomberg-text">{pct(qa.tracking_error_budget.te_budget)}</span></span>
+                          <span className="text-bloomberg-muted">Used: <span className={`font-bold ${qa.tracking_error_budget.within_budget ? "text-green-400" : "text-red-400"}`}>{qa.tracking_error_budget.budget_used_pct.toFixed(1)}%</span></span>
+                          <span className={`font-bold text-[10px] ${qa.tracking_error_budget.within_budget ? "text-green-400" : "text-red-400"}`}>
+                            {qa.tracking_error_budget.within_budget ? "✓ OK" : "⚠ OVER"}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Panel 5e: EWMA Regime */}
+                    {qa.regime && qa.regime.current_regime && (
+                      <div className="bbg-card">
+                        <p className="bbg-header">Regime Analysis (EWMA)</p>
+                        <div className="flex flex-wrap gap-4 text-[10px]">
+                          <span className="text-bloomberg-muted">Regime: <span className={`font-bold ${qa.regime.current_regime === "low" ? "text-green-400" : qa.regime.current_regime === "normal" ? "text-bloomberg-gold" : qa.regime.current_regime === "high" ? "text-orange-400" : "text-red-400"}`}>{qa.regime.current_regime.toUpperCase()}</span></span>
+                          <span className="text-bloomberg-muted">Vol: <span className="text-bloomberg-text">{pct(qa.regime.current_vol)}</span></span>
+                          <span className="text-bloomberg-muted">Equity tilt: <span className={`font-bold ${qa.regime.strategic.equity_tilt >= 0 ? "text-green-400" : "text-red-400"}`}>{qa.regime.strategic.equity_tilt >= 0 ? "+" : ""}{(qa.regime.strategic.equity_tilt * 100).toFixed(0)}%</span></span>
+                          <span className="text-bloomberg-muted">Execution: <span className={`font-bold ${qa.regime.execution.hold ? "text-red-400" : "text-green-400"}`}>{qa.regime.execution.hold ? "HOLD" : "GO"}</span></span>
+                          {qa.regime.recent_flip && <span className="text-bloomberg-gold font-bold">⚠ Regime flip</span>}
+                        </div>
+                      </div>
+                    )}
+
                     {/* Panel 6: Dynamic Weight Caps */}
                     {qa.dynamic_caps && Object.keys(qa.dynamic_caps.caps).length > 0 && (
                       <div className="bbg-card">

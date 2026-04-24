@@ -237,6 +237,17 @@ export interface FactorRisk {
   factor_decomposition: Record<string, unknown>;
 }
 
+export interface BLExplanationRow {
+  ticker: string;
+  equilibrium_return: number;
+  posterior_return: number;
+  view_pull: number;
+  has_view: boolean;
+  view_return: number | null;
+  view_confidence: number | null;
+  dominant_source: string;
+}
+
 export interface QuantAnalyticsV2 {
   rebalancing_bands: RebalancingBands | null;
   net_alpha: NetAlphaRow[] | null;
@@ -244,6 +255,7 @@ export interface QuantAnalyticsV2 {
   liquidity: LiquidityRow[] | null;
   model_agreement: ModelAgreement | null;
   return_bands: ReturnBandRow[] | null;
+  bl_explanation: BLExplanationRow[] | null;
   tracking_error_budget: TrackingErrorBudget | null;
   walk_forward: WalkForward | null;
   regime: QuantRegime | null;
