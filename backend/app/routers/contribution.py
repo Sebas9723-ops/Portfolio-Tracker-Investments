@@ -25,22 +25,6 @@ from app.db.quant_results import (
     save_contribution_plan,
     load_user_bl_views,
 )
-from app.services.quant_analytics import (
-    compute_rebalancing_bands,
-    compute_net_alpha_after_costs,
-    compute_after_tax_drag,
-    compute_liquidity_score,
-    compute_model_agreement_score,
-    compute_expected_return_bands,
-    compute_tracking_error_budget,
-    compute_walk_forward_metrics,
-    compute_regime_probabilities,
-    compute_dynamic_weight_caps,
-    compute_expected_drawdown_profile,
-    compute_model_drift_score,
-    benchmark_naive_portfolios,
-    compute_factor_risk_decomposition,
-)
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/contribution-plan", tags=["contribution"])
@@ -169,6 +153,22 @@ def run_contribution_plan(
     # ── Quant Analytics V2 ────────────────────────────────────────────────
     quant_analytics_v2: dict = {}
     try:
+        from app.services.quant_analytics import (  # lazy — keeps endpoint alive if module fails
+            compute_rebalancing_bands,
+            compute_net_alpha_after_costs,
+            compute_after_tax_drag,
+            compute_liquidity_score,
+            compute_model_agreement_score,
+            compute_expected_return_bands,
+            compute_tracking_error_budget,
+            compute_walk_forward_metrics,
+            compute_regime_probabilities,
+            compute_dynamic_weight_caps,
+            compute_expected_drawdown_profile,
+            compute_model_drift_score,
+            benchmark_naive_portfolios,
+            compute_factor_risk_decomposition,
+        )
         _hist = get_historical_multi(tickers, period="2y")
         _closes: dict[str, pd.Series] = {}
         for _t, _df in _hist.items():

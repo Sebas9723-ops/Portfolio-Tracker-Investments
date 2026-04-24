@@ -5,7 +5,7 @@ import {
   LayoutDashboard, PieChart, TrendingUp, Target, RefreshCw,
   Shield, Calendar, DollarSign, ArrowLeftRight, BarChart2,
   Activity, Eye, Newspaper, Globe, Grid, LineChart, Settings, LogOut,
-  Search, SlidersHorizontal, UserCircle, X, Brain,
+  Search, SlidersHorizontal, UserCircle, X,
 } from "lucide-react";
 import { useAuthStore } from "@/lib/store/authStore";
 import { useProfileStore, type InvestorProfile } from "@/lib/store/profileStore";
@@ -30,8 +30,7 @@ const NAV_GROUPS = [
     label: "Analysis",
     items: [
       { label: "Analytics",         href: "/analytics",         icon: TrendingUp },
-      { label: "Quant Analytics",   href: "/quant-analytics",   icon: Brain },
-      { label: "Risk",              href: "/risk",              icon: Shield },
+{ label: "Risk",              href: "/risk",              icon: Shield },
       { label: "Optimization",      href: "/optimization",      icon: Target },
     ],
   },
