@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  LayoutDashboard, PieChart, TrendingUp, Target, RefreshCw,
+  LayoutDashboard, PieChart, TrendingUp, RefreshCw,
   Shield, Calendar, DollarSign, ArrowLeftRight, BarChart2,
   Activity, Eye, Newspaper, Globe, Grid, LineChart, Settings, LogOut,
   Search, SlidersHorizontal, UserCircle, X, FlaskConical,
@@ -31,7 +31,6 @@ const NAV_GROUPS = [
     items: [
       { label: "Analytics",      href: "/analytics",       icon: TrendingUp },
       { label: "Risk",           href: "/risk",            icon: Shield },
-      { label: "Optimization",   href: "/optimization",    icon: Target },
       { label: "Quant Engine",   href: "/quant-analytics", icon: FlaskConical },
     ],
   },

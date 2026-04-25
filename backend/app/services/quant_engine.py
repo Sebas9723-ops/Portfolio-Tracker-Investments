@@ -15,7 +15,12 @@ import time
 import numpy as np
 import pandas as pd
 import yfinance as yf
-import cvxpy as cp
+try:
+    import cvxpy as cp
+    _CVXPY_OK = True
+except ImportError:
+    cp = None  # type: ignore
+    _CVXPY_OK = False
 from sklearn.covariance import LedoitWolf
 from hmmlearn import hmm
 
@@ -757,6 +762,8 @@ def _solve_robust_cvxpy(
 
     Returns weight array or None if infeasible/solver error.
     """
+    if not _CVXPY_OK:
+        return None
     try:
         return _solve_robust_cvxpy_inner(
             n, mu, cov, floors, caps, cur_w,
@@ -785,6 +792,8 @@ def _solve_robust_cvxpy_inner(
     max_turnover: float,
     lambda_mv: float = 3.0,
 ) -> Optional[np.ndarray]:
+    if not _CVXPY_OK:
+        return None
     w = cp.Variable(n, nonneg=True)
 
     # ── Cholesky decomposition for DCP-compliant portfolio vol ───────────────
