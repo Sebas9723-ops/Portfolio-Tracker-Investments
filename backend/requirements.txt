@@ -17,7 +17,7 @@ cachetools
 python-dotenv
 requests
 apscheduler
-# cvxpy removed — optional, fails to build on Python 3.14 (no wheel)
+cvxpy
 hmmlearn
 # ML pipeline — all optional, engine degrades gracefully if absent
 arch>=6.0
