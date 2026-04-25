@@ -230,12 +230,37 @@ def _send_telegram_report_all_users() -> None:
             if not bm_returns.empty:
                 bm_cum = float((1 + bm_returns).prod() - 1)
 
+            # AI analysis via Groq/Llama
+            ai_text = None
+            try:
+                from app.services.ai_analysis import generate_daily_analysis
+                ai_text = generate_daily_analysis(summary, ratios, base_currency)
+            except Exception as ai_exc:
+                log.warning("  AI analysis failed: %s", ai_exc)
+
+            # Alerts check
+            try:
+                from app.services.alerts_service import send_alerts_if_needed
+                snapshots_res = (
+                    db.table("portfolio_snapshots")
+                    .select("snapshot_date,total_value_base")
+                    .eq("user_id", user_id)
+                    .order("snapshot_date", desc=False)
+                    .limit(5)
+                    .execute()
+                )
+                snapshots = snapshots_res.data or []
+                send_alerts_if_needed(summary, ratios, snapshots, base_currency)
+            except Exception as alert_exc:
+                log.warning("  Alerts check failed: %s", alert_exc)
+
             ok = send_daily_report(
                 summary=summary,
                 metrics=ratios,
                 base_currency=base_currency,
                 benchmark_ticker=bm_ticker,
                 benchmark_cum=bm_cum,
+                ai_analysis=ai_text,
             )
             log.info("  %s %s… — Telegram report sent", "✓" if ok else "✗", user_id[:8])
 

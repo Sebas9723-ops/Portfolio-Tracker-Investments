@@ -155,6 +155,53 @@ def vol_regime_endpoint(
     return compute_vol_regime(portfolio_returns, window=window)
 
 
+@router.get("/equity-curve")
+def equity_curve(
+    period: str = Query(default="1y"),
+    user_id: str = Depends(get_user_id),
+):
+    """
+    Returns daily portfolio value history from portfolio_snapshots.
+    Used for the equity curve chart on the analytics page.
+    """
+    import pandas as pd
+    from datetime import date, timedelta
+
+    period_days = {"6m": 180, "1y": 365, "2y": 730, "3y": 1095, "all": 9999}
+    days = period_days.get(period, 365)
+    since = str(date.today() - timedelta(days=days))
+
+    db = get_admin_client()
+    res = (
+        db.table("portfolio_snapshots")
+        .select("snapshot_date,total_value_base,invested_base,base_currency")
+        .eq("user_id", user_id)
+        .gte("snapshot_date", since)
+        .order("snapshot_date", desc=False)
+        .execute()
+    )
+    rows = res.data or []
+    if not rows:
+        return {"series": [], "base_currency": "USD"}
+
+    base_currency = rows[0].get("base_currency", "USD")
+    series = []
+    for r in rows:
+        val = float(r.get("total_value_base") or 0)
+        inv = float(r.get("invested_base") or 0)
+        pnl = val - inv if inv > 0 else None
+        pnl_pct = (pnl / inv * 100) if inv > 0 and pnl is not None else None
+        series.append({
+            "date": r["snapshot_date"],
+            "value": round(val, 2),
+            "invested": round(inv, 2) if inv > 0 else None,
+            "pnl": round(pnl, 2) if pnl is not None else None,
+            "pnl_pct": round(pnl_pct, 2) if pnl_pct is not None else None,
+        })
+
+    return {"series": series, "base_currency": base_currency}
+
+
 @router.post("/backtest-weights")
 def backtest_weights(
     body: dict,

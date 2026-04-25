@@ -1,7 +1,7 @@
 "use client";
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchAnalytics, fetchRollingMetrics, fetchExtendedAnalytics, fetchVolRegime, fetchQuantAdvanced } from "@/lib/api/analytics";
+import { fetchAnalytics, fetchRollingMetrics, fetchExtendedAnalytics, fetchVolRegime, fetchQuantAdvanced, fetchEquityCurve } from "@/lib/api/analytics";
 import type {
   FactorRisk, TrackingErrorBudget, QuantRegime, NaiveBenchmarkRow, WalkForward,
 } from "@/lib/api/contribution";
@@ -68,6 +68,12 @@ export default function AnalyticsPage() {
     staleTime: 5 * 60 * 1000,
   });
 
+  const { data: equityCurve } = useQuery({
+    queryKey: ["equity-curve", period],
+    queryFn: () => fetchEquityCurve(period),
+    staleTime: 10 * 60 * 1000,
+  });
+
   const [qaEnabled, setQaEnabled] = useState(false);
   const { data: quantAdvancedRaw, isFetching: qaFetching, refetch: refetchQA } = useQuery({
     queryKey: ["quant-advanced", period, preferred_benchmark],
@@ -113,9 +119,9 @@ export default function AnalyticsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
         <h1 className="text-bloomberg-gold text-xs font-bold uppercase tracking-widest">Analytics</h1>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="flex gap-1">
             {PERIODS.map((p) => (
               <button
@@ -132,13 +138,70 @@ export default function AnalyticsPage() {
             disabled={qaFetching}
             className="bg-bloomberg-gold text-bloomberg-bg text-[10px] font-bold px-3 py-1 hover:opacity-90 disabled:opacity-50 uppercase tracking-wider"
           >
-            {qaFetching ? "COMPUTING…" : "QUANT ADVANCED"}
+            {qaFetching ? "COMPUTING…" : "QUANT ADV."}
           </button>
         </div>
       </div>
 
+      {/* ── Equity Curve ── */}
+      {equityCurve && equityCurve.series.length > 1 && (
+        <div className="bbg-card">
+          <p className="bbg-header">Portfolio Value History</p>
+          <div className="h-52 sm:h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={equityCurve.series} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e2530" />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fill: "#6b7280", fontSize: 9 }}
+                  tickFormatter={(d) => d.slice(5)}
+                  interval="preserveStartEnd"
+                  minTickGap={40}
+                />
+                <YAxis
+                  tick={{ fill: "#6b7280", fontSize: 9 }}
+                  tickFormatter={(v) => `${equityCurve.base_currency} ${(v / 1000).toFixed(1)}k`}
+                  width={60}
+                />
+                <Tooltip
+                  contentStyle={{ background: "#0b0f14", border: "1px solid #1e2530", fontSize: 11 }}
+                  formatter={(v: number, name: string) => [
+                    `${equityCurve.base_currency} ${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                    name === "value" ? "Portfolio Value" : "Invested Capital",
+                  ]}
+                  labelFormatter={(d) => `Date: ${d}`}
+                />
+                <Legend wrapperStyle={{ fontSize: 10, color: "#6b7280" }} />
+                {/* Invested capital as area baseline */}
+                <Area type="monotone" dataKey="invested" fill="#1e2530" stroke="#374151" strokeWidth={1} fillOpacity={0.6} name="invested" dot={false} />
+                {/* Portfolio value line */}
+                <Line type="monotone" dataKey="value" stroke="#f3a712" strokeWidth={2} dot={false} name="value" />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+          {/* PnL summary strip */}
+          {(() => {
+            const last = equityCurve.series[equityCurve.series.length - 1];
+            const first = equityCurve.series[0];
+            if (!last || !first) return null;
+            const gain = last.value - first.value;
+            const gainPct = first.value > 0 ? (gain / first.value) * 100 : 0;
+            const pnl = last.pnl;
+            const pnlPct = last.pnl_pct;
+            return (
+              <div className="flex flex-wrap gap-4 mt-3 text-[10px]">
+                <span className="text-bloomberg-muted">Start: <span className="text-bloomberg-text font-medium">{equityCurve.base_currency} {first.value.toLocaleString()}</span></span>
+                <span className="text-bloomberg-muted">Current: <span className="text-bloomberg-text font-medium">{equityCurve.base_currency} {last.value.toLocaleString()}</span></span>
+                <span className="text-bloomberg-muted">Period gain: <span className={gain >= 0 ? "text-green-400 font-medium" : "text-red-400 font-medium"}>{gain >= 0 ? "+" : ""}{gain.toFixed(2)} ({gainPct >= 0 ? "+" : ""}{gainPct.toFixed(2)}%)</span></span>
+                {pnl != null && <span className="text-bloomberg-muted">Unrealized P&L: <span className={pnl >= 0 ? "text-green-400 font-medium" : "text-red-400 font-medium"}>{pnl >= 0 ? "+" : ""}{pnl.toFixed(2)} ({pnlPct != null ? `${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(2)}%` : ""})</span></span>}
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
       {/* ── Core Metrics ── */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 sm:gap-3">
         {[
           { label: "TWR",         value: metrics.twr != null ? fmtPct(metrics.twr) : "—",                                  delta: metrics.twr != null ? ((metrics.twr ?? 0) >= 0 ? "increase" : "decrease") : undefined },
           { label: "Ann. Return", value: metrics.annualized_return != null ? fmtPct(metrics.annualized_return) : "—",       delta: metrics.annualized_return != null ? ((metrics.annualized_return ?? 0) >= 0 ? "increase" : "decrease") : undefined },
@@ -151,7 +214,7 @@ export default function AnalyticsPage() {
           { label: "Calmar",      value: metrics.calmar?.toFixed(3) ?? "—",                                                 delta: undefined },
           { label: "Info Ratio",  value: metrics.information_ratio?.toFixed(3) ?? "—",                                      delta: undefined },
         ].map(({ label, value, delta, sub }) => (
-          <Card key={label} className="p-3 shadow-card rounded-xl border-slate-200">
+          <Card key={label} className="p-2 sm:p-3 shadow-card rounded-xl border-slate-200">
             <Text className="text-[10px] uppercase tracking-widest text-slate-500">{label}</Text>
             <Metric className="text-base font-semibold text-slate-900 mt-0.5">{value}</Metric>
             {delta && <BadgeDelta deltaType={delta as "increase" | "decrease"} className="mt-1" size="xs" />}

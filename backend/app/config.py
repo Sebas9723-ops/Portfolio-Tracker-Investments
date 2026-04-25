@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
+    GROQ_API_KEY: str = ""
 
     @property
     def origins_list(self) -> list[str]:

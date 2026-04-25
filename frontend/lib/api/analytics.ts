@@ -92,6 +92,14 @@ export const fetchQuantAdvanced = (body: {
     .post<import("./contribution").QuantAnalyticsV2>("/api/analytics/quant-advanced", body, { timeout: 300_000 })
     .then((r) => r.data);
 
+export const fetchEquityCurve = (period = "1y") =>
+  apiClient
+    .get<{
+      series: { date: string; value: number; invested: number | null; pnl: number | null; pnl_pct: number | null }[];
+      base_currency: string;
+    }>("/api/analytics/equity-curve", { params: { period } })
+    .then((r) => r.data);
+
 export const fetchBlackLitterman = (body: {
   views: Record<string, number>;
   tau?: number;

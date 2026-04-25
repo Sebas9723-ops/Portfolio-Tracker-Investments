@@ -146,6 +146,7 @@ def send_daily_report(
     base_currency: str = "USD",
     benchmark_ticker: str = "VOO",
     benchmark_cum: Optional[float] = None,
+    ai_analysis: Optional[str] = None,
     bot_token: str = "",
     chat_id: str = "",
 ) -> bool:
@@ -157,6 +158,13 @@ def send_daily_report(
         return False
 
     messages = build_snapshot_messages(summary, metrics, base_currency, benchmark_ticker, benchmark_cum)
+
+    # Append AI analysis as a separate message (respects 4096-char limit)
+    if ai_analysis:
+        # Escape HTML special chars in AI text (AI may output < > &)
+        safe = ai_analysis.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        messages.append(f"<b>🤖 ANÁLISIS AI — Llama 3.3</b>\n\n{safe}")
+
     ok = True
     for text in messages:
         ok = ok and _post(token, "sendMessage", {
