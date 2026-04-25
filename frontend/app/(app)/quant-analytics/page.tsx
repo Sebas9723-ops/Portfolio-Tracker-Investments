@@ -3,10 +3,169 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchQuantAdvanced } from "@/lib/api/analytics";
 import { fmtCurrency } from "@/lib/formatters";
-import type { BLExplanationRow } from "@/lib/api/contribution";
+import type { BLExplanationRow, QuantAnalyticsV2 } from "@/lib/api/contribution";
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Legend,
+} from "recharts";
 
 const pct = (v: number | null | undefined, d = 1) =>
   v == null ? "—" : `${(v * 100).toFixed(d)}%`;
+
+// ── Executive Health Score ────────────────────────────────────────────────────
+type ModuleStatus = { label: string; status: "pass" | "warn" | "fail" | "na"; detail: string };
+
+function computeHealthScore(qa: QuantAnalyticsV2): { score: number; modules: ModuleStatus[]; signals: string[] } {
+  const modules: ModuleStatus[] = [];
+  const signals: string[] = [];
+
+  // 1. Band Rebalancing
+  if (qa.rebalancing_bands) {
+    const urgent = qa.rebalancing_bands.trades.filter((t) => Math.abs(t.drift_w_pct) > 5).length;
+    const s = urgent === 0 ? "pass" : urgent <= 2 ? "warn" : "fail";
+    modules.push({ label: "Rebalancing", status: s, detail: `${qa.rebalancing_bands.trades.length} trades, turnover ${pct(qa.rebalancing_bands.turnover)}` });
+    if (urgent > 0) signals.push(`${urgent} position(s) with drift >5% — rebalancing recommended.`);
+  } else modules.push({ label: "Rebalancing", status: "na", detail: "No data" });
+
+  // 2. Net Alpha
+  if (qa.net_alpha) {
+    const noEdge = qa.net_alpha.filter((r) => !r.has_edge).length;
+    const s = noEdge === 0 ? "pass" : noEdge <= qa.net_alpha.length / 2 ? "warn" : "fail";
+    modules.push({ label: "Net Alpha", status: s, detail: `${qa.net_alpha.length - noEdge}/${qa.net_alpha.length} positions with net edge` });
+    if (noEdge > 0) signals.push(`${noEdge} position(s) have negative net alpha after transaction costs.`);
+  } else modules.push({ label: "Net Alpha", status: "na", detail: "No data" });
+
+  // 3. Tax Drag
+  if (qa.after_tax_drag) {
+    const drag = qa.after_tax_drag.tax_drag;
+    const s = drag < 0.01 ? "pass" : drag < 0.03 ? "warn" : "fail";
+    modules.push({ label: "Tax Drag", status: s, detail: `Drag: ${pct(drag)} · Liability: ${fmtCurrency(qa.after_tax_drag.total_tax_liability)}` });
+    if (drag >= 0.02) signals.push(`Tax drag of ${pct(drag)} — consider tax-loss harvesting.`);
+  } else modules.push({ label: "Tax Drag", status: "na", detail: "No data" });
+
+  // 4. Liquidity
+  if (qa.liquidity) {
+    const flagged = qa.liquidity.filter((r) => r.flag !== "OK").length;
+    const s = flagged === 0 ? "pass" : flagged === 1 ? "warn" : "fail";
+    modules.push({ label: "Liquidity", status: s, detail: `${flagged} position(s) flagged` });
+    if (flagged > 0) signals.push(`${flagged} position(s) have liquidity constraints — review before large trades.`);
+  } else modules.push({ label: "Liquidity", status: "na", detail: "No data" });
+
+  // 5. Model Agreement
+  if (qa.model_agreement) {
+    const score = qa.model_agreement.agreement_score;
+    const s = score >= 0.7 ? "pass" : score >= 0.4 ? "warn" : "fail";
+    modules.push({ label: "Model Agreement", status: s, detail: `Score: ${score.toFixed(2)} across ${qa.model_agreement.n_models} models` });
+    if (score < 0.5) signals.push(`Low model agreement (${score.toFixed(2)}) — high uncertainty in optimal allocation.`);
+  } else modules.push({ label: "Model Agmt", status: "na", detail: "No data" });
+
+  // 6. Return Bands
+  if (qa.return_bands) {
+    const wide = qa.return_bands.filter((r) => !r.reliable).length;
+    const s = wide === 0 ? "pass" : wide <= 2 ? "warn" : "fail";
+    modules.push({ label: "Return Bands", status: s, detail: `${qa.return_bands.length - wide}/${qa.return_bands.length} reliable estimates` });
+  } else modules.push({ label: "Return Bands", status: "na", detail: "No data" });
+
+  // 7. BL Explanation
+  const blHasViews = qa.bl_explanation && qa.bl_explanation.some((r) => r.has_view);
+  modules.push({ label: "BL Views", status: blHasViews ? "pass" : "warn", detail: blHasViews ? "Views active" : "No views configured" });
+
+  // 8. TE Budget
+  if (qa.tracking_error_budget) {
+    const within = qa.tracking_error_budget.within_budget;
+    modules.push({ label: "TE Budget", status: within ? "pass" : "fail", detail: `${qa.tracking_error_budget.budget_used_pct.toFixed(1)}% of budget used` });
+    if (!within) signals.push(`Tracking error exceeds budget (${qa.tracking_error_budget.budget_used_pct.toFixed(0)}% used).`);
+  } else modules.push({ label: "TE Budget", status: "na", detail: "No data" });
+
+  // 9. Walk-Forward
+  if (qa.walk_forward) {
+    const edge = qa.walk_forward.consistent_edge;
+    const sharpe = qa.walk_forward.oos_mean_sharpe;
+    const s = edge && sharpe >= 0.5 ? "pass" : !edge ? "fail" : "warn";
+    modules.push({ label: "Walk-Forward", status: s, detail: `OOS Sharpe: ${sharpe.toFixed(2)} · Edge: ${edge ? "YES" : "NO"}` });
+    if (!edge) signals.push(`No consistent out-of-sample edge detected — strategy may be overfitted.`);
+  } else modules.push({ label: "Walk-Forward", status: "na", detail: "No data" });
+
+  // 10. Regime
+  if (qa.regime) {
+    const reg = qa.regime.current_regime;
+    const s = reg === "low" || reg === "normal" ? "pass" : reg === "high" ? "warn" : "fail";
+    modules.push({ label: "Regime", status: s, detail: `${reg?.toUpperCase()} vol · ${(qa.regime.regime_confidence * 100).toFixed(0)}% confidence` });
+    if (reg === "crisis") signals.push("Portfolio in CRISIS regime — execution hold recommended.");
+    if (qa.regime.recent_flip) signals.push("Recent regime flip detected — increase monitoring frequency.");
+  } else modules.push({ label: "Regime", status: "na", detail: "No data" });
+
+  // 11. Dynamic Caps
+  if (qa.dynamic_caps) {
+    const topHeavy = qa.dynamic_caps.top_heavy_tickers.length;
+    const s = topHeavy === 0 ? "pass" : topHeavy === 1 ? "warn" : "fail";
+    modules.push({ label: "Dynamic Caps", status: s, detail: `${topHeavy} top-heavy ticker(s), concentration ${(qa.dynamic_caps.top_n_concentration * 100).toFixed(1)}%` });
+    if (topHeavy > 0) signals.push(`Concentration risk: ${qa.dynamic_caps.top_heavy_tickers.join(", ")} exceed dynamic weight caps.`);
+  } else modules.push({ label: "Dyn. Caps", status: "na", detail: "No data" });
+
+  // 12. Drawdown Profile
+  if (qa.drawdown_profile) {
+    const horizons = Object.values(qa.drawdown_profile);
+    const worst = Math.max(...horizons.map((h) => h.prob_drawdown_gt_20pct));
+    const s = worst < 0.25 ? "pass" : worst < 0.5 ? "warn" : "fail";
+    modules.push({ label: "Drawdown", status: s, detail: `Max P(DD>20%): ${(worst * 100).toFixed(0)}%` });
+    if (worst >= 0.4) signals.push(`High probability of >20% drawdown in some horizon — review risk tolerance.`);
+  } else modules.push({ label: "Drawdown", status: "na", detail: "No data" });
+
+  // 13. Model Drift
+  if (qa.model_drift) {
+    const s = qa.model_drift.engine_healthy ? "pass" : "fail";
+    modules.push({ label: "Model Drift", status: s, detail: qa.model_drift.engine_healthy ? "Engine stable" : `${qa.model_drift.n_alerts} alert(s)` });
+    if (!qa.model_drift.engine_healthy) signals.push(`Model drift detected in ${qa.model_drift.n_alerts} asset(s) — parameters may be stale.`);
+  } else modules.push({ label: "Model Drift", status: "na", detail: "No data" });
+
+  // 14. Naive Benchmarks
+  if (qa.naive_benchmarks) {
+    const portfolio = qa.naive_benchmarks.find((r) => r.model === "Your Portfolio");
+    const others = qa.naive_benchmarks.filter((r) => r.model !== "Your Portfolio");
+    const beating = others.filter((r) => (portfolio?.sharpe ?? 0) > r.sharpe).length;
+    const s = beating >= others.length * 0.6 ? "pass" : beating >= others.length * 0.3 ? "warn" : "fail";
+    modules.push({ label: "vs Naive", status: s, detail: `Beats ${beating}/${others.length} naive benchmarks by Sharpe` });
+    if (beating < others.length * 0.3) signals.push("Portfolio underperforms most naive benchmarks — consider simplifying allocation.");
+  } else modules.push({ label: "vs Naive", status: "na", detail: "No data" });
+
+  // 15. Factor Risk
+  if (qa.factor_risk) {
+    const topContrib = Math.max(...Object.values(qa.factor_risk.per_asset).map((a) => a.vol_contribution_pct));
+    const s = topContrib < 25 ? "pass" : topContrib < 40 ? "warn" : "fail";
+    modules.push({ label: "Factor Risk", status: s, detail: `Max single-asset vol contribution: ${topContrib.toFixed(1)}%` });
+    if (topContrib >= 35) signals.push(`Single asset drives ${topContrib.toFixed(0)}% of portfolio volatility — concentration risk.`);
+  } else modules.push({ label: "Factor Risk", status: "na", detail: "No data" });
+
+  const scored = modules.filter((m) => m.status !== "na");
+  const passScore = scored.filter((m) => m.status === "pass").length;
+  const warnScore = scored.filter((m) => m.status === "warn").length * 0.5;
+  const score = scored.length > 0 ? Math.round(((passScore + warnScore) / scored.length) * 100) : 0;
+
+  return { score, modules, signals };
+}
+
+function StatusBadge({ status }: { status: ModuleStatus["status"] }) {
+  const cls = {
+    pass: "bg-green-900/40 text-green-400 border-green-800",
+    warn: "bg-yellow-900/30 text-yellow-400 border-yellow-800",
+    fail: "bg-red-900/30 text-red-400 border-red-800",
+    na:   "bg-bloomberg-border/20 text-bloomberg-muted border-bloomberg-border/40",
+  }[status];
+  const icon = { pass: "✓", warn: "⚠", fail: "✕", na: "—" }[status];
+  return <span className={`text-[8px] font-bold px-1 py-0.5 border rounded ${cls}`}>{icon}</span>;
+}
+
+function ScoreRing({ score }: { score: number }) {
+  const color = score >= 70 ? "#22c55e" : score >= 45 ? "#f3a712" : "#ef4444";
+  const label = score >= 70 ? "HEALTHY" : score >= 45 ? "CAUTION" : "AT RISK";
+  return (
+    <div className="flex flex-col items-center justify-center w-24 h-24 rounded-full border-4" style={{ borderColor: color }}>
+      <span className="text-2xl font-bold" style={{ color }}>{score}</span>
+      <span className="text-[8px] font-bold" style={{ color }}>{label}</span>
+    </div>
+  );
+}
 
 const MODULES = [
   "Band Rebalancing", "Net Alpha", "Tax Drag", "Liquidity", "Model Agreement",
@@ -78,8 +237,54 @@ export default function QuantAnalyticsPage() {
         </div>
       )}
 
-      {qa && (
+      {qa && (() => {
+        const { score, modules, signals } = computeHealthScore(qa);
+        return (
         <>
+          {/* ── Executive Intelligence Summary ── */}
+          <div className="bbg-card">
+            <p className="bbg-header">Portfolio Intelligence Summary</p>
+            <div className="flex flex-col md:flex-row gap-6 items-start">
+              {/* Score ring */}
+              <div className="flex flex-col items-center gap-2 shrink-0">
+                <ScoreRing score={score} />
+                <p className="text-bloomberg-muted text-[9px] text-center">Health Score<br />(15 modules)</p>
+              </div>
+
+              {/* Module grid */}
+              <div className="flex-1">
+                <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5 mb-3">
+                  {modules.map((m) => (
+                    <div key={m.label} className="border border-bloomberg-border/50 p-1.5 text-center" title={m.detail}>
+                      <div className="flex items-center justify-center gap-1 mb-0.5">
+                        <StatusBadge status={m.status} />
+                      </div>
+                      <p className="text-bloomberg-muted text-[8px] leading-tight">{m.label}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Key signals */}
+                {signals.length > 0 && (
+                  <div className="space-y-1">
+                    <p className="text-bloomberg-muted text-[9px] uppercase tracking-widest">Key Signals</p>
+                    {signals.map((s, i) => (
+                      <div key={i} className="flex items-start gap-2 text-[10px]">
+                        <span className="text-bloomberg-gold shrink-0 mt-0.5">›</span>
+                        <span className="text-bloomberg-text">{s}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {signals.length === 0 && (
+                  <div className="text-green-400 text-[10px] flex items-center gap-1.5">
+                    <span>✓</span> All modules clear — portfolio within normal parameters.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
           {/* ── 1. Band Rebalancing ── */}
           {qa.rebalancing_bands && qa.rebalancing_bands.trades.length > 0 && (
             <div className="bbg-card">
@@ -652,38 +857,53 @@ export default function QuantAnalyticsPage() {
           {qa.naive_benchmarks && qa.naive_benchmarks.length > 0 && (
             <div className="bbg-card">
               <p className="bbg-header">14 · Naive Portfolio Benchmarks</p>
-              <table className="bbg-table text-[10px]">
-                <thead>
-                  <tr>
-                    <th>Model</th>
-                    <th className="text-right">Ann. Return</th>
-                    <th className="text-right">Volatility</th>
-                    <th className="text-right">Sharpe</th>
-                    <th className="text-right">Cum. Return</th>
-                    <th className="text-right">Max DD</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {qa.naive_benchmarks.map((row) => (
-                    <tr key={row.model} className={row.model === "Your Portfolio" ? "border-t-2 border-bloomberg-gold" : ""}>
-                      <td className={row.model === "Your Portfolio" ? "text-bloomberg-gold font-bold" : "text-bloomberg-text"}>
-                        {row.model}
-                      </td>
-                      <td className={`text-right ${row.ann_return >= 0 ? "text-green-400" : "text-red-400"}`}>
-                        {pct(row.ann_return)}
-                      </td>
-                      <td className="text-right text-bloomberg-muted">{pct(row.volatility)}</td>
-                      <td className={`text-right font-medium ${row.sharpe >= 1 ? "text-green-400" : row.sharpe >= 0 ? "text-bloomberg-gold" : "text-red-400"}`}>
-                        {row.sharpe.toFixed(3)}
-                      </td>
-                      <td className={`text-right ${row.cum_return >= 0 ? "text-green-400" : "text-red-400"}`}>
-                        {pct(row.cum_return)}
-                      </td>
-                      <td className="text-right text-red-400">{pct(row.max_dd)}</td>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <table className="bbg-table text-[10px]">
+                  <thead>
+                    <tr>
+                      <th>Model</th>
+                      <th className="text-right">Sharpe</th>
+                      <th className="text-right">Ann. Return</th>
+                      <th className="text-right">Max DD</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {qa.naive_benchmarks.map((row) => (
+                      <tr key={row.model} className={row.model === "Your Portfolio" ? "border-t border-bloomberg-gold" : ""}>
+                        <td className={row.model === "Your Portfolio" ? "text-bloomberg-gold font-bold" : "text-bloomberg-text"}>
+                          {row.model}
+                        </td>
+                        <td className={`text-right font-medium ${row.sharpe >= 1 ? "text-green-400" : row.sharpe >= 0 ? "text-bloomberg-gold" : "text-red-400"}`}>
+                          {row.sharpe.toFixed(3)}
+                        </td>
+                        <td className={`text-right ${row.ann_return >= 0 ? "text-green-400" : "text-red-400"}`}>
+                          {pct(row.ann_return)}
+                        </td>
+                        <td className="text-right text-red-400">{pct(row.max_dd)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div>
+                  <p className="text-bloomberg-muted text-[9px] mb-1">Sharpe Ratio Comparison</p>
+                  <ResponsiveContainer width="100%" height={160}>
+                    <BarChart
+                      data={[...qa.naive_benchmarks].sort((a, b) => b.sharpe - a.sharpe)}
+                      layout="vertical"
+                      margin={{ left: 0, right: 8, top: 0, bottom: 0 }}
+                    >
+                      <XAxis type="number" tick={{ fontSize: 8 }} tickLine={false} />
+                      <YAxis dataKey="model" type="category" tick={{ fontSize: 8 }} width={90} tickLine={false} />
+                      <Tooltip formatter={(v: number) => v.toFixed(3)} contentStyle={{ fontSize: 10, background: "#111820", border: "1px solid #1e2535" }} />
+                      <Bar dataKey="sharpe" radius={[0, 2, 2, 0]}
+                        fill="#f3a712"
+                        label={false}
+                        isAnimationActive={false}
+                      />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
             </div>
           )}
 
@@ -729,7 +949,8 @@ export default function QuantAnalyticsPage() {
             </div>
           )}
         </>
-      )}
+        );
+      })()}
     </div>
   );
 }

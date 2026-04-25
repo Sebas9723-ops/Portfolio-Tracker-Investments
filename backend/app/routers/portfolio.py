@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
 from app.auth.dependencies import get_user_id
 from app.db.supabase_client import get_admin_client
@@ -732,6 +732,159 @@ def get_dividend_forecast(user_id: str = Depends(get_user_id)):
         "monthly": round(total_annual / 12, 2),
         "base_currency": base_currency,
     }
+
+
+@router.get("/report.pdf")
+def download_report(
+    period: str = Query(default="1y"),
+    user_id: str = Depends(get_user_id),
+):
+    """Generate and download a PDF portfolio report."""
+    import io
+    from app.services.pdf_service import generate_portfolio_report
+    from app.services.market_data import get_historical_multi, get_risk_free_rate
+    from app.compute.returns import build_portfolio_returns, compute_twr
+    from app.compute.risk import compute_extended_ratios
+
+    db = get_admin_client()
+    settings = _get_settings_for_user(user_id)
+    base_currency = settings.get("base_currency", "USD")
+    bm_ticker = settings.get("preferred_benchmark", "VOO")
+    rfr = float(settings.get("risk_free_rate") or get_risk_free_rate())
+
+    pos_res = db.table("positions").select("*").eq("user_id", user_id).execute()
+    positions = pos_res.data or []
+    tx_res = db.table("transactions").select("*").eq("user_id", user_id).execute()
+    transactions = tx_res.data or []
+    tickers = [p["ticker"] for p in positions if float(p.get("shares", 0)) > 0]
+
+    quotes = get_quotes(tickers) if tickers else {}
+    exchange_currencies = [get_native_currency(t) for t in tickers]
+    pos_currencies = [p.get("currency") or get_native_currency(p["ticker"]) for p in positions]
+    currencies = list(set(exchange_currencies + pos_currencies))
+    fx_rates = get_fx_rates(currencies, base=base_currency) if currencies else {}
+    summary = build_portfolio(positions, quotes, fx_rates, base_currency, transactions)
+
+    # Compute analytics metrics
+    metrics: dict = {"twr": 0.0}
+    try:
+        import pandas as pd
+        all_tickers = list(set(tickers + [bm_ticker]))
+        hist = get_historical_multi(all_tickers, period=period)
+        weights = {r.ticker: r.weight / 100 for r in summary.rows}
+        portfolio_returns = build_portfolio_returns(
+            {t: hist[t] for t in tickers if t in hist},
+            weights,
+        )
+        bm_hist = hist.get(bm_ticker)
+        bm_returns = (
+            bm_hist[bm_hist.columns[0]].pct_change().dropna()
+            if bm_hist is not None and not bm_hist.empty else pd.Series(dtype=float)
+        )
+        ratios = compute_extended_ratios(portfolio_returns, bm_returns, rfr)
+        twr = compute_twr(portfolio_returns)
+        metrics = {**ratios, "twr": twr * 100, "benchmark_ticker": bm_ticker}
+    except Exception:
+        pass
+
+    pdf_bytes = generate_portfolio_report(summary, metrics, base_currency, bm_ticker)
+    filename = f"portfolio_report_{date.today()}.pdf"
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@router.post("/import/positions")
+async def import_positions_csv(
+    file: UploadFile = File(...),
+    mode: str = Query(default="upsert", description="upsert or skip"),
+    user_id: str = Depends(get_user_id),
+):
+    """
+    Bulk-import positions from CSV.
+    Required columns: ticker, shares
+    Optional columns: avg_cost_native, currency, name
+    Returns {imported, skipped, errors}
+    """
+    import csv, io
+
+    content = await file.read()
+    text = content.decode("utf-8-sig").strip()
+    reader = csv.DictReader(io.StringIO(text))
+
+    required = {"ticker", "shares"}
+    if not reader.fieldnames or not required.issubset({f.strip().lower() for f in reader.fieldnames}):
+        raise HTTPException(
+            status_code=422,
+            detail=f"CSV must contain columns: {', '.join(required)}. Got: {reader.fieldnames}",
+        )
+
+    db = get_admin_client()
+    imported = 0
+    skipped = 0
+    errors: list[dict] = []
+
+    for i, raw_row in enumerate(reader, start=2):
+        row = {k.strip().lower(): v.strip() for k, v in raw_row.items() if k}
+        ticker = (row.get("ticker") or "").upper().strip()
+        shares_str = row.get("shares", "")
+
+        if not ticker:
+            errors.append({"row": i, "error": "Missing ticker"})
+            continue
+        try:
+            shares = float(shares_str)
+            if shares < 0:
+                raise ValueError("negative shares")
+        except (ValueError, TypeError):
+            errors.append({"row": i, "ticker": ticker, "error": f"Invalid shares: {shares_str!r}"})
+            continue
+
+        avg_cost = None
+        avg_str = row.get("avg_cost_native", "")
+        if avg_str:
+            try:
+                avg_cost = float(avg_str)
+            except ValueError:
+                errors.append({"row": i, "ticker": ticker, "error": f"Invalid avg_cost_native: {avg_str!r}"})
+                continue
+
+        currency = row.get("currency", "").upper() or get_native_currency(ticker)
+        name = row.get("name", "") or ticker
+
+        record: dict = {
+            "user_id": user_id,
+            "ticker": ticker,
+            "shares": shares,
+            "currency": currency,
+            "name": name,
+        }
+        if avg_cost is not None:
+            record["avg_cost_native"] = avg_cost
+
+        try:
+            if mode == "skip":
+                existing = (
+                    db.table("positions")
+                    .select("ticker")
+                    .eq("user_id", user_id)
+                    .eq("ticker", ticker)
+                    .maybe_single()
+                    .execute()
+                )
+                if existing.data:
+                    skipped += 1
+                    continue
+                db.table("positions").insert(record).execute()
+            else:
+                db.table("positions").upsert(record, on_conflict="user_id,ticker").execute()
+            imported += 1
+        except Exception as exc:
+            errors.append({"row": i, "ticker": ticker, "error": str(exc)})
+
+    return {"imported": imported, "skipped": skipped, "errors": errors, "total_rows": imported + skipped + len(errors)}
 
 
 @router.get("/export/positions.csv")

@@ -25,3 +25,4 @@ pandas-datareader>=0.10
 statsmodels>=0.14
 xgboost>=2.0
 groq
+reportlab

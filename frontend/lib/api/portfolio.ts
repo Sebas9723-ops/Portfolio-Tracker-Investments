@@ -43,6 +43,21 @@ export const fetchDividendForecast = () =>
 export const exportPositionsCsv = () =>
   apiClient.get("/api/portfolio/export/positions.csv", { responseType: "blob" }).then((r) => r.data);
 
+export const downloadReport = (period = "1y") =>
+  apiClient.get("/api/portfolio/report.pdf", { params: { period }, responseType: "blob" }).then((r) => r.data);
+
+export const importPositionsCsv = (file: File, mode: "upsert" | "skip" = "upsert") => {
+  const fd = new FormData();
+  fd.append("file", file);
+  return apiClient
+    .post<{ imported: number; skipped: number; errors: { row: number; ticker?: string; error: string }[]; total_rows: number }>(
+      `/api/portfolio/import/positions?mode=${mode}`,
+      fd,
+      { headers: { "Content-Type": "multipart/form-data" } }
+    )
+    .then((r) => r.data);
+};
+
 export const saveCapitalSnapshot = () =>
   apiClient.post<{ snapshot_date: string; invested_base: number }>("/api/portfolio/capital-snapshot").then((r) => r.data);
 

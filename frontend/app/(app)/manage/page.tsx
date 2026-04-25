@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { fetchPositions, upsertPosition, updatePosition, deletePosition, saveCapitalSnapshot, exportPositionsCsv } from "@/lib/api/portfolio";
+import { fetchPositions, upsertPosition, updatePosition, deletePosition, saveCapitalSnapshot, exportPositionsCsv, importPositionsCsv } from "@/lib/api/portfolio";
 import { fetchTransactions, createTransaction, fetchCash, upsertCash, deleteCash } from "@/lib/api/transactions";
 import { fmtCurrency, fmtDate } from "@/lib/formatters";
 import { Pencil, Trash2, Plus, Check, X, AlertCircle } from "lucide-react";
@@ -50,6 +50,31 @@ export default function ManagePage() {
   const [yieldForm, setYieldForm] = useState(initCashForm);
 
   const [saveStatus, setSaveStatus] = useState<Record<string, "ok" | "err">>({});
+
+  // CSV import state
+  const [csvImporting, setCsvImporting] = useState(false);
+  const [csvResult, setCsvResult] = useState<{ imported: number; skipped: number; errors: { row: number; ticker?: string; error: string }[] } | null>(null);
+
+  async function handleCsvImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setCsvImporting(true);
+    setCsvResult(null);
+    try {
+      const result = await importPositionsCsv(file, "upsert");
+      setCsvResult(result);
+      if (result.imported > 0) {
+        await saveCapitalSnapshot().catch(() => {});
+        qc.invalidateQueries({ queryKey: ["positions"] });
+        qc.invalidateQueries({ queryKey: ["portfolio"] });
+      }
+    } catch (err: any) {
+      setCsvResult({ imported: 0, skipped: 0, errors: [{ row: 0, error: err?.response?.data?.detail || "Upload failed" }] });
+    } finally {
+      setCsvImporting(false);
+      e.target.value = "";
+    }
+  }
 
   const updateMut = useMutation({
     mutationFn: ({ ticker, data }: { ticker: string; data: { shares?: number; avg_cost_native?: number; name?: string; currency?: string } }) =>
@@ -475,6 +500,51 @@ export default function ManagePage() {
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+      </div>
+
+      {/* ── CSV Bulk Import ── */}
+      <div className="bbg-card">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <p className="bbg-header mb-0">Bulk Import Positions</p>
+            <p className="text-bloomberg-muted text-[10px]">
+              Upload a CSV with columns: <span className="text-bloomberg-gold">ticker, shares</span> (optional: avg_cost_native, currency, name)
+            </p>
+          </div>
+          <label className={`flex items-center gap-1.5 text-[10px] border px-3 py-1.5 cursor-pointer transition-colors ${
+            csvImporting
+              ? "border-bloomberg-border text-bloomberg-muted opacity-50 pointer-events-none"
+              : "border-bloomberg-gold text-bloomberg-gold hover:bg-bloomberg-gold/10"
+          }`}>
+            {csvImporting ? "Importing…" : "↑ Upload CSV"}
+            <input type="file" accept=".csv,text/csv" className="hidden" onChange={handleCsvImport} disabled={csvImporting} />
+          </label>
+        </div>
+
+        {/* Template hint */}
+        <p className="text-bloomberg-muted text-[9px] mb-2 font-mono">
+          ticker,shares,avg_cost_native,currency,name<br />
+          VWCE.DE,14.534,142.46,EUR,Vanguard FTSE All-World<br />
+          QQQM,10,180.50,USD,Invesco NASDAQ 100
+        </p>
+
+        {/* Result */}
+        {csvResult && (
+          <div className={`border p-3 text-xs ${csvResult.errors.length === 0 ? "border-green-800 bg-green-900/20" : "border-bloomberg-gold bg-bloomberg-gold/5"}`}>
+            <div className="flex gap-4 mb-1">
+              <span className="text-green-400 font-bold">✓ {csvResult.imported} imported</span>
+              {csvResult.skipped > 0 && <span className="text-bloomberg-muted">{csvResult.skipped} skipped</span>}
+              {csvResult.errors.length > 0 && <span className="text-red-400">{csvResult.errors.length} error(s)</span>}
+            </div>
+            {csvResult.errors.length > 0 && (
+              <ul className="space-y-0.5 text-[10px]">
+                {csvResult.errors.map((e, i) => (
+                  <li key={i} className="text-red-400">Row {e.row}{e.ticker ? ` (${e.ticker})` : ""}: {e.error}</li>
+                ))}
+              </ul>
+            )}
           </div>
         )}
       </div>

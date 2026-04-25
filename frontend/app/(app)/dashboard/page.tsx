@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { usePortfolio, usePortfolioHistory } from "@/lib/hooks/usePortfolio";
 import { fetchTransactions } from "@/lib/api/transactions";
-import { backfillCapitalSnapshots, fetchRealizedPnl } from "@/lib/api/portfolio";
+import { backfillCapitalSnapshots, fetchRealizedPnl, downloadReport } from "@/lib/api/portfolio";
 import { fetchPortfolioBreakdown, fetchAnalytics } from "@/lib/api/analytics";
 import { updateSettings } from "@/lib/api/settings";
 import { fmtCurrency, fmtPct, fmtDate } from "@/lib/formatters";
@@ -14,7 +14,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   ComposedChart, Area, Line,
 } from "recharts";
-import { RefreshCw, TrendingUp, TrendingDown } from "lucide-react";
+import { RefreshCw, TrendingUp, TrendingDown, FileDown } from "lucide-react";
 import Link from "next/link";
 import type { PortfolioRow } from "@/lib/types";
 
@@ -191,6 +191,7 @@ export default function DashboardPage() {
   const [chartMode, setChartMode] = useState<"value" | "benchmark">("value");
   const [editingBasis, setEditingBasis] = useState(false);
   const [basisInput, setBasisInput] = useState("");
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [donutView, setDonutView] = useState<"weights" | "sectors" | "regions">("weights");
 
   const { data: portfolio, isLoading, isFetching } = usePortfolio();
@@ -367,7 +368,31 @@ export default function DashboardPage() {
             {fmtDate(portfolio.as_of)}{isFetching && " · refreshing…"}
           </p>
         </div>
-        {isFetching && <RefreshCw size={11} className="animate-spin text-bloomberg-muted" />}
+        <div className="flex items-center gap-2">
+          {isFetching && <RefreshCw size={11} className="animate-spin text-bloomberg-muted" />}
+          <button
+            onClick={async () => {
+              setDownloadingPdf(true);
+              try {
+                const blob = await downloadReport("1y");
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `portfolio_report_${new Date().toISOString().slice(0, 10)}.pdf`;
+                a.click();
+                URL.revokeObjectURL(url);
+              } finally {
+                setDownloadingPdf(false);
+              }
+            }}
+            disabled={downloadingPdf}
+            className="flex items-center gap-1 text-[10px] border border-bloomberg-border text-bloomberg-muted px-2 py-1 hover:text-bloomberg-gold hover:border-bloomberg-gold disabled:opacity-40 transition-colors"
+            title="Download PDF Report"
+          >
+            <FileDown size={11} />
+            {downloadingPdf ? "…" : "PDF"}
+          </button>
+        </div>
       </div>
 
       {/* Two-column layout */}
