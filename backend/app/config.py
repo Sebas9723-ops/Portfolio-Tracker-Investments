@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     JWT_SECRET: str
     ALLOWED_ORIGINS: str = "http://localhost:3000"
     ENVIRONMENT: str = "development"
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_CHAT_ID: str = ""
 
     @property
     def origins_list(self) -> list[str]:

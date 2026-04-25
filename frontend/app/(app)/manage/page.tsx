@@ -178,6 +178,52 @@ export default function ManagePage() {
     }
   }
 
+  // ── Broker reconciliation state ──────────────────────────────────────────
+  type ReconcileRow = { value: string; pnl_pct: string };
+  const [reconcile, setReconcile] = useState<Record<string, ReconcileRow>>({});
+  const [reconcileOpen, setReconcileOpen] = useState(false);
+  const [applyStatus, setApplyStatus] = useState<Record<string, "ok" | "err">>({});
+
+  function reconcileImpliedAvgCost(shares: number, value: string, pnl_pct: string): number | null {
+    const v = parseFloat(value);
+    const p = parseFloat(pnl_pct);
+    if (!v || isNaN(v) || isNaN(p) || shares <= 0) return null;
+    const invested = v / (1 + p / 100);
+    return invested / shares;
+  }
+
+  async function applyReconcile(pos: Position) {
+    const row = reconcile[pos.ticker];
+    if (!row) return;
+    const implied = reconcileImpliedAvgCost(pos.shares, row.value, row.pnl_pct);
+    if (implied == null || implied <= 0) return;
+    try {
+      await updateMut.mutateAsync({ ticker: pos.ticker, data: { avg_cost_native: parseFloat(implied.toFixed(4)) } });
+      setApplyStatus((s) => ({ ...s, [pos.ticker]: "ok" }));
+      setReconcile((r) => { const n = { ...r }; delete n[pos.ticker]; return n; });
+      setTimeout(() => setApplyStatus((s) => { const n = { ...s }; delete n[pos.ticker]; return n; }), 2500);
+    } catch {
+      setApplyStatus((s) => ({ ...s, [pos.ticker]: "err" }));
+    }
+  }
+
+  async function applyAllReconcile() {
+    const posMap = Object.fromEntries((positions ?? []).map((p: Position) => [p.ticker, p]));
+    for (const [ticker, row] of Object.entries(reconcile)) {
+      const pos = posMap[ticker];
+      if (!pos) continue;
+      const implied = reconcileImpliedAvgCost(pos.shares, row.value, row.pnl_pct);
+      if (implied == null || implied <= 0) continue;
+      try {
+        await updateMut.mutateAsync({ ticker, data: { avg_cost_native: parseFloat(implied.toFixed(4)) } });
+        setApplyStatus((s) => ({ ...s, [ticker]: "ok" }));
+      } catch {
+        setApplyStatus((s) => ({ ...s, [ticker]: "err" }));
+      }
+    }
+    setReconcile({});
+  }
+
   // Separate broker cash (no account_name) from external (has account_name)
   const brokerCash = (cash ?? []).filter((c) => !c.account_name);
   const externalCash = (cash ?? []).filter((c) => !!c.account_name);
@@ -416,7 +462,114 @@ export default function ManagePage() {
         )}
       </div>
 
-      {/* ── Section 2: Cash Balances — Broker / Portfolio ── */}
+      {/* ── Section 2: Broker Reconciliation ── */}
+      <div className="bbg-card">
+        <div className="flex items-center justify-between mb-1">
+          <div>
+            <p className="bbg-header mb-0">Broker Reconciliation</p>
+            <p className="text-bloomberg-muted text-[10px]">
+              Enter <span className="text-bloomberg-gold">Valor</span> and <span className="text-bloomberg-gold">Beneficio neto %</span> from XTB → auto-computes avg cost
+            </p>
+          </div>
+          <button
+            onClick={() => setReconcileOpen((v) => !v)}
+            className="text-[10px] text-bloomberg-muted border border-bloomberg-border px-2 py-1 hover:text-bloomberg-gold hover:border-bloomberg-gold"
+          >
+            {reconcileOpen ? "HIDE" : "SHOW"}
+          </button>
+        </div>
+
+        {reconcileOpen && (
+          <>
+            <div className="overflow-x-auto mt-3">
+              <table className="bbg-table">
+                <thead>
+                  <tr>
+                    <th>Ticker</th>
+                    <th className="text-right">Shares</th>
+                    <th className="text-right">Broker Value (USD)</th>
+                    <th className="text-right">Broker PnL %</th>
+                    <th className="text-right">→ Implied Avg Cost</th>
+                    <th className="text-right">Current Avg Cost</th>
+                    <th className="text-right">Δ</th>
+                    <th className="text-center">Apply</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(positions ?? []).map((pos: Position) => {
+                    const row = reconcile[pos.ticker] ?? { value: "", pnl_pct: "" };
+                    const implied = reconcileImpliedAvgCost(pos.shares, row.value, row.pnl_pct);
+                    const current = pos.avg_cost_native ?? null;
+                    const delta = implied != null && current != null ? ((implied - current) / current) * 100 : null;
+                    const status = applyStatus[pos.ticker];
+                    return (
+                      <tr key={pos.ticker}>
+                        <td className="text-bloomberg-gold font-medium">{pos.ticker}</td>
+                        <td className="text-right text-bloomberg-muted">{pos.shares.toFixed(4)}</td>
+                        <td className="text-right">
+                          <input
+                            type="number"
+                            step="any"
+                            placeholder="e.g. 152.78"
+                            value={row.value}
+                            onChange={(e) => setReconcile((r) => ({ ...r, [pos.ticker]: { ...row, value: e.target.value } }))}
+                            className="bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-0.5 text-xs w-28 text-right focus:outline-none focus:border-bloomberg-gold"
+                          />
+                        </td>
+                        <td className="text-right">
+                          <input
+                            type="number"
+                            step="any"
+                            placeholder="e.g. 8.68"
+                            value={row.pnl_pct}
+                            onChange={(e) => setReconcile((r) => ({ ...r, [pos.ticker]: { ...row, pnl_pct: e.target.value } }))}
+                            className="bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-0.5 text-xs w-24 text-right focus:outline-none focus:border-bloomberg-gold"
+                          />
+                        </td>
+                        <td className="text-right font-medium text-bloomberg-gold">
+                          {implied != null ? fmtCurrency(implied, pos.currency) : "—"}
+                        </td>
+                        <td className="text-right text-bloomberg-muted">
+                          {current != null ? fmtCurrency(current, pos.currency) : "—"}
+                        </td>
+                        <td className={`text-right text-xs font-medium ${delta == null ? "text-bloomberg-muted" : Math.abs(delta) < 0.5 ? "text-green-400" : "text-yellow-400"}`}>
+                          {delta != null ? `${delta > 0 ? "+" : ""}${delta.toFixed(1)}%` : "—"}
+                        </td>
+                        <td className="text-center">
+                          {status === "ok" ? (
+                            <Check size={13} className="text-green-400 mx-auto" />
+                          ) : status === "err" ? (
+                            <AlertCircle size={13} className="text-red-400 mx-auto" />
+                          ) : (
+                            <button
+                              onClick={() => applyReconcile(pos)}
+                              disabled={implied == null || updateMut.isPending}
+                              className="text-[10px] bg-bloomberg-gold text-bloomberg-bg font-bold px-2 py-0.5 disabled:opacity-30"
+                            >
+                              APPLY
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-3 flex justify-end">
+              <button
+                onClick={applyAllReconcile}
+                disabled={Object.keys(reconcile).length === 0 || updateMut.isPending}
+                className="text-[10px] bg-bloomberg-gold text-bloomberg-bg font-bold px-4 py-1 disabled:opacity-30"
+              >
+                APPLY ALL
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ── Section 3: Cash Balances — Broker / Portfolio ── */}
       <div className="bbg-card">
         <div className="flex items-center justify-between mb-3">
           <div>
@@ -501,7 +654,7 @@ export default function ManagePage() {
         )}
       </div>
 
-      {/* ── Section 3: External Cash — High Yield / Savings ── */}
+      {/* ── Section 4: External Cash — High Yield / Savings ── */}
       <div className="bbg-card">
         <div className="flex items-center justify-between mb-3">
           <div>
@@ -604,7 +757,7 @@ export default function ManagePage() {
         )}
       </div>
 
-      {/* ── Section 4: Audit Trail ── */}
+      {/* ── Section 5: Audit Trail ── */}
       <div className="bbg-card">
         <p className="bbg-header">Audit Trail — Position Adjustments</p>
         <p className="text-bloomberg-muted text-[10px] mb-3">
