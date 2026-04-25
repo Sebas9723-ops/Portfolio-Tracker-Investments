@@ -1,5 +1,6 @@
 "use client";
-import { useState } from "react";
+import { useState, useCallback } from "react";
+import dynamic from "next/dynamic";
 import { useQuery } from "@tanstack/react-query";
 import { fetchQuantAdvanced } from "@/lib/api/analytics";
 import { fmtCurrency } from "@/lib/formatters";
@@ -8,6 +9,11 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Legend,
 } from "recharts";
+
+const OptimizationPage = dynamic(
+  () => import("@/app/(app)/optimization/page"),
+  { ssr: false, loading: () => <div className="h-40 bg-bloomberg-border/30 animate-pulse rounded" /> }
+);
 
 const pct = (v: number | null | undefined, d = 1) =>
   v == null ? "—" : `${(v * 100).toFixed(d)}%`;
@@ -174,47 +180,91 @@ const MODULES = [
 ];
 
 export default function QuantAnalyticsPage() {
+  const [tab, setTab] = useState<"quant" | "optimization">("quant");
   const [period, setPeriod] = useState("2y");
-  const [enabled, setEnabled] = useState(false);
+  const [triggered, setTriggered] = useState(false);
 
-  const { data: qa, isFetching, refetch } = useQuery({
+  const { data: qa, isFetching, isError, error, refetch } = useQuery({
     queryKey: ["quant-advanced-full", period],
     queryFn: () =>
       fetchQuantAdvanced({ period, benchmark_ticker: "VOO", n_bootstrap: 500, n_dd_sims: 1000 }),
-    enabled,
+    enabled: triggered,
     staleTime: 10 * 60 * 1000,
+    retry: false,
   });
+
+  const handleRun = useCallback(() => {
+    if (!triggered) {
+      setTriggered(true);
+    } else {
+      refetch();
+    }
+  }, [triggered, refetch]);
 
   return (
     <div className="space-y-4">
-      {/* Header */}
+      {/* Header + tabs */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-bloomberg-gold text-xs font-bold uppercase tracking-widest">Quant Analytics Engine</h1>
+          <h1 className="text-bloomberg-gold text-xs font-bold uppercase tracking-widest">Quant & Optimization</h1>
           <p className="text-bloomberg-muted text-[10px] mt-0.5">
-            15 modules — execution · return attribution · risk · validation
+            15-module engine · efficient frontier · Black-Litterman · rebalancing
           </p>
         </div>
+      </div>
+
+      {/* Tab switcher */}
+      <div className="flex gap-1 border-b border-bloomberg-border">
+        {([["quant", "⚗ Quant Engine (15 modules)"], ["optimization", "◎ Optimization"]] as const).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            className={`text-[10px] px-4 py-2 font-semibold transition-colors border-b-2 -mb-px ${
+              tab === key
+                ? "border-bloomberg-gold text-bloomberg-gold"
+                : "border-transparent text-bloomberg-muted hover:text-bloomberg-text"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── OPTIMIZATION TAB ── */}
+      {tab === "optimization" && <OptimizationPage />}
+
+      {/* ── QUANT ENGINE TAB ── */}
+      {tab === "quant" && <>
+      <div className="flex items-center justify-between">
+        <p className="text-bloomberg-muted text-[10px]">15 modules — execution · return attribution · risk · validation</p>
         <div className="flex items-center gap-2">
           <select
             value={period}
-            onChange={(e) => setPeriod(e.target.value)}
+            onChange={(e) => { setPeriod(e.target.value); setTriggered(false); }}
             className="bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs"
           >
             {["1y", "2y", "3y", "5y"].map((p) => <option key={p}>{p}</option>)}
           </select>
           <button
-            onClick={() => { setEnabled(true); refetch(); }}
+            onClick={handleRun}
             disabled={isFetching}
             className="bg-bloomberg-gold text-bloomberg-bg text-[10px] font-bold px-5 py-1.5 hover:opacity-90 disabled:opacity-50 uppercase tracking-wider"
           >
-            {isFetching ? "COMPUTING…" : "RUN ALL 15 MODULES"}
+            {isFetching ? "COMPUTING…" : triggered ? "RE-RUN" : "RUN ALL 15 MODULES"}
           </button>
         </div>
       </div>
 
+      {/* Error state */}
+      {isError && (
+        <div className="bbg-card border border-red-800 bg-red-900/20">
+          <p className="text-red-400 text-xs font-bold mb-1">Error running quant engine</p>
+          <p className="text-red-400/70 text-[10px]">{(error as any)?.message || "Backend error — check that all dependencies are installed."}</p>
+        </div>
+      )}
+
       {/* Idle state — module list */}
-      {!qa && !isFetching && (
+      {!qa && !isFetching && !isError && (
         <div className="bbg-card">
           <p className="text-bloomberg-muted text-[10px] mb-3">
             Press <span className="text-bloomberg-gold font-semibold">RUN ALL 15 MODULES</span> to execute the full quant analytics pipeline against your live portfolio.
@@ -951,6 +1001,7 @@ export default function QuantAnalyticsPage() {
         </>
         );
       })()}
+      </>}
     </div>
   );
 }
