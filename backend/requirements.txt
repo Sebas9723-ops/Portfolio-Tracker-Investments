@@ -17,7 +17,7 @@ cachetools
 python-dotenv
 requests
 apscheduler
-cvxpy<1.5
+cvxpy
 hmmlearn
 # ML pipeline — all optional, engine degrades gracefully if absent
 arch>=6.0
