@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { usePortfolio, usePortfolioHistory } from "@/lib/hooks/usePortfolio";
 import { fetchTransactions } from "@/lib/api/transactions";
-import { backfillCapitalSnapshots } from "@/lib/api/portfolio";
+import { backfillCapitalSnapshots, fetchRealizedPnl } from "@/lib/api/portfolio";
 import { fetchPortfolioBreakdown, fetchAnalytics } from "@/lib/api/analytics";
 import { updateSettings } from "@/lib/api/settings";
 import { fmtCurrency, fmtPct, fmtDate } from "@/lib/formatters";
@@ -196,6 +196,7 @@ export default function DashboardPage() {
   const { data: portfolio, isLoading, isFetching } = usePortfolio();
   const { data: historyData, isLoading: historyLoading, refetch: refetchHistory } = usePortfolioHistory();
   const { data: transactions } = useQuery({ queryKey: ["transactions"], queryFn: fetchTransactions });
+  const { data: realizedPnl } = useQuery({ queryKey: ["realizedPnl"], queryFn: fetchRealizedPnl, staleTime: 5 * 60 * 1000 });
   const { data: breakdown } = useQuery({ queryKey: ["portfolioBreakdown"], queryFn: fetchPortfolioBreakdown, staleTime: 60 * 60 * 1000 });
   const { data: analyticsData } = useQuery({
     queryKey: ["analytics", "1y"],
@@ -345,6 +346,17 @@ export default function DashboardPage() {
   const winners = portfolio.rows.filter((r) => (r.unrealized_pnl ?? 0) >= 0).length;
   const losers = portfolio.rows.length - winners;
 
+  // Best/Worst performers
+  const sortedByPnlPct = portfolio.rows
+    .filter((r) => r.unrealized_pnl_pct != null)
+    .slice()
+    .sort((a, b) => (b.unrealized_pnl_pct ?? 0) - (a.unrealized_pnl_pct ?? 0));
+  const bestPerformer = sortedByPnlPct[0];
+  const worstPerformer = sortedByPnlPct[sortedByPnlPct.length - 1];
+
+  // Realized P&L total
+  const totalRealizedPnl = (realizedPnl ?? []).reduce((s, r) => s + r.realized_pnl, 0);
+
   return (
     <div className="space-y-4">
       {/* Top bar */}
@@ -465,6 +477,35 @@ export default function DashboardPage() {
               </div>
             )}
           </div>
+
+          {/* Best / Worst performer cards */}
+          {bestPerformer && worstPerformer && bestPerformer.ticker !== worstPerformer.ticker && (
+            <div className="grid grid-cols-2 gap-3">
+              {[
+                { label: "Best Performer", row: bestPerformer, good: true },
+                { label: "Worst Performer", row: worstPerformer, good: false },
+              ].map(({ label, row, good }) => (
+                <div key={label} className={`bbg-card border-l-2 ${good ? "border-l-green-400" : "border-l-red-400"}`}>
+                  <p className="text-bloomberg-muted text-[9px] uppercase tracking-widest mb-1">{label}</p>
+                  <div className="flex items-center gap-2">
+                    <TickerBadge ticker={row.ticker} />
+                    <div className="min-w-0">
+                      <p className="text-bloomberg-text text-xs font-bold">{row.ticker}</p>
+                      <p className="text-bloomberg-muted text-[10px] truncate max-w-[100px]">{row.name}</p>
+                    </div>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between">
+                    <span className={`text-sm font-bold ${good ? "text-green-400" : "text-red-400"}`}>
+                      {(row.unrealized_pnl_pct ?? 0) >= 0 ? "+" : ""}{(row.unrealized_pnl_pct ?? 0).toFixed(2)}%
+                    </span>
+                    <span className={`text-[10px] ${good ? "text-green-400" : "text-red-400"}`}>
+                      {(row.unrealized_pnl ?? 0) >= 0 ? "+" : ""}{fmtCurrency(row.unrealized_pnl ?? 0, ccy)}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Positions table */}
           <div className="bbg-card">
@@ -698,16 +739,9 @@ export default function DashboardPage() {
               <p className="text-bloomberg-muted text-[10px] uppercase tracking-widest mb-2">Performance</p>
               <div className="space-y-1.5">
                 {[
-                  {
-                    label: "Price gain",
-                    pct: priceGainPct,
-                    val: priceGain,
-                  },
-                  {
-                    label: "Dividends",
-                    pct: invested > 0 ? (totalDivReceived / invested) * 100 : 0,
-                    val: totalDivReceived,
-                  },
+                  { label: "Price gain", pct: priceGainPct, val: priceGain },
+                  { label: "Dividends", pct: invested > 0 ? (totalDivReceived / invested) * 100 : 0, val: totalDivReceived },
+                  ...(realizedPnl && realizedPnl.length > 0 ? [{ label: "Realized P&L", pct: basis > 0 ? (totalRealizedPnl / basis) * 100 : 0, val: totalRealizedPnl }] : []),
                 ].map(({ label, pct, val }) => (
                   <div key={label} className="flex justify-between items-center text-xs">
                     <span className="text-bloomberg-muted">{label}</span>

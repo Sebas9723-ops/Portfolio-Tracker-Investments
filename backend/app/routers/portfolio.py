@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from app.auth.dependencies import get_user_id
 from app.db.supabase_client import get_admin_client
 from app.models.portfolio import PortfolioSummary, PositionCreate, PositionUpdate, Snapshot, SnapshotCreate
@@ -670,6 +671,115 @@ def get_realized_pnl(user_id: str = Depends(get_user_id)):
     db = get_admin_client()
     res = db.table("transactions").select("*").eq("user_id", user_id).execute()
     return compute_realized_pnl(res.data or [])
+
+
+@router.get("/dividend-forecast")
+def get_dividend_forecast(user_id: str = Depends(get_user_id)):
+    """Estimate forward annual dividend income using yfinance trailing yields."""
+    import yfinance as yf
+    from concurrent.futures import ThreadPoolExecutor
+
+    db = get_admin_client()
+    settings = _get_settings_for_user(user_id)
+    base_currency = settings.get("base_currency", "USD")
+
+    pos_res = db.table("positions").select("*").eq("user_id", user_id).execute()
+    positions = pos_res.data or []
+    if not positions:
+        return {"positions": [], "total_annual": 0.0, "monthly": 0.0, "base_currency": base_currency}
+
+    tickers = [p["ticker"] for p in positions if float(p.get("shares", 0)) > 0]
+    quotes = get_quotes(tickers)
+    exchange_currencies = [get_native_currency(t) for t in tickers]
+    pos_currencies = [p.get("currency") or get_native_currency(p["ticker"]) for p in positions]
+    currencies = list(set(exchange_currencies + pos_currencies))
+    fx_rates = get_fx_rates(currencies, base=base_currency) if currencies else {}
+    tx_res = db.table("transactions").select("*").eq("user_id", user_id).execute()
+    transactions = tx_res.data or []
+    summary = build_portfolio(positions, quotes, fx_rates, base_currency, transactions)
+
+    value_map = {row.ticker: row.value_base for row in summary.rows}
+    name_map = {row.ticker: (row.name or row.ticker) for row in summary.rows}
+
+    def _fetch_yield(ticker: str) -> tuple[str, float]:
+        try:
+            info = yf.Ticker(yf_ticker(ticker)).info
+            y = (info.get("trailingAnnualDividendYield") or info.get("dividendYield") or 0.0)
+            return ticker, float(y or 0.0)
+        except Exception:
+            return ticker, 0.0
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        yields = dict(pool.map(_fetch_yield, tickers))
+
+    result = []
+    for ticker in tickers:
+        val = value_map.get(ticker, 0.0)
+        dy = yields.get(ticker, 0.0)
+        result.append({
+            "ticker": ticker,
+            "name": name_map.get(ticker, ticker),
+            "value_base": round(val, 2),
+            "dividend_yield": round(dy * 100, 3),
+            "annual_income": round(val * dy, 2),
+        })
+
+    result.sort(key=lambda x: -x["annual_income"])
+    total_annual = sum(r["annual_income"] for r in result)
+    return {
+        "positions": result,
+        "total_annual": round(total_annual, 2),
+        "monthly": round(total_annual / 12, 2),
+        "base_currency": base_currency,
+    }
+
+
+@router.get("/export/positions.csv")
+def export_positions_csv(user_id: str = Depends(get_user_id)):
+    """Download current positions as a CSV file."""
+    import csv, io
+
+    db = get_admin_client()
+    settings = _get_settings_for_user(user_id)
+    base_currency = settings.get("base_currency", "USD")
+
+    pos_res = db.table("positions").select("*").eq("user_id", user_id).execute()
+    positions = pos_res.data or []
+    tickers = [p["ticker"] for p in positions if float(p.get("shares", 0)) > 0]
+    quotes = get_quotes(tickers) if tickers else {}
+    exchange_currencies = [get_native_currency(t) for t in tickers] if tickers else []
+    pos_currencies = [p.get("currency") or get_native_currency(p["ticker"]) for p in positions]
+    currencies = list(set(exchange_currencies + pos_currencies))
+    fx_rates = get_fx_rates(currencies, base=base_currency) if currencies else {}
+    tx_res = db.table("transactions").select("*").eq("user_id", user_id).execute()
+    transactions = tx_res.data or []
+    summary = build_portfolio(positions, quotes, fx_rates, base_currency, transactions)
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["Ticker", "Name", "Shares", "Avg Cost", "Cost Currency",
+                     f"Price ({base_currency})", f"Value ({base_currency})",
+                     "Weight (%)", f"Unrealized P&L ({base_currency})", "Unrealized P&L (%)"])
+    for row in sorted(summary.rows, key=lambda r: -r.value_base):
+        writer.writerow([
+            row.ticker,
+            row.name or "",
+            round(row.shares, 4),
+            round(row.avg_cost_native or 0, 4),
+            row.cost_currency or base_currency,
+            round(row.price_base, 4),
+            round(row.value_base, 2),
+            round(row.weight, 2),
+            round(row.unrealized_pnl or 0, 2),
+            round(row.unrealized_pnl_pct or 0, 2),
+        ])
+
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=positions_{date.today()}.csv"},
+    )
 
 
 @router.get("/breakdown")

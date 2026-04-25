@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchDividends } from "@/lib/api/transactions";
+import { fetchDividendForecast } from "@/lib/api/portfolio";
 import { fmtCurrency, fmtDate } from "@/lib/formatters";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
@@ -9,6 +10,11 @@ const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "S
 
 export default function IncomePage() {
   const { data: dividends, isLoading } = useQuery({ queryKey: ["dividends"], queryFn: fetchDividends });
+  const { data: forecast, isLoading: forecastLoading } = useQuery({
+    queryKey: ["dividendForecast"],
+    queryFn: fetchDividendForecast,
+    staleTime: 30 * 60 * 1000,
+  });
   const [view, setView] = useState<"chart" | "calendar">("chart");
 
   const byMonth = (dividends ?? []).reduce((acc: Record<string, number>, d: Record<string, unknown>) => {
@@ -57,6 +63,50 @@ export default function IncomePage() {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* Dividend Forecast */}
+      <div className="bbg-card">
+        <p className="bbg-header">Forward Dividend Forecast</p>
+        {forecastLoading ? (
+          <div className="text-bloomberg-muted text-xs py-2">Loading forecast…</div>
+        ) : forecast ? (
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-4">
+              {[
+                { label: "Est. Annual Income", value: fmtCurrency(forecast.total_annual, forecast.base_currency) },
+                { label: "Est. Monthly Income", value: fmtCurrency(forecast.monthly, forecast.base_currency) },
+                { label: "Paying Positions", value: String(forecast.positions.filter((p) => p.dividend_yield > 0).length) },
+              ].map(({ label, value }) => (
+                <div key={label} className="border border-bloomberg-border p-2">
+                  <p className="text-bloomberg-muted text-[9px] uppercase mb-1">{label}</p>
+                  <p className="text-bloomberg-gold text-xs font-bold">{value}</p>
+                </div>
+              ))}
+            </div>
+            <table className="bbg-table">
+              <thead>
+                <tr>
+                  <th>Ticker</th>
+                  <th className="hidden sm:table-cell">Name</th>
+                  <th className="text-right">Yield</th>
+                  <th className="text-right">Est. Annual</th>
+                </tr>
+              </thead>
+              <tbody>
+                {forecast.positions.filter((p) => p.dividend_yield > 0).map((p) => (
+                  <tr key={p.ticker}>
+                    <td className="text-bloomberg-gold">{p.ticker}</td>
+                    <td className="text-bloomberg-muted hidden sm:table-cell truncate max-w-[160px]">{p.name}</td>
+                    <td className="text-right text-bloomberg-text">{p.dividend_yield.toFixed(2)}%</td>
+                    <td className="text-right text-green-400">{fmtCurrency(p.annual_income, forecast.base_currency)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="text-bloomberg-muted text-[9px] mt-2">Based on trailing 12-month yields from yfinance. Not a guarantee of future income.</p>
+          </>
+        ) : null}
       </div>
 
       {view === "chart" ? (

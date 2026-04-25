@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { fetchPositions, upsertPosition, updatePosition, deletePosition, saveCapitalSnapshot } from "@/lib/api/portfolio";
+import { fetchPositions, upsertPosition, updatePosition, deletePosition, saveCapitalSnapshot, exportPositionsCsv } from "@/lib/api/portfolio";
 import { fetchTransactions, createTransaction, fetchCash, upsertCash, deleteCash } from "@/lib/api/transactions";
 import { fmtCurrency, fmtDate } from "@/lib/formatters";
 import { Pencil, Trash2, Plus, Check, X, AlertCircle } from "lucide-react";
@@ -241,12 +241,29 @@ export default function ManagePage() {
       <div className="bbg-card">
         <div className="flex items-center justify-between mb-3">
           <p className="bbg-header mb-0">Current Positions</p>
-          <button
-            onClick={() => setShowPosForm((v) => !v)}
-            className="flex items-center gap-1 text-[10px] text-bloomberg-muted border border-bloomberg-border px-2 py-1 hover:text-bloomberg-gold hover:border-bloomberg-gold"
-          >
-            <Plus size={11} /> Add Position
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={async () => {
+                const blob = await exportPositionsCsv();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `positions_${new Date().toISOString().slice(0, 10)}.csv`;
+                a.click();
+                URL.revokeObjectURL(url);
+              }}
+              className="flex items-center gap-1 text-[10px] text-bloomberg-muted border border-bloomberg-border px-2 py-1 hover:text-bloomberg-gold hover:border-bloomberg-gold"
+              title="Export to CSV"
+            >
+              ↓ CSV
+            </button>
+            <button
+              onClick={() => setShowPosForm((v) => !v)}
+              className="flex items-center gap-1 text-[10px] text-bloomberg-muted border border-bloomberg-border px-2 py-1 hover:text-bloomberg-gold hover:border-bloomberg-gold"
+            >
+              <Plus size={11} /> Add Position
+            </button>
+          </div>
         </div>
 
         {showPosForm && (
