@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchFrontier, fetchBlackLitterman } from "@/lib/api/analytics";
 import { fetchProfileOptimal } from "@/lib/api/profile";
-import { fetchSettings, saveTickerWeightRules, saveCombinationRanges } from "@/lib/api/settings";
+import { fetchSettings, saveTickerWeightRules, saveCombinationRanges, updateSettings } from "@/lib/api/settings";
 import { usePortfolio } from "@/lib/hooks/usePortfolio";
 import { useProfileStore } from "@/lib/store/profileStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
@@ -141,6 +141,10 @@ export default function OptimizationPage() {
     if (savedSettings.combination_ranges && Object.keys(savedSettings.combination_ranges).length > 0) {
       setAllCombos(savedSettings.combination_ranges as Record<string, CombinationRange[]>);
     }
+    // Hydrate BL views from Supabase (takes priority over localStorage)
+    if (savedSettings.bl_views && Object.keys(savedSettings.bl_views).length > 0) {
+      setSettings({ bl_views: savedSettings.bl_views as Record<string, { ticker: string; ret: string }[]> });
+    }
   }, [savedSettings]);
 
   const { data: profileData } = useQuery({
@@ -203,8 +207,10 @@ export default function OptimizationPage() {
   });
 
   function saveBlViews() {
-    const existing = savedBlViews ?? {};
-    setSettings({ bl_views: { ...existing, [profile]: blViews } });
+    const existing = (savedSettings?.bl_views ?? savedBlViews ?? {}) as Record<string, { ticker: string; ret: string }[]>;
+    const updated = { ...existing, [profile]: blViews };
+    setSettings({ bl_views: updated });
+    updateSettings({ bl_views: updated });
     setBlViewsSaved(true);
     setTimeout(() => setBlViewsSaved(false), 2000);
   }
