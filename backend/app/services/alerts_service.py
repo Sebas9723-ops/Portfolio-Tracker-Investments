@@ -30,8 +30,8 @@ def check_alerts(summary, metrics: dict, snapshots: list[dict]) -> list[dict]:
 
     # 1. Daily drop — compare last two snapshots
     if len(snapshots) >= 2:
-        today_val = float(snapshots[-1].get("total_value_base", 0))
-        prev_val = float(snapshots[-2].get("total_value_base", 0))
+        today_val = float(snapshots[-1].get("total_value_base") or 0)
+        prev_val = float(snapshots[-2].get("total_value_base") or 0)
         if prev_val > 0:
             daily_ret = (today_val - prev_val) / prev_val
             if daily_ret < DAILY_DROP_THRESHOLD:
