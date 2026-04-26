@@ -22,7 +22,12 @@ except ImportError:
     cp = None  # type: ignore
     _CVXPY_OK = False
 from sklearn.covariance import LedoitWolf
-from hmmlearn import hmm
+try:
+    from hmmlearn import hmm as _hmm_module
+    _HMM_OK = True
+except ImportError:
+    _hmm_module = None  # type: ignore
+    _HMM_OK = False
 
 from app.services.exchange_classifier import PROXY_TICKER_MAP
 
@@ -238,8 +243,10 @@ class QuantEngine:
         if len(series) < 60:
             return {"regime": "bull", "confidence": 0.5}
 
+        if not _HMM_OK:
+            return {"regime": "bull", "confidence": 0.5}
         try:
-            model = hmm.GaussianHMM(
+            model = _hmm_module.GaussianHMM(
                 n_components=2,
                 covariance_type="diag",
                 n_iter=50,
