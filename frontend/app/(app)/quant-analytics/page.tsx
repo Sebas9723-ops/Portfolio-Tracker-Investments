@@ -187,7 +187,7 @@ export default function QuantAnalyticsPage() {
   const { data: qa, isFetching, isError, error, refetch } = useQuery({
     queryKey: ["quant-advanced-full", period],
     queryFn: () =>
-      fetchQuantAdvanced({ period, benchmark_ticker: "VOO", n_bootstrap: 500, n_dd_sims: 1000 }),
+      fetchQuantAdvanced({ period, benchmark_ticker: "VOO", n_bootstrap: 30, n_dd_sims: 60 }),
     enabled: triggered,
     staleTime: 10 * 60 * 1000,
     retry: false,

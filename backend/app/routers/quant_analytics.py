@@ -45,9 +45,9 @@ router = APIRouter(prefix="/api/analytics/quant-advanced", tags=["quant-analytic
 
 
 class QuantAdvancedRequest(BaseModel):
-    period: str = "2y"
-    n_bootstrap: int = 100
-    n_dd_sims: int = 200
+    period: str = "1y"
+    n_bootstrap: int = 20
+    n_dd_sims: int = 50
     horizons_years: list[int] = [1, 3, 5]
     band_tolerance: float = 0.02
     te_budget: float = 0.10
