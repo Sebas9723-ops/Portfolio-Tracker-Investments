@@ -76,6 +76,19 @@ _REGIME_LABELS = ["bull_strong", "bull_weak", "bear_mild", "crisis"]
 # XGBoost view weight by horizon: short trusts 1-month XGB more, long trusts FF5 more
 _XGB_WEIGHT_BY_HORIZON = {"short": 0.80, "medium": 0.50, "long": 0.25}
 
+# Profile-aware XGB blend weights: aggressive trusts shorter-horizon momentum signals more
+_XGB_WEIGHT_BY_PROFILE_HORIZON: dict[tuple[str, str], float] = {
+    ("aggressive",   "short"):  0.85,
+    ("aggressive",   "medium"): 0.65,
+    ("aggressive",   "long"):   0.45,
+    ("base",         "short"):  0.80,
+    ("base",         "medium"): 0.50,
+    ("base",         "long"):   0.25,
+    ("conservative", "short"):  0.50,
+    ("conservative", "medium"): 0.30,
+    ("conservative", "long"):   0.15,
+}
+
 # ── TTL Cache ─────────────────────────────────────────────────────────────────
 
 _CACHE_TTL = 14400  # 4 hours
@@ -482,10 +495,11 @@ class MLEngine:
         regime_labels: pd.Series,
         current_regime: str,
         time_horizon: str = "long",
+        profile: str = "base",
     ) -> tuple[dict[str, dict], bool]:
         """
         Per-ticker XGBoost predicts 1-month forward return.
-        Regime one-hot features added from historical HMM label sequence.
+        Regime one-hot + cross-sectional momentum rank features.
         Prediction → BL view with confidence from walk-forward MAE.
         User views always override ML views (merged last).
         Returns (ml_only_views, success) — caller merges user views.
@@ -496,6 +510,29 @@ class MLEngine:
         tickers = list(returns.columns)
         ml_views: dict[str, dict] = {}
 
+        # ── Pre-compute cross-sectional momentum ranks ────────────────────────
+        # These rank each ticker vs the universe — the strongest quant signal
+        _mom_1m: dict[str, pd.Series] = {}
+        _mom_3m: dict[str, pd.Series] = {}
+        _sharpe_21: dict[str, pd.Series] = {}
+        for _t in tickers:
+            _s = returns[_t].dropna()
+            if len(_s) >= 21:
+                _vol20 = _s.rolling(20).std() * np.sqrt(252)
+                _mom_1m[_t]   = _s.rolling(21).sum()
+                _sharpe_21[_t] = (_s.rolling(21).mean() * 252) / (_vol20 + 1e-8)
+            if len(_s) >= 63:
+                _mom_3m[_t] = _s.rolling(63).sum()
+
+        rank_mom_1m:   pd.DataFrame | None = None
+        rank_mom_3m:   pd.DataFrame | None = None
+        rank_sharpe_21: pd.DataFrame | None = None
+        if len(_mom_1m) > 1:
+            rank_mom_1m    = pd.DataFrame(_mom_1m).rank(axis=1, pct=True)
+            rank_sharpe_21 = pd.DataFrame(_sharpe_21).rank(axis=1, pct=True)
+        if len(_mom_3m) > 1:
+            rank_mom_3m = pd.DataFrame(_mom_3m).rank(axis=1, pct=True)
+
         for t in tickers:
             if t in user_bl_views:
                 continue  # user view takes precedence, skip ML for this ticker
@@ -504,8 +541,17 @@ class MLEngine:
             if len(series) < 252:
                 continue
 
+            # Per-ticker cross-sectional rank series
+            cs_ranks: dict[str, pd.Series] = {}
+            if rank_mom_1m is not None and t in rank_mom_1m.columns:
+                cs_ranks["cs_rank_mom_1m"] = rank_mom_1m[t]
+            if rank_mom_3m is not None and t in rank_mom_3m.columns:
+                cs_ranks["cs_rank_mom_3m"] = rank_mom_3m[t]
+            if rank_sharpe_21 is not None and t in rank_sharpe_21.columns:
+                cs_ranks["cs_rank_sharpe_21"] = rank_sharpe_21[t]
+
             try:
-                feats = self._ticker_features(series, garch_vols.get(t, 0.15), regime_labels, current_regime)
+                feats = self._ticker_features(series, garch_vols.get(t, 0.15), regime_labels, current_regime, cs_ranks=cs_ranks)
                 if feats is None or len(feats) < 80:
                     continue
 
@@ -569,7 +615,10 @@ class MLEngine:
                     confidence = 0.30
 
                 # ── Blend with FF5 (horizon-dependent) ───────────────────
-                xgb_weight = _XGB_WEIGHT_BY_HORIZON.get(time_horizon, 0.50)
+                xgb_weight = _XGB_WEIGHT_BY_PROFILE_HORIZON.get(
+                    (profile, time_horizon),
+                    _XGB_WEIGHT_BY_HORIZON.get(time_horizon, 0.50),
+                )
                 ff5_ret = float(ff5_returns.get(t, 0.0))
                 blended = xgb_weight * predicted + (1.0 - xgb_weight) * ff5_ret
 
@@ -592,6 +641,7 @@ class MLEngine:
         garch_vol: float,
         regime_labels: pd.Series,
         current_regime: str,
+        cs_ranks: dict[str, pd.Series] | None = None,
     ) -> Optional[pd.DataFrame]:
         """
         Feature matrix for XGBoost BL prediction.
@@ -603,6 +653,7 @@ class MLEngine:
         Oscillator: RSI(14)
         Tail: rolling skewness (60d), 63d max-drawdown proxy
         Regime: rolling 20-bar frequency per state (smoother than one-hot)
+        Cross-sectional: momentum rank vs universe (cs_rank_mom_1m/3m, cs_rank_sharpe_21)
         """
         if len(series) < 130:
             return None
@@ -656,6 +707,13 @@ class MLEngine:
             for lbl in _REGIME_LABELS:
                 f[f"reg_freq_{lbl}"] = 1.0 if lbl == current_regime else 0.0
 
+        # ── Cross-sectional momentum rank (Jegadeesh & Titman 1993) ──────
+        # Rank among portfolio peers — strong predictor at 3-12 month horizon
+        if cs_ranks:
+            for name, rank_series in cs_ranks.items():
+                aligned = rank_series.reindex(f.index, method="ffill")
+                f[name] = aligned
+
         return f.dropna()
 
     # ── 6. Full ML Pipeline ───────────────────────────────────────────────
@@ -666,17 +724,19 @@ class MLEngine:
         user_bl_views: dict,
         market_ticker: str = "VOO",
         time_horizon: str = "long",
+        profile: str = "base",
     ) -> MLResult:
         """
         Orchestrate all ML modules. Each module is isolated — failures
         populate *_available=False and fall back to safe defaults.
 
         TTL cache (4h) stores everything except user BL views.
+        Profile is included in cache key because XGB blend weights differ per profile.
         On cache hit: re-merges user views with cached XGB ML views.
         On cache miss: runs full pipeline, stores to cache.
         """
         tickers = list(returns.columns)
-        cache_key = (tuple(sorted(tickers)), round(self.rfr, 3), time_horizon)
+        cache_key = (tuple(sorted(tickers)), round(self.rfr, 3), time_horizon, profile)
 
         # ── Cache lookup ──────────────────────────────────────────────────
         with _cache_lock:
@@ -765,6 +825,7 @@ class MLEngine:
             returns, ff5_returns, garch_vols, {},
             regime_labels, regime,
             time_horizon=time_horizon,
+            profile=profile,
         )
         diag["time_horizon"] = time_horizon
         diag["xgb_ms"] = round((time.monotonic() - t0) * 1000)

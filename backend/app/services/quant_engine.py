@@ -489,6 +489,14 @@ class QuantEngine:
 
         # Robust optimization parameters (regime + horizon dependent)
         kappa = _KAPPA_BY_REGIME.get(regime, 0.6) * _KAPPA_HORIZON_MULT.get(time_horizon, 1.0)
+        if profile == "aggressive":
+            # Aggressive: reduce uncertainty penalty — accept model risk,
+            # bet more on high-conviction mu estimates
+            kappa *= 0.50
+        elif profile == "conservative":
+            # Conservative: increase uncertainty penalty — stay close to
+            # market portfolio when signal is weak
+            kappa *= 1.30
         max_turnover = (_MAX_TURNOVER.get(profile, 0.45)
                         * _TURNOVER_HORIZON_MULT.get(time_horizon, 1.0))
         lambda_mv = _LAMBDA_BY_HORIZON.get(time_horizon, 3.0)
@@ -574,6 +582,7 @@ class QuantEngine:
                 user_bl_views=bl_views,
                 market_ticker="VOO" if "VOO" in tickers else tickers[0],
                 time_horizon=time_horizon,
+                profile=profile,
             )
             cov_matrix = ml_result.garch_cov
             mu = ml_result.ff5_returns
@@ -590,6 +599,23 @@ class QuantEngine:
             ml_regime_probs = ml_result.regime_probs
             ml_diagnostics = ml_result.diagnostics
             log.info("QuantEngine: ML pipeline OK — regime=%s", ml_regime)
+
+            # ── Momentum alpha overlay (aggressive only, bull regimes) ─────
+            # Jegadeesh & Titman (1993): 12-1 month cross-sectional momentum
+            # adds ~3-5% annual alpha. Applied after BL to avoid double-counting.
+            if profile == "aggressive" and ml_regime in ("bull_strong", "bull_weak"):
+                try:
+                    mom_12 = returns.rolling(252).sum().iloc[-1]
+                    mom_1  = returns.rolling(21).sum().iloc[-1]
+                    mom_12_1 = (mom_12 - mom_1).reindex(tickers).fillna(0.0)
+                    mom_std = float(mom_12_1.std())
+                    if mom_std > 0:
+                        mom_z = (mom_12_1 - mom_12_1.mean()) / mom_std
+                        # 2% annual alpha per sigma of cross-sectional momentum
+                        mu = mu + mom_z * 0.02
+                        log.info("QuantEngine: momentum alpha overlay applied (aggressive, %s)", ml_regime)
+                except Exception as _exc:
+                    log.warning("Momentum alpha failed: %s", _exc)
 
         except Exception as exc:
             log.error("ML pipeline failed, using simple fallback: %s", exc, exc_info=True)

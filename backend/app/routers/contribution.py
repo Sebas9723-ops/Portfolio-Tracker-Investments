@@ -263,10 +263,36 @@ def run_contribution_plan(
     w0 = np.clip(w0, lo, hi)
     w0 = w0 / w0.sum() if w0.sum() > 0 else hi / hi.sum() if hi.sum() > 0 else np.ones(n) / n
 
+    # ── Profile-aware objective ───────────────────────────────────────────
+    # aggressive: maximise expected return of deployment
+    # base:       balance return vs variance (Sharpe-like)
+    # conservative: minimise variance increase of post-deployment portfolio
+    if profile == "conservative":
+        def _objective(w: np.ndarray) -> float:
+            # Minimise portfolio variance after deployment
+            port_w = np.array([
+                (current_values.get(t, 0) + w[i] * amount) / total_new
+                for i, t in enumerate(tickers_avail)
+            ])
+            port_w = np.clip(port_w, 0, None)
+            s = port_w.sum()
+            if s > 0:
+                port_w /= s
+            return float(port_w @ cov @ port_w)
+    elif profile == "base":
+        _lambda_mv = 2.0
+        def _objective(w: np.ndarray) -> float:
+            ret = float(mu @ w)
+            var = float(w @ (cov / 252) @ w)
+            return -(ret - _lambda_mv * var)
+    else:  # aggressive
+        def _objective(w: np.ndarray) -> float:
+            return -float(mu @ w)
+
     # ── Optimise ──────────────────────────────────────────────────────────
     try:
         res = minimize(
-            lambda w: -float(mu @ w),
+            _objective,
             w0,
             method="SLSQP",
             bounds=bounds_alloc,
