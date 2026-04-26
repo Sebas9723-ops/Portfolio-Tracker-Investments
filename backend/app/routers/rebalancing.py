@@ -93,6 +93,8 @@ def suggestions(
     target_return = float(settings.get("target_return", 0.08))
     rfr = float(settings.get("risk_free_rate", 0.045))
     max_single = float(settings.get("max_single_asset", 0.40))
+    bl_risk_aversion_s = float(settings.get("bl_risk_aversion") or 2.5)
+    bl_tau_s = float(settings.get("bl_tau") or 0.05)
 
     rows_dicts = [r.model_dump() for r in summary.rows]
 
@@ -166,7 +168,7 @@ def suggestions(
                 try:
                     bl_views = load_user_bl_views(user_id)
                     if bl_views:
-                        mu_bl = _compute_bl_mu(returns_df, bl_views)
+                        mu_bl = _compute_bl_mu(returns_df, bl_views, risk_aversion=bl_risk_aversion_s, tau=bl_tau_s)
                 except Exception:
                     pass
 
@@ -350,6 +352,10 @@ def deploy_capital(
     } or {}
     combination_constraints = combination_ranges.get(profile_key, []) or []
 
+    # BL params from user settings (persisted)
+    bl_risk_aversion = float(settings.get("bl_risk_aversion") or 2.5)
+    bl_tau = float(settings.get("bl_tau") or 0.05)
+
     total_value = float(summary.total_value_base)
     current_values = {r.ticker: float(r.value_base) for r in summary.rows}
     current_weights = {r.ticker: float(r.weight) / 100 for r in summary.rows}
@@ -404,7 +410,7 @@ def deploy_capital(
     try:
         bl_views = load_user_bl_views(user_id)
         if bl_views:
-            mu_bl = _compute_bl_mu(returns_df, bl_views)
+            mu_bl = _compute_bl_mu(returns_df, bl_views, risk_aversion=bl_risk_aversion, tau=bl_tau)
             mu_hist = mu_bl
             mu_source = "black_litterman"
     except Exception:
@@ -478,12 +484,17 @@ def deploy_capital(
         cur_v = current_values.get(t, 0.0)
         max_target_v = hi_w * total_new
         max_buy = max(0.0, max_target_v - cur_v)
-        max_frac = min(max_buy / amount, 1.0) if amount > 0 else 0.0
+        # Cap 1: portfolio-weight constraint (how much room left before hitting hi_w)
+        frac_from_portfolio = min(max_buy / amount, 1.0) if amount > 0 else 0.0
+        # Cap 2: Motor 1 cap applied directly to capital allocation fraction.
+        # Prevents any single ticker from receiving more than hi_w of new capital
+        # (e.g. max_single=0.40 → no ticker gets >40% of the deployment).
+        max_frac = min(frac_from_portfolio, hi_w)
         # Apply liquidity cap
         if t in liquidity_caps:
             max_frac = min(max_frac, liquidity_caps[t])
         # Floor: 0 (buy-only — never negative)
-        bounds_alloc.append((0.0, max_frac))
+        bounds_alloc.append((0.0, max(0.0, max_frac)))
 
     # ── CVaR limit ────────────────────────────────────────────────────────────
     cvar_limit = cvar_95_daily

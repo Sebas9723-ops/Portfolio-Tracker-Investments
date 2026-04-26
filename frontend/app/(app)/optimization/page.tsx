@@ -103,6 +103,8 @@ export default function OptimizationPage() {
   const { data: portfolio } = usePortfolio();
   const { profile } = useProfileStore();
   const savedBlViews        = useSettingsStore((s) => s.bl_views);
+  const savedBlRiskAversion = useSettingsStore((s) => s.bl_risk_aversion ?? 2.5);
+  const savedBlTau          = useSettingsStore((s) => s.bl_tau ?? 0.05);
   const setSettings         = useSettingsStore((s) => s.setSettings);
   const max_single_asset    = useSettingsStore((s) => s.max_single_asset);
   const optimization_periods = useSettingsStore((s) => s.optimization_periods);
@@ -145,6 +147,15 @@ export default function OptimizationPage() {
     if (savedSettings.bl_views && Object.keys(savedSettings.bl_views).length > 0) {
       setSettings({ bl_views: savedSettings.bl_views as Record<string, { ticker: string; ret: string }[]> });
     }
+    // Hydrate BL params from Supabase
+    if (savedSettings.bl_risk_aversion != null) {
+      setRiskAversion(savedSettings.bl_risk_aversion);
+      setSettings({ bl_risk_aversion: savedSettings.bl_risk_aversion });
+    }
+    if (savedSettings.bl_tau != null) {
+      setTau(savedSettings.bl_tau);
+      setSettings({ bl_tau: savedSettings.bl_tau });
+    }
   }, [savedSettings]);
 
   const { data: profileData } = useQuery({
@@ -158,8 +169,8 @@ export default function OptimizationPage() {
     () => savedBlViews?.[profile] ?? []
   );
   const [blResult, setBlResult] = useState<Record<string, number> | null>(null);
-  const [tau, setTau] = useState(0.05);
-  const [riskAversion, setRiskAversion] = useState(3.0);
+  const [tau, setTau] = useState(savedBlTau);
+  const [riskAversion, setRiskAversion] = useState(savedBlRiskAversion);
   const [blViewsSaved, setBlViewsSaved] = useState(false);
 
   const { data: result, isFetching: pendingFrontier } = useQuery({
@@ -209,8 +220,8 @@ export default function OptimizationPage() {
   function saveBlViews() {
     const existing = (savedSettings?.bl_views ?? savedBlViews ?? {}) as Record<string, { ticker: string; ret: string }[]>;
     const updated = { ...existing, [profile]: blViews };
-    setSettings({ bl_views: updated });
-    updateSettings({ bl_views: updated });
+    setSettings({ bl_views: updated, bl_risk_aversion: riskAversion, bl_tau: tau });
+    updateSettings({ bl_views: updated, bl_risk_aversion: riskAversion, bl_tau: tau });
     setBlViewsSaved(true);
     setTimeout(() => setBlViewsSaved(false), 2000);
   }

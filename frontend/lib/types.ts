@@ -261,6 +261,9 @@ export interface UserSettings {
   time_horizon?: "short" | "medium" | "long";
   // Black-Litterman views per profile
   bl_views?: Record<string, { ticker: string; ret: string }[]>;
+  // Black-Litterman parameters (persisted)
+  bl_risk_aversion?: number;
+  bl_tau?: number;
   // Last frontier result — used by Contribution Planner (profile-aware)
   frontier_result?: {
     max_sharpe: { ret: number; vol: number; sharpe: number };

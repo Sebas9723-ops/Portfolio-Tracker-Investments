@@ -20,6 +20,8 @@ class UserSettings(BaseModel):
     cost_basis_usd: Optional[float] = None  # actual USD deployed at purchase FX rates
     time_horizon: str = "long"  # short / medium / long — persisted per user
     bl_views: dict = {}  # {profile: [{ticker, ret}]} — Black-Litterman views per profile
+    bl_risk_aversion: float = 2.5   # Black-Litterman risk aversion parameter (λ)
+    bl_tau: float = 0.05            # Black-Litterman uncertainty scaling (τ)
 
 
 class LoginRequest(BaseModel):

@@ -20,6 +20,8 @@ const defaults: UserSettings = {
   investor_profile: "base",   // matches backend profile engine (conservative | base | aggressive)
   ticker_weight_rules: {},
   combination_ranges: {},
+  bl_risk_aversion: 2.5,
+  bl_tau: 0.05,
 };
 
 export const useSettingsStore = create<SettingsState>()(
