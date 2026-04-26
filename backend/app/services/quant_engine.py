@@ -70,6 +70,7 @@ class QuantResult:
     correlation_alerts: list[dict] = field(default_factory=list)
     ml_diagnostics: dict = field(default_factory=dict)
     timestamp: datetime = field(default_factory=datetime.utcnow)
+    mu_vector: dict[str, float] = field(default_factory=dict)      # per-ticker annualised μ (post-BL)
 
 
 # ── Engine ───────────────────────────────────────────────────────────────────
@@ -649,6 +650,7 @@ class QuantEngine:
             correlation_alerts=corr_alerts,
             ml_diagnostics=ml_diagnostics,
             timestamp=datetime.utcnow(),
+            mu_vector={t: round(float(mu.get(t, 0.0)), 6) for t in tickers},
         )
 
 

@@ -8,6 +8,10 @@ export interface AllocationRow {
   gross_amount: number;
   slippage_cost: number;
   net_amount: number;
+  // unified smart fields
+  pct_of_capital?: number;
+  expected_return_pct?: number;
+  signals?: string[];
 }
 
 export interface ContributionPlan {
@@ -280,6 +284,9 @@ export interface ContributionPlanResponse {
   optimization_timestamp: string;
   profile: string;
   time_horizon: string;
+  regime_mu_scale?: number;
+  n_corr_alerts?: number;
+  n_no_edge?: number;
   quant_analytics_v2?: QuantAnalyticsV2 | null;
 }
 
@@ -287,6 +294,7 @@ export const fetchContributionPlan = (params: {
   available_cash: number;
   profile: string;
   time_horizon: string;
+  tc_model?: string;
 }) =>
   apiClient
     .post<ContributionPlanResponse>("/api/contribution-plan", params, { timeout: 300_000 })

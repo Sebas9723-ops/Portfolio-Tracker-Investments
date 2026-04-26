@@ -437,7 +437,7 @@ export default function RebalancingPage() {
             </p>
             <button
               onClick={() =>
-                quantMutation.mutate({ available_cash: contribution, profile, time_horizon: horizon })
+                quantMutation.mutate({ available_cash: contribution, profile, time_horizon: horizon, tc_model: tcModel })
               }
               disabled={quantMutation.isPending}
               className="bg-bloomberg-gold text-bloomberg-bg text-[10px] font-bold px-5 py-1.5 hover:opacity-90 disabled:opacity-50 uppercase tracking-wider"
@@ -507,6 +507,21 @@ export default function RebalancingPage() {
                 optimizationTimestamp={quantData.optimization_timestamp}
                 mlDiagnostics={quantData.ml_diagnostics}
               />
+
+              {/* Smart signal summary */}
+              {(quantData.regime_mu_scale != null || quantData.n_corr_alerts != null) && (
+                <div className="flex flex-wrap gap-3 text-[10px] text-bloomberg-muted">
+                  {quantData.regime_mu_scale != null && quantData.regime_mu_scale !== 1 && (
+                    <span>μ scale: <span className="text-bloomberg-text font-bold">×{quantData.regime_mu_scale.toFixed(2)}</span></span>
+                  )}
+                  {(quantData.n_corr_alerts ?? 0) > 0 && (
+                    <span className="text-orange-400">{quantData.n_corr_alerts} corr. alert(s) applied</span>
+                  )}
+                  {(quantData.n_no_edge ?? 0) > 0 && (
+                    <span>{quantData.n_no_edge} ticker(s) with no net edge</span>
+                  )}
+                </div>
+              )}
 
               {/* Correlation alerts */}
               {quantData.correlation_alerts.length > 0 && (
