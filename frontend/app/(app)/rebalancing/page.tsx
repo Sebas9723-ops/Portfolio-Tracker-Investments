@@ -4,6 +4,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchRebalancing, fetchRequiredForMaxSharpe } from "@/lib/api/analytics";
 import { fetchContributionPlan } from "@/lib/api/contribution";
 import type { ContributionPlanResponse } from "@/lib/api/contribution";
+import { runAgentAnalysis } from "@/lib/api/agents";
+import type { AgentAnalysisResult } from "@/lib/api/agents";
 import { useAIChat } from "@/lib/context/aiChatContext";
 import { fetchSettings, updateSettings } from "@/lib/api/settings";
 import { usePortfolio } from "@/lib/hooks/usePortfolio";
@@ -68,6 +70,9 @@ export default function RebalancingPage() {
   const [msPeriod, setMsPeriod] = useState("2y");
   const [quantData, setQuantData] = useState<ContributionPlanResponse | null>(null);
   const [quantError, setQuantError] = useState<string | null>(null);
+  const [agentData, setAgentData] = useState<AgentAnalysisResult | null>(null);
+  const [agentLoading, setAgentLoading] = useState(false);
+  const [agentError, setAgentError] = useState<string | null>(null);
   const [horizon, setHorizon] = useState<"short" | "medium" | "long">("long");
   const queryClient = useQueryClient();
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: fetchSettings });
@@ -890,6 +895,131 @@ export default function RebalancingPage() {
             <p className="text-bloomberg-muted text-[10px]">
               Press <span className="text-bloomberg-gold font-semibold">RUN OPTIMIZATION</span> to
               compute the optimal allocation with slippage breakdown.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* ── AI Agent Pipeline ── */}
+      {quantData && (
+        <div className="bbg-card">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <p className="bbg-header">AI Agent Pipeline</p>
+              <p className="text-bloomberg-muted text-[10px]">
+                Director · Risk Manager · Research Analyst — powered by Llama 3.3 70B
+              </p>
+            </div>
+            <button
+              onClick={async () => {
+                if (!quantData?.contribution_plan?.allocations) return;
+                setAgentLoading(true);
+                setAgentError(null);
+                setAgentData(null);
+                try {
+                  const cp = quantData.contribution_plan;
+                  const qr = quantData.quant_result;
+                  const result = await runAgentAnalysis({
+                    allocations: cp.allocations,
+                    regime: quantData.regime,
+                    regime_confidence: quantData.regime_confidence ?? 0,
+                    regime_probs: quantData.regime_probs ?? {},
+                    profile: quantData.profile ?? "base",
+                    total_value: cp.total_cash + (qr ? 0 : 0), // will use backend total_value
+                    total_cash: cp.total_cash,
+                    expected_sharpe: qr?.expected_sharpe ?? 0,
+                    cvar_95: qr?.cvar_95 ?? 0.02,
+                    n_corr_alerts: quantData.n_corr_alerts ?? 0,
+                    correlation_alerts: quantData.correlation_alerts ?? [],
+                  });
+                  setAgentData(result);
+                } catch (e) {
+                  setAgentError(String(e));
+                }
+                setAgentLoading(false);
+              }}
+              disabled={agentLoading}
+              className="bg-bloomberg-gold text-bloomberg-bg text-[10px] font-bold px-3 py-1.5 hover:opacity-90 disabled:opacity-50 uppercase tracking-wider whitespace-nowrap"
+            >
+              {agentLoading ? "ANALYZING…" : agentData ? "RE-RUN AGENTS" : "RUN AGENTS"}
+            </button>
+          </div>
+
+          {agentLoading && (
+            <div className="space-y-2 animate-pulse">
+              <div className="h-3 bg-bloomberg-border rounded w-3/4" />
+              <div className="h-3 bg-bloomberg-border rounded w-full" />
+              <div className="h-3 bg-bloomberg-border rounded w-5/6" />
+              <p className="text-bloomberg-muted text-[10px] mt-2">Running 3 agents (Director → Risk → Research)… ~15s</p>
+            </div>
+          )}
+
+          {agentError && (
+            <p className="text-red-400 text-[10px] mt-2">Error: {agentError}</p>
+          )}
+
+          {agentData && (
+            <div className="space-y-4">
+
+              {/* Director Agent — Thesis */}
+              {agentData.thesis && (
+                <div className="border-l-2 border-bloomberg-gold pl-3">
+                  <p className="text-bloomberg-gold text-[10px] font-bold uppercase tracking-widest mb-1">
+                    Director Agent — Trade Thesis
+                  </p>
+                  <p className="text-bloomberg-text text-[11px] leading-relaxed">{agentData.thesis}</p>
+                </div>
+              )}
+
+              {/* Risk Manager Agent */}
+              {agentData.risk && (
+                <div className={`border-l-2 pl-3 ${
+                  agentData.risk.risk_level === "verde" ? "border-green-500" :
+                  agentData.risk.risk_level === "rojo"  ? "border-red-500"   : "border-yellow-500"
+                }`}>
+                  <div className="flex items-center gap-2 mb-1">
+                    <p className="text-bloomberg-muted text-[10px] font-bold uppercase tracking-widest">
+                      Risk Manager Agent
+                    </p>
+                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase ${
+                      agentData.risk.risk_level === "verde"   ? "bg-green-500/20 text-green-400" :
+                      agentData.risk.risk_level === "rojo"    ? "bg-red-500/20 text-red-400"     :
+                                                                "bg-yellow-500/20 text-yellow-400"
+                    }`}>
+                      {agentData.risk.risk_level === "verde" ? "✓ Riesgo Controlado" :
+                       agentData.risk.risk_level === "rojo"  ? "⚠ Riesgo Alto"       : "⚡ Riesgo Moderado"}
+                    </span>
+                  </div>
+                  <p className="text-bloomberg-gold text-[10px] font-semibold mb-1">
+                    Riesgo principal: {agentData.risk.top_risk}
+                  </p>
+                  <p className="text-bloomberg-muted text-[11px] leading-relaxed">{agentData.risk.narrative}</p>
+                </div>
+              )}
+
+              {/* Research Agent — Per ticker */}
+              {agentData.research && Object.keys(agentData.research).length > 0 && (
+                <div>
+                  <p className="text-bloomberg-muted text-[10px] font-bold uppercase tracking-widest mb-2">
+                    Research Analyst — Per Ticker
+                  </p>
+                  <div className="space-y-2">
+                    {Object.entries(agentData.research).map(([ticker, text]) => (
+                      <div key={ticker} className="flex gap-3 border-b border-bloomberg-border/40 pb-2">
+                        <span className="text-bloomberg-gold font-bold text-[11px] w-20 shrink-0">{ticker}</span>
+                        <p className="text-bloomberg-text text-[10px] leading-relaxed">{text}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+            </div>
+          )}
+
+          {!agentLoading && !agentData && !agentError && (
+            <p className="text-bloomberg-muted text-[10px]">
+              Corre el engine primero, luego presiona &quot;RUN AGENTS&quot; para obtener la tesis de inversión, evaluación de riesgo cualitativo, y análisis de investigación por ticker.
             </p>
           )}
         </div>
