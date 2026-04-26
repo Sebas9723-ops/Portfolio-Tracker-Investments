@@ -923,14 +923,14 @@ export default function RebalancingPage() {
                     allocations: cp.allocations,
                     regime: quantData.regime,
                     regime_confidence: quantData.regime_confidence ?? 0,
-                    regime_probs: quantData.regime_probs ?? {},
+                    regime_probs: (quantData.regime_probs ?? {}) as unknown as Record<string, number>,
                     profile: quantData.profile ?? "base",
                     total_value: cp.total_cash + (qr ? 0 : 0), // will use backend total_value
                     total_cash: cp.total_cash,
                     expected_sharpe: qr?.expected_sharpe ?? 0,
                     cvar_95: qr?.cvar_95 ?? 0.02,
                     n_corr_alerts: quantData.n_corr_alerts ?? 0,
-                    correlation_alerts: quantData.correlation_alerts ?? [],
+                    correlation_alerts: (quantData.correlation_alerts ?? []) as unknown as Record<string, unknown>[],
                   });
                   setAgentData(result);
                 } catch (e) {
