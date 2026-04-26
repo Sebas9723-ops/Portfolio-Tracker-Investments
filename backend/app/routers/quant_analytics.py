@@ -2,20 +2,24 @@
 Quant Analytics v2 — FastAPI router.
 
 POST /api/analytics/quant-advanced
-  Runs all 15 advanced analytics modules against the authenticated user's
-  portfolio and returns a structured JSON response.
+  Starts background computation; returns {job_id, status:"computing"} immediately.
 
-The endpoint is intentionally a POST so callers can pass optional overrides
-(BL views, custom horizons, bootstrap count) without polluting the URL.
+GET  /api/analytics/quant-advanced/result/{job_id}
+  Returns {status:"computing"} or {status:"done", result:{...}} or {status:"error", detail:str}.
+
+Frontend polls every 3 s until status=="done".
 """
 from __future__ import annotations
 
 import logging
-from typing import Optional
+import threading
+import time
+import uuid
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.auth.dependencies import get_user_id
@@ -43,6 +47,20 @@ from app.services.quant_analytics import (
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/analytics/quant-advanced", tags=["quant-analytics"])
 
+# ── In-memory job store ───────────────────────────────────────────────────────
+# {job_id: {"status": "computing"|"done"|"error", "result": ..., "detail": ..., "ts": float}}
+_jobs: dict[str, dict[str, Any]] = {}
+_jobs_lock = threading.Lock()
+_JOB_TTL = 600  # seconds — clean up old jobs
+
+
+def _prune_jobs() -> None:
+    now = time.time()
+    with _jobs_lock:
+        stale = [k for k, v in _jobs.items() if now - v["ts"] > _JOB_TTL]
+        for k in stale:
+            del _jobs[k]
+
 
 class QuantAdvancedRequest(BaseModel):
     period: str = "1y"
@@ -51,7 +69,7 @@ class QuantAdvancedRequest(BaseModel):
     horizons_years: list[int] = [1, 3, 5]
     band_tolerance: float = 0.02
     te_budget: float = 0.10
-    bl_views: dict[str, dict] = {}       # {ticker: {return: float, confidence: float}}
+    bl_views: dict[str, dict] = {}
     risk_free_rate: Optional[float] = None
     benchmark_ticker: str = "VOO"
 
@@ -82,16 +100,22 @@ def _build_benchmark_returns(benchmark_ticker: str, period: str) -> pd.Series:
         return pd.Series(dtype=float)
 
 
-@router.post("")
-def quant_advanced(
-    body: QuantAdvancedRequest,
-    user_id: str = Depends(get_user_id),
-):
-    """
-    Run all 15 Quant Analytics v2 modules and return results as a flat JSON object.
-    Each module is wrapped in try/except — a failure in one module never breaks
-    the other modules or the response.
-    """
+def _run_quant(job_id: str, body: QuantAdvancedRequest, user_id: str) -> None:
+    """Runs in a background thread; writes result to _jobs[job_id]."""
+    try:
+        result = _compute_all(body, user_id)
+        with _jobs_lock:
+            _jobs[job_id] = {"status": "done", "result": result, "ts": time.time()}
+    except HTTPException as exc:
+        with _jobs_lock:
+            _jobs[job_id] = {"status": "error", "detail": exc.detail, "ts": time.time()}
+    except Exception as exc:
+        log.exception("quant background job %s failed", job_id)
+        with _jobs_lock:
+            _jobs[job_id] = {"status": "error", "detail": str(exc), "ts": time.time()}
+
+
+def _compute_all(body: QuantAdvancedRequest, user_id: str) -> dict:
     # ── Load portfolio ────────────────────────────────────────────────────────
     try:
         summary, tickers, settings = load_portfolio_data(user_id)
@@ -104,17 +128,13 @@ def quant_advanced(
     rfr = body.risk_free_rate or float(settings.get("risk_free_rate") or get_risk_free_rate())
     total_value = float(summary.total_value_base)
 
-    current_weights: dict[str, float] = {
-        r.ticker: r.weight / 100 for r in summary.rows
-    }
-    position_values: dict[str, float] = {
-        r.ticker: r.value_base for r in summary.rows
-    }
+    current_weights: dict[str, float] = {r.ticker: r.weight / 100 for r in summary.rows}
+    position_values: dict[str, float] = {r.ticker: r.value_base for r in summary.rows}
     current_prices: dict[str, float] = {
         r.ticker: float(getattr(r, "price_base", 0) or 0) for r in summary.rows
     }
 
-    # ── Load returns — single download, reused everywhere ────────────────────
+    # ── Market data ───────────────────────────────────────────────────────────
     try:
         hist = get_historical_multi(tickers, period=body.period)
         asset_returns = _returns_from_hist(hist)
@@ -127,7 +147,7 @@ def quant_advanced(
     portfolio_returns = build_portfolio_returns(hist, current_weights)
     benchmark_returns = _build_benchmark_returns(body.benchmark_ticker, body.period)
 
-    # ── Load transactions for tax drag ───────────────────────────────────────
+    # ── Transactions ──────────────────────────────────────────────────────────
     try:
         from app.db.supabase_client import get_admin_client
         db = get_admin_client()
@@ -136,47 +156,32 @@ def quant_advanced(
     except Exception:
         transactions = []
 
-    # ── Expected returns (simple historical mean) ─────────────────────────────
     expected_returns: dict[str, float] = {
-        t: float(asset_returns[t].mean() * 252)
-        for t in asset_returns.columns
+        t: float(asset_returns[t].mean() * 252) for t in asset_returns.columns
     }
-
-    # ── Policy target weights (from settings or equal-weight) ─────────────────
-    target_weights: dict[str, float] = current_weights  # fallback: hold current
-
-    # ── Run all 15 analytics modules ─────────────────────────────────────────
+    target_weights: dict[str, float] = current_weights
 
     result: dict = {}
 
-    # 1. Rebalancing bands
-    try:
-        result["rebalancing_bands"] = compute_rebalancing_bands(
-            current_weights=current_weights,
-            target_weights=target_weights,
-            total_value=total_value,
-            band_tolerance=body.band_tolerance,
-        )
-    except Exception as exc:
-        log.warning("rebalancing_bands failed: %s", exc)
-        result["rebalancing_bands"] = None
+    def _run(key: str, fn, **kwargs):
+        try:
+            result[key] = fn(**kwargs)
+        except Exception as exc:
+            log.warning("%s failed: %s", key, exc)
+            result[key] = None
 
-    # 2. Net alpha after costs
-    try:
-        result["net_alpha"] = compute_net_alpha_after_costs(
-            expected_returns=expected_returns,
-            current_weights=current_weights,
-            target_weights=target_weights,
-            total_value=total_value,
-        )
-    except Exception as exc:
-        log.warning("net_alpha failed: %s", exc)
-        result["net_alpha"] = None
+    _run("rebalancing_bands", compute_rebalancing_bands,
+         current_weights=current_weights, target_weights=target_weights,
+         total_value=total_value, band_tolerance=body.band_tolerance)
 
-    # 3. After-tax drag
+    _run("net_alpha", compute_net_alpha_after_costs,
+         expected_returns=expected_returns, current_weights=current_weights,
+         target_weights=target_weights, total_value=total_value)
+
     try:
-        ann_return = float((1 + portfolio_returns).prod() ** (252 / max(len(portfolio_returns), 1)) - 1) \
-            if not portfolio_returns.empty else 0.0
+        ann_return = float(
+            (1 + portfolio_returns).prod() ** (252 / max(len(portfolio_returns), 1)) - 1
+        ) if not portfolio_returns.empty else 0.0
         result["after_tax_drag"] = compute_after_tax_drag(
             portfolio_ann_return=ann_return,
             transactions=transactions,
@@ -186,26 +191,18 @@ def quant_advanced(
         log.warning("after_tax_drag failed: %s", exc)
         result["after_tax_drag"] = None
 
-    # 4. Liquidity score (ADV approximated from the already-downloaded hist)
     try:
         adv_map: dict[str, float] = {}
         for t, df in hist.items():
             if not df.empty and "Volume" in df.columns and "Close" in df.columns:
-                # Use last 30 rows as ADV proxy (avoids extra yfinance call)
                 adv_map[t] = float((df["Close"].iloc[-30:] * df["Volume"].iloc[-30:]).mean())
         result["liquidity"] = compute_liquidity_score(
-            tickers=tickers,
-            adv_map=adv_map,
-            position_values=position_values,
-        )
+            tickers=tickers, adv_map=adv_map, position_values=position_values)
     except Exception as exc:
         log.warning("liquidity failed: %s", exc)
         result["liquidity"] = None
 
-    # 5. Model agreement (uses current portfolio as single "model" unless caller
-    #    provides multiple weight sets — expose as a single model for now)
     try:
-        # Build a simple 2-model comparison: current weights vs equal weight
         eq_w = {t: 1 / len(tickers) for t in tickers}
         result["model_agreement"] = compute_model_agreement_score(
             optimizer_weights={"current": current_weights, "equal_weight": eq_w},
@@ -215,123 +212,91 @@ def quant_advanced(
         log.warning("model_agreement failed: %s", exc)
         result["model_agreement"] = None
 
-    # 6. Expected return bands
-    try:
-        result["return_bands"] = compute_expected_return_bands(
-            asset_returns=asset_returns,
-            n_bootstrap=body.n_bootstrap,
-        )
-    except Exception as exc:
-        log.warning("return_bands failed: %s", exc)
-        result["return_bands"] = None
+    _run("return_bands", compute_expected_return_bands,
+         asset_returns=asset_returns, n_bootstrap=body.n_bootstrap)
 
-    # 7. BL explainability
     try:
         if body.bl_views:
-            # Derive equilibrium returns from asset_returns CAPM proxy
             w_eq = np.array([1 / len(asset_returns.columns)] * len(asset_returns.columns))
             cov = asset_returns.cov().values * 252
             pi = 2.5 * cov @ w_eq
             equilibrium = {t: float(pi[i]) for i, t in enumerate(asset_returns.columns)}
-            # BL posterior ≈ equilibrium pulled by views (simplified here)
-            posterior = {t: equilibrium[t] + (body.bl_views.get(t, {}).get("return", 0)
-                         - equilibrium[t]) * body.bl_views.get(t, {}).get("confidence", 0)
-                         for t in equilibrium}
+            posterior = {
+                t: equilibrium[t] + (body.bl_views.get(t, {}).get("return", 0) - equilibrium[t])
+                * body.bl_views.get(t, {}).get("confidence", 0)
+                for t in equilibrium
+            }
             result["bl_explanation"] = explain_bl_posterior(
-                equilibrium_returns=equilibrium,
-                posterior_returns=posterior,
-                views=body.bl_views,
-            )
+                equilibrium_returns=equilibrium, posterior_returns=posterior, views=body.bl_views)
         else:
             result["bl_explanation"] = []
     except Exception as exc:
         log.warning("bl_explanation failed: %s", exc)
         result["bl_explanation"] = None
 
-    # 8. Tracking error budget
-    try:
-        bench_series = benchmark_returns if not benchmark_returns.empty else None
-        result["tracking_error_budget"] = compute_tracking_error_budget(
-            asset_returns=asset_returns,
-            portfolio_weights=current_weights,
-            benchmark_returns=bench_series,
-            te_budget=body.te_budget,
-        )
-    except Exception as exc:
-        log.warning("tracking_error_budget failed: %s", exc)
-        result["tracking_error_budget"] = None
+    _run("tracking_error_budget", compute_tracking_error_budget,
+         asset_returns=asset_returns, portfolio_weights=current_weights,
+         benchmark_returns=benchmark_returns if not benchmark_returns.empty else None,
+         te_budget=body.te_budget)
 
-    # 9. Walk-forward validation
-    try:
-        result["walk_forward"] = compute_walk_forward_metrics(
-            portfolio_returns=portfolio_returns,
-            benchmark_returns=benchmark_returns if not benchmark_returns.empty else None,
-            risk_free_rate=rfr,
-        )
-    except Exception as exc:
-        log.warning("walk_forward failed: %s", exc)
-        result["walk_forward"] = None
+    _run("walk_forward", compute_walk_forward_metrics,
+         portfolio_returns=portfolio_returns,
+         benchmark_returns=benchmark_returns if not benchmark_returns.empty else None,
+         risk_free_rate=rfr)
 
-    # 10. Regime probabilities
-    try:
-        result["regime"] = compute_regime_probabilities(portfolio_returns)
-    except Exception as exc:
-        log.warning("regime failed: %s", exc)
-        result["regime"] = None
+    _run("regime", compute_regime_probabilities, portfolio_returns=portfolio_returns)
 
-    # 11. Dynamic weight caps
-    try:
-        result["dynamic_caps"] = compute_dynamic_weight_caps(
-            asset_returns=asset_returns,
-            current_weights=current_weights,
-        )
-    except Exception as exc:
-        log.warning("dynamic_caps failed: %s", exc)
-        result["dynamic_caps"] = None
+    _run("dynamic_caps", compute_dynamic_weight_caps,
+         asset_returns=asset_returns, current_weights=current_weights)
 
-    # 12. Expected drawdown profile
-    try:
-        result["drawdown_profile"] = compute_expected_drawdown_profile(
-            portfolio_returns=portfolio_returns,
-            current_value=total_value,
-            horizons_years=body.horizons_years,
-            n_sims=body.n_dd_sims,
-        )
-    except Exception as exc:
-        log.warning("drawdown_profile failed: %s", exc)
-        result["drawdown_profile"] = None
+    _run("drawdown_profile", compute_expected_drawdown_profile,
+         portfolio_returns=portfolio_returns, current_value=total_value,
+         horizons_years=body.horizons_years, n_sims=body.n_dd_sims)
 
-    # 13. Model drift
-    try:
-        result["model_drift"] = compute_model_drift_score(
-            asset_returns=asset_returns,
-            risk_free_rate=rfr,
-        )
-    except Exception as exc:
-        log.warning("model_drift failed: %s", exc)
-        result["model_drift"] = None
+    _run("model_drift", compute_model_drift_score,
+         asset_returns=asset_returns, risk_free_rate=rfr)
 
-    # 14. Naive benchmark comparison
-    try:
-        result["naive_benchmarks"] = benchmark_naive_portfolios(
-            asset_returns=asset_returns,
-            portfolio_returns=portfolio_returns,
-            benchmark_returns=benchmark_returns if not benchmark_returns.empty else None,
-            risk_free_rate=rfr,
-        )
-    except Exception as exc:
-        log.warning("naive_benchmarks failed: %s", exc)
-        result["naive_benchmarks"] = None
+    _run("naive_benchmarks", benchmark_naive_portfolios,
+         asset_returns=asset_returns, portfolio_returns=portfolio_returns,
+         benchmark_returns=benchmark_returns if not benchmark_returns.empty else None,
+         risk_free_rate=rfr)
 
-    # 15. Factor risk decomposition
-    try:
-        result["factor_risk"] = compute_factor_risk_decomposition(
-            asset_returns=asset_returns,
-            portfolio_weights=current_weights,
-            risk_free_rate=rfr,
-        )
-    except Exception as exc:
-        log.warning("factor_risk failed: %s", exc)
-        result["factor_risk"] = None
+    _run("factor_risk", compute_factor_risk_decomposition,
+         asset_returns=asset_returns, portfolio_weights=current_weights, risk_free_rate=rfr)
 
     return result
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
+@router.post("")
+def quant_advanced_start(
+    body: QuantAdvancedRequest,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_user_id),
+):
+    """Start background computation; returns job_id immediately."""
+    _prune_jobs()
+    job_id = str(uuid.uuid4())
+    with _jobs_lock:
+        _jobs[job_id] = {"status": "computing", "result": None, "ts": time.time()}
+
+    # Run in a daemon thread so FastAPI can return the response immediately
+    t = threading.Thread(target=_run_quant, args=(job_id, body, user_id), daemon=True)
+    t.start()
+
+    return {"job_id": job_id, "status": "computing"}
+
+
+@router.get("/result/{job_id}")
+def quant_advanced_result(job_id: str, user_id: str = Depends(get_user_id)):
+    """Poll this endpoint until status=='done'."""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found or expired")
+    if job["status"] == "computing":
+        return {"status": "computing"}
+    if job["status"] == "error":
+        return {"status": "error", "detail": job.get("detail", "Unknown error")}
+    return {"status": "done", "result": job["result"]}
