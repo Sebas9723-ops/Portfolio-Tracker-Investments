@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { fetchRebalancing, fetchRequiredForMaxSharpe, fetchDeployCapital, type DeployCapitalResult } from "@/lib/api/analytics";
+import { fetchRebalancing, fetchRequiredForMaxSharpe } from "@/lib/api/analytics";
 import { fetchContributionPlan } from "@/lib/api/contribution";
 import type { ContributionPlanResponse } from "@/lib/api/contribution";
 import { useAIChat } from "@/lib/context/aiChatContext";
@@ -68,9 +68,6 @@ export default function RebalancingPage() {
   const [msPeriod, setMsPeriod] = useState("2y");
   const [quantData, setQuantData] = useState<ContributionPlanResponse | null>(null);
   const [quantError, setQuantError] = useState<string | null>(null);
-  const [deployData, setDeployData] = useState<DeployCapitalResult | null>(null);
-  const [deployLoading, setDeployLoading] = useState(false);
-  const [deployError, setDeployError] = useState<string | null>(null);
   const [horizon, setHorizon] = useState<"short" | "medium" | "long">("long");
   const queryClient = useQueryClient();
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: fetchSettings });
@@ -304,151 +301,37 @@ export default function RebalancingPage() {
         )}
       </div>
 
-      {/* ── Smart Capital Deployment ─────────────────────────────────── */}
+      {/* ── Quant Contribution Planner ──────────────────────────────── */}
       {contribution > 0 && (
         <div className="bbg-card">
           <div className="flex items-center justify-between mb-2">
             <div>
-              <p className="bbg-header mb-0">Smart Capital Deployment</p>
-              <p className="text-bloomberg-muted text-[10px] mt-0.5">
-                Buy-only · BL views · regime-weighted μ · CVaR · liquidity · correlation filter
+              <div className="flex items-center gap-2 mb-0.5">
+                <p className="bbg-header mb-0">Capital Deployment — Quant Engine</p>
+                <ProfileBadge />
+              </div>
+              <p className="text-bloomberg-muted text-[10px]">
+                {profile === "aggressive"
+                  ? "Maximise expected return · CS momentum overlay · kappa×0.5 · Motor 1/2 enforced"
+                  : profile === "conservative"
+                  ? "Minimise post-deployment variance · strict CVaR · Motor 1/2 enforced"
+                  : "Balance return vs variance · moderate CVaR · Motor 1/2 enforced"}
               </p>
             </div>
-            <button
-              onClick={async () => {
-                setDeployLoading(true);
-                setDeployError(null);
-                try {
-                  const res = await fetchDeployCapital(contribution, tcModel);
-                  setDeployData(res);
-                } catch (e: any) {
-                  setDeployError(e?.response?.data?.detail ?? e?.message ?? "Error");
-                } finally {
-                  setDeployLoading(false);
-                }
-              }}
-              disabled={deployLoading}
-              className="bg-bloomberg-gold text-bloomberg-bg text-[10px] font-bold px-5 py-1.5 hover:opacity-90 disabled:opacity-50 uppercase tracking-wider"
-            >
-              {deployLoading ? "COMPUTING…" : "DEPLOY"}
-            </button>
-          </div>
-
-          {deployError && (
-            <p className="text-red-400 text-[10px] py-1">{deployError}</p>
-          )}
-
-          {deployData && (
-            <div className="space-y-3">
-              {/* Meta row */}
-              <div className="flex flex-wrap gap-4 text-[10px]">
-                {deployData.regime && (
-                  <span className="text-bloomberg-muted">
-                    Regime: <span className={`font-bold ${deployData.regime.startsWith("bull") ? "text-green-400" : deployData.regime === "crisis" ? "text-red-400" : "text-bloomberg-gold"}`}>
-                      {deployData.regime.replace("_", " ").toUpperCase()}
-                    </span>
-                    {deployData.regime_mu_scale !== 1 && (
-                      <span className="text-bloomberg-muted"> (μ×{deployData.regime_mu_scale.toFixed(2)})</span>
-                    )}
-                  </span>
-                )}
-                <span className="text-bloomberg-muted">
-                  μ source: <span className="text-bloomberg-text">{deployData.mu_source.replace("_", " ")}</span>
-                </span>
-                {deployData.n_corr_alerts > 0 && (
-                  <span className="text-bloomberg-gold">{deployData.n_corr_alerts} corr. alert(s) applied</span>
-                )}
-                {deployData.n_no_edge > 0 && (
-                  <span className="text-bloomberg-muted">{deployData.n_no_edge} ticker(s) with no net edge</span>
-                )}
-                <span className="text-bloomberg-muted">
-                  TC: <span className="text-red-400">-{fmtCurrency(deployData.total_tc)}</span>
-                </span>
-                <span className="text-bloomberg-muted">
-                  Net deployed: <span className="text-green-400 font-bold">{fmtCurrency(deployData.net_deployed)}</span>
-                </span>
-              </div>
-
-              {deployData.allocations.length === 0 ? (
-                <p className="text-bloomberg-muted text-[10px]">No allocations — all positions at or above cap.</p>
-              ) : (
-                <table className="bbg-table text-[10px]">
-                  <thead>
-                    <tr>
-                      <th>Ticker</th>
-                      <th className="text-right">Amount</th>
-                      <th className="text-right">% Capital</th>
-                      <th className="text-right">Exp. Return</th>
-                      <th className="text-right">Cur. W%</th>
-                      <th className="text-right">Post W%</th>
-                      <th className="text-right">TC</th>
-                      <th>Signals</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {deployData.allocations.map((a) => (
-                      <tr key={a.ticker}>
-                        <td className="text-bloomberg-gold font-medium">{a.ticker}</td>
-                        <td className="text-right font-bold text-green-400">{fmtCurrency(a.amount, ccy)}</td>
-                        <td className="text-right">{a.pct_of_capital.toFixed(1)}%</td>
-                        <td className={`text-right font-medium ${a.expected_return_pct >= 0 ? "text-green-400" : "text-red-400"}`}>
-                          {a.expected_return_pct.toFixed(1)}%
-                        </td>
-                        <td className="text-right text-bloomberg-muted">{a.current_weight_pct.toFixed(1)}%</td>
-                        <td className="text-right">{a.target_weight_pct.toFixed(1)}%</td>
-                        <td className="text-right text-bloomberg-muted">-{fmtCurrency(a.tc_cost)}</td>
-                        <td>
-                          <div className="flex flex-wrap gap-0.5">
-                            {a.signals.map((s) => (
-                              <span key={s} className={`px-1 py-0.5 text-[8px] font-bold border ${
-                                s === "net_alpha_positive" ? "border-green-800 text-green-400 bg-green-900/20" :
-                                s === "high_expected_return" ? "border-bloomberg-gold/40 text-bloomberg-gold bg-bloomberg-gold/10" :
-                                s === "underweight" ? "border-blue-800 text-blue-400 bg-blue-900/20" :
-                                s === "corr_penalty_applied" ? "border-orange-800 text-orange-400 bg-orange-900/20" :
-                                "border-bloomberg-border text-bloomberg-muted"
-                              }`}>
-                                {s.replace(/_/g, " ")}
-                              </span>
-                            ))}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          )}
-
-          {!deployData && !deployLoading && (
-            <p className="text-bloomberg-muted text-[10px]">
-              Press <span className="text-bloomberg-gold font-semibold">DEPLOY</span> to compute the optimal buy-only allocation using cached quant signals.
-            </p>
-          )}
-        </div>
-      )}
-
-      {/* ── Quant Contribution Planner ──────────────────────────────── */}
-      {contribution > 0 && (
-        <div className="bbg-card">
-          <div className="flex items-center justify-between mb-3">
-            <p className="bbg-header mb-0">
-              Contribution Planner — Quant Engine
-            </p>
             <button
               onClick={() =>
                 quantMutation.mutate({ available_cash: contribution, profile, time_horizon: horizon, tc_model: tcModel })
               }
               disabled={quantMutation.isPending}
-              className="bg-bloomberg-gold text-bloomberg-bg text-[10px] font-bold px-5 py-1.5 hover:opacity-90 disabled:opacity-50 uppercase tracking-wider"
+              className="bg-bloomberg-gold text-bloomberg-bg text-[10px] font-bold px-5 py-1.5 hover:opacity-90 disabled:opacity-50 uppercase tracking-wider shrink-0"
             >
-              {quantMutation.isPending ? "OPTIMIZING…" : "RUN OPTIMIZATION"}
+              {quantMutation.isPending ? "OPTIMIZING…" : "RUN ENGINE"}
             </button>
           </div>
 
-          {/* Time horizon selector */}
-          <div className="flex items-center gap-3 mb-3">
-            <span className="text-bloomberg-muted text-[10px] uppercase tracking-wider">Time Horizon</span>
+          {/* Time horizon + pipeline summary */}
+          <div className="flex flex-wrap items-center gap-3 mb-3 pt-1 border-t border-bloomberg-border/30">
+            <span className="text-bloomberg-muted text-[10px] uppercase tracking-wider">Horizon</span>
             <div className="flex gap-1">
               {(["short", "medium", "long"] as const).map((h) => (
                 <button
@@ -465,21 +348,19 @@ export default function RebalancingPage() {
               ))}
             </div>
             <span className="text-bloomberg-muted text-[10px]">
-              {horizon === "short"
-                ? "high λ, strict CVaR, XGB-weighted"
-                : horizon === "medium"
-                ? "balanced λ, moderate CVaR"
-                : "low λ, relaxed CVaR, FF5-weighted"}
+              {horizon === "short" ? "high λ · strict CVaR · XGB 80-85%" :
+               horizon === "medium" ? "balanced λ · moderate CVaR · XGB 50-65%" :
+               "low λ · relaxed CVaR · XGB 25-45%"}
+            </span>
+            <span className="ml-auto text-bloomberg-muted text-[10px]">
+              Pipeline: GJR-GARCH → DCC → FF5 → HMM-4 → XGBoost-BL → CVXPY
             </span>
           </div>
 
           <p className="text-bloomberg-muted text-[10px] mb-3">
-            Deploy{" "}
-            <span className="text-bloomberg-gold font-bold">
-              {fmtCurrency(contribution, ccy)}
-            </span>{" "}
-            using CVaR-constrained optimization with Ledoit-Wolf covariance,
-            HMM 4-state regime detection, GARCH covariance, Fama-French 5-factor returns, and XGBoost Black-Litterman views.
+            Deploying{" "}
+            <span className="text-bloomberg-gold font-bold">{fmtCurrency(contribution, ccy)}</span>
+            {" "}· slippage estimated from 30d ADV · Motor 1/2 constraints active · results saved to DB
           </p>
 
           {quantMutation.isPending && (
