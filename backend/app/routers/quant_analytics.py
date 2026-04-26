@@ -1,25 +1,17 @@
 """
 Quant Analytics v2 — FastAPI router.
 
-POST /api/analytics/quant-advanced
-  Starts background computation; returns {job_id, status:"computing"} immediately.
-
-GET  /api/analytics/quant-advanced/result/{job_id}
-  Returns {status:"computing"} or {status:"done", result:{...}} or {status:"error", detail:str}.
-
-Frontend polls every 3 s until status=="done".
+POST /api/quant/run   — synchronous, runs all 15 modules, returns result directly.
+GET  /api/quant/ping  — health check.
 """
 from __future__ import annotations
 
 import logging
-import threading
-import time
-import uuid
-from typing import Any, Optional
+from typing import Optional
 
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.auth.dependencies import get_user_id
@@ -47,25 +39,11 @@ from app.services.quant_analytics import (
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/quant", tags=["quant-analytics"])
 
-# ── In-memory job store ───────────────────────────────────────────────────────
-# {job_id: {"status": "computing"|"done"|"error", "result": ..., "detail": ..., "ts": float}}
-_jobs: dict[str, dict[str, Any]] = {}
-_jobs_lock = threading.Lock()
-_JOB_TTL = 600  # seconds — clean up old jobs
-
-
-def _prune_jobs() -> None:
-    now = time.time()
-    with _jobs_lock:
-        stale = [k for k, v in _jobs.items() if now - v["ts"] > _JOB_TTL]
-        for k in stale:
-            del _jobs[k]
-
 
 class QuantAdvancedRequest(BaseModel):
     period: str = "1y"
-    n_bootstrap: int = 20
-    n_dd_sims: int = 50
+    n_bootstrap: int = 15
+    n_dd_sims: int = 30
     horizons_years: list[int] = [1, 3, 5]
     band_tolerance: float = 0.02
     te_budget: float = 0.10
@@ -100,23 +78,19 @@ def _build_benchmark_returns(benchmark_ticker: str, period: str) -> pd.Series:
         return pd.Series(dtype=float)
 
 
-def _run_quant(job_id: str, body: QuantAdvancedRequest, user_id: str) -> None:
-    """Runs in a background thread; writes result to _jobs[job_id]."""
-    try:
-        result = _compute_all(body, user_id)
-        with _jobs_lock:
-            _jobs[job_id] = {"status": "done", "result": result, "ts": time.time()}
-    except HTTPException as exc:
-        with _jobs_lock:
-            _jobs[job_id] = {"status": "error", "detail": exc.detail, "ts": time.time()}
-    except Exception as exc:
-        log.exception("quant background job %s failed", job_id)
-        with _jobs_lock:
-            _jobs[job_id] = {"status": "error", "detail": str(exc), "ts": time.time()}
+@router.get("/ping")
+def quant_ping():
+    return {"ok": True}
 
 
-def _compute_all(body: QuantAdvancedRequest, user_id: str) -> dict:
-    # ── Load portfolio ────────────────────────────────────────────────────────
+@router.post("/run")
+def quant_run(
+    body: QuantAdvancedRequest,
+    user_id: str = Depends(get_user_id),
+):
+    """Run all 15 Quant Analytics modules synchronously."""
+
+    # ── Portfolio ─────────────────────────────────────────────────────────────
     try:
         summary, tickers, settings = load_portfolio_data(user_id)
     except Exception as exc:
@@ -127,19 +101,18 @@ def _compute_all(body: QuantAdvancedRequest, user_id: str) -> dict:
 
     rfr = body.risk_free_rate or float(settings.get("risk_free_rate") or get_risk_free_rate())
     total_value = float(summary.total_value_base)
-
     current_weights: dict[str, float] = {r.ticker: r.weight / 100 for r in summary.rows}
     position_values: dict[str, float] = {r.ticker: r.value_base for r in summary.rows}
     current_prices: dict[str, float] = {
         r.ticker: float(getattr(r, "price_base", 0) or 0) for r in summary.rows
     }
 
-    # ── Market data ───────────────────────────────────────────────────────────
+    # ── Market data (cached 1h) ───────────────────────────────────────────────
     try:
         hist = get_historical_multi(tickers, period=body.period)
         asset_returns = _returns_from_hist(hist)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Return data unavailable: {exc}")
+        raise HTTPException(status_code=500, detail=f"Market data unavailable: {exc}")
 
     if asset_returns.empty:
         raise HTTPException(status_code=422, detail="No return history available")
@@ -159,7 +132,7 @@ def _compute_all(body: QuantAdvancedRequest, user_id: str) -> dict:
     expected_returns: dict[str, float] = {
         t: float(asset_returns[t].mean() * 252) for t in asset_returns.columns
     }
-    target_weights: dict[str, float] = current_weights
+    target_weights = current_weights
 
     result: dict = {}
 
@@ -265,44 +238,3 @@ def _compute_all(body: QuantAdvancedRequest, user_id: str) -> dict:
          asset_returns=asset_returns, portfolio_weights=current_weights, risk_free_rate=rfr)
 
     return result
-
-
-# ── Endpoints ─────────────────────────────────────────────────────────────────
-
-@router.get("/ping")
-def quant_ping():
-    """Health-check for this router."""
-    return {"ok": True}
-
-
-@router.post("/run")
-def quant_advanced_start(
-    body: QuantAdvancedRequest,
-    background_tasks: BackgroundTasks,
-    user_id: str = Depends(get_user_id),
-):
-    """Start background computation; returns job_id immediately."""
-    _prune_jobs()
-    job_id = str(uuid.uuid4())
-    with _jobs_lock:
-        _jobs[job_id] = {"status": "computing", "result": None, "ts": time.time()}
-
-    # Run in a daemon thread so FastAPI can return the response immediately
-    t = threading.Thread(target=_run_quant, args=(job_id, body, user_id), daemon=True)
-    t.start()
-
-    return {"job_id": job_id, "status": "computing"}
-
-
-@router.get("/result/{job_id}")
-def quant_advanced_result(job_id: str, user_id: str = Depends(get_user_id)):
-    """Poll this endpoint until status=='done'."""
-    with _jobs_lock:
-        job = _jobs.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found or expired")
-    if job["status"] == "computing":
-        return {"status": "computing"}
-    if job["status"] == "error":
-        return {"status": "error", "detail": job.get("detail", "Unknown error")}
-    return {"status": "done", "result": job["result"]}

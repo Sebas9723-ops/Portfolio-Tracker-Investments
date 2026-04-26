@@ -78,7 +78,7 @@ export const backtestWeights = (weights: Record<string, number>, period = "1y") 
     )
     .then((r) => r.data);
 
-export const fetchQuantAdvanced = async (body: {
+export const fetchQuantAdvanced = (body: {
   period?: string;
   benchmark_ticker?: string;
   n_bootstrap?: number;
@@ -87,29 +87,10 @@ export const fetchQuantAdvanced = async (body: {
   band_tolerance?: number;
   te_budget?: number;
   bl_views?: Record<string, { return: number; confidence: number }>;
-} = {}): Promise<import("./contribution").QuantAnalyticsV2> => {
-  // Start background job
-  const { data: job } = await apiClient.post<{ job_id: string; status: string }>(
-    "/api/quant/run",
-    body,
-    { timeout: 60_000 },
-  );
-
-  // Poll every 3 s for up to 3 minutes
-  const deadline = Date.now() + 3 * 60 * 1000;
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 3000));
-    const { data: poll } = await apiClient.get<{
-      status: string;
-      result?: import("./contribution").QuantAnalyticsV2;
-      detail?: string;
-    }>(`/api/quant/result/${job.job_id}`, { timeout: 15_000 });
-
-    if (poll.status === "done") return poll.result!;
-    if (poll.status === "error") throw new Error(poll.detail ?? "Quant engine error");
-  }
-  throw new Error("Quant engine timed out after 3 minutes");
-};
+} = {}) =>
+  apiClient
+    .post<import("./contribution").QuantAnalyticsV2>("/api/quant/run", body, { timeout: 120_000 })
+    .then((r) => r.data);
 
 export const fetchEquityCurve = (period = "1y") =>
   apiClient
