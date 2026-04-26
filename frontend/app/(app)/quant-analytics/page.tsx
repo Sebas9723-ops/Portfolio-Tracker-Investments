@@ -259,7 +259,12 @@ export default function QuantAnalyticsPage() {
       {isError && (
         <div className="bbg-card border border-red-800 bg-red-900/20">
           <p className="text-red-400 text-xs font-bold mb-1">Error running quant engine</p>
-          <p className="text-red-400/70 text-[10px]">{(error as any)?.message || "Backend error — check that all dependencies are installed."}</p>
+          <p className="text-red-400/70 text-[10px]">
+            {(error as any)?.response?.data?.detail
+              || (error as any)?.message
+              || "Backend error"}
+            {(error as any)?.response?.status ? ` (HTTP ${(error as any).response.status})` : ""}
+          </p>
         </div>
       )}
 

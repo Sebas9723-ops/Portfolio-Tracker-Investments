@@ -45,7 +45,7 @@ from app.services.quant_analytics import (
 )
 
 log = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/analytics/quant-advanced", tags=["quant-analytics"])
+router = APIRouter(prefix="/api/quant", tags=["quant-analytics"])
 
 # ── In-memory job store ───────────────────────────────────────────────────────
 # {job_id: {"status": "computing"|"done"|"error", "result": ..., "detail": ..., "ts": float}}
@@ -269,7 +269,13 @@ def _compute_all(body: QuantAdvancedRequest, user_id: str) -> dict:
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
-@router.post("")
+@router.get("/ping")
+def quant_ping():
+    """Health-check for this router."""
+    return {"ok": True}
+
+
+@router.post("/run")
 def quant_advanced_start(
     body: QuantAdvancedRequest,
     background_tasks: BackgroundTasks,

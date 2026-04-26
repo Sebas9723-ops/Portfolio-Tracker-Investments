@@ -90,8 +90,9 @@ export const fetchQuantAdvanced = async (body: {
 } = {}): Promise<import("./contribution").QuantAnalyticsV2> => {
   // Start background job
   const { data: job } = await apiClient.post<{ job_id: string; status: string }>(
-    "/api/analytics/quant-advanced",
+    "/api/quant/run",
     body,
+    { timeout: 60_000 },
   );
 
   // Poll every 3 s for up to 3 minutes
@@ -102,7 +103,7 @@ export const fetchQuantAdvanced = async (body: {
       status: string;
       result?: import("./contribution").QuantAnalyticsV2;
       detail?: string;
-    }>(`/api/analytics/quant-advanced/result/${job.job_id}`);
+    }>(`/api/quant/result/${job.job_id}`, { timeout: 15_000 });
 
     if (poll.status === "done") return poll.result!;
     if (poll.status === "error") throw new Error(poll.detail ?? "Quant engine error");
