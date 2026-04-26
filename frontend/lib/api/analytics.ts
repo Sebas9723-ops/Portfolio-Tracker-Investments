@@ -15,6 +15,34 @@ export const fetchMaxSharpe = (body = {}) =>
 export const fetchRebalancing = (params?: { contribution?: number; tc_model?: string }) =>
   apiClient.get<RebalancingRow[]>("/api/rebalancing/suggestions", { params }).then((r) => r.data);
 
+export interface DeployAllocation {
+  ticker: string;
+  amount: number;
+  pct_of_capital: number;
+  tc_cost: number;
+  net_amount: number;
+  current_weight_pct: number;
+  target_weight_pct: number;
+  expected_return_pct: number;
+  signals: string[];
+}
+export interface DeployCapitalResult {
+  allocations: DeployAllocation[];
+  regime: string | null;
+  regime_probs: Record<string, number>;
+  mu_source: string;
+  regime_mu_scale: number;
+  cvar_limit_daily: number;
+  n_corr_alerts: number;
+  n_no_edge: number;
+  total_tc: number;
+  net_deployed: number;
+}
+export const fetchDeployCapital = (amount: number, tc_model = "broker") =>
+  apiClient
+    .get<DeployCapitalResult>("/api/rebalancing/deploy-capital", { params: { amount, tc_model } })
+    .then((r) => r.data);
+
 export const fetchVaR = (confidence = 0.95, period = "2y") =>
   apiClient.get<VaRResult>("/api/risk/var", { params: { confidence, period } }).then((r) => r.data);
 
