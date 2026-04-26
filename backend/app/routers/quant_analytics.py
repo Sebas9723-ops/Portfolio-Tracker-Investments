@@ -12,6 +12,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.auth.dependencies import get_user_id
@@ -38,6 +39,30 @@ from app.services.quant_analytics import (
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/quant", tags=["quant-analytics"])
+
+
+def _to_python(obj):
+    """Recursively convert numpy/pandas types to JSON-serializable Python types."""
+    if isinstance(obj, dict):
+        return {k: _to_python(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_python(i) for i in obj]
+    if isinstance(obj, float) and (obj != obj or obj == float("inf") or obj == float("-inf")):
+        return None  # NaN / Inf → null
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        v = float(obj)
+        return None if (v != v or v == float("inf") or v == float("-inf")) else v
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, np.ndarray):
+        return _to_python(obj.tolist())
+    if isinstance(obj, pd.Series):
+        return _to_python(obj.tolist())
+    if isinstance(obj, pd.DataFrame):
+        return _to_python(obj.to_dict(orient="records"))
+    return obj
 
 
 class QuantAdvancedRequest(BaseModel):
@@ -237,4 +262,4 @@ def quant_run(
     _run("factor_risk", compute_factor_risk_decomposition,
          asset_returns=asset_returns, portfolio_weights=current_weights, risk_free_rate=rfr)
 
-    return result
+    return JSONResponse(content=_to_python(result))
