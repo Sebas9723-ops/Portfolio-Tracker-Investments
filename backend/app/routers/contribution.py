@@ -83,6 +83,7 @@ def run_contribution_plan(
         raise HTTPException(status_code=422, detail="No positions found. Add positions first.")
 
     rfr = float(settings.get("risk_free_rate", 0.045))
+    macro_overlay: dict[str, float] = settings.get("macro_overlay") or {}
     max_single = float(settings.get("max_single_asset", 0.40))
     ticker_weight_rules = settings.get("ticker_weight_rules") or {}
     combination_ranges  = settings.get("combination_ranges") or {}
@@ -168,6 +169,12 @@ def run_contribution_plan(
         if penalise in tickers_avail:
             mu[tickers_avail.index(penalise)] *= 0.80
             corr_penalised.add(penalise)
+
+    # ── Macro overlay ─────────────────────────────────────────────────────
+    for i, t in enumerate(tickers_avail):
+        if t in macro_overlay:
+            mult = float(macro_overlay[t])
+            mu[i] = mu[i] * max(0.5, min(mult, 2.0))  # clamp multiplier to [0.5, 2.0]
 
     # ── Net-alpha filter ──────────────────────────────────────────────────
     ann_tc_drag = (tc_params["fixed"] / max(amount / n, 1) + tc_params["pct"]) * 2
@@ -393,6 +400,13 @@ def run_contribution_plan(
     )
     qr_id = save_quant_result(user_id, result, profile)
     save_contribution_plan(user_id, cp, qr_id)
+
+    # Feature B: log predictions for tracking
+    try:
+        from app.db.quant_results import save_prediction_log
+        save_prediction_log(user_id, qr_id, allocations)
+    except Exception as _pl_exc:
+        log.warning("Prediction log failed: %s", _pl_exc)
 
     # ── Fast analytics (9 modules, reuse engine.last_returns) ─────────────
     quant_analytics_v2: dict = {}

@@ -268,6 +268,195 @@ def _send_telegram_report_all_users() -> None:
             log.error("  ✗ %s… — Telegram report failed: %s", user_id[:8], exc)
 
 
+def _check_drift_alerts_all_users() -> None:
+    """
+    Check portfolio drift vs optimal weights for each user with drift alerts enabled.
+    Sends email if any position drifts beyond the user's alert threshold.
+    Runs daily at 17:00 America/Bogota.
+    """
+    from app.db.supabase_client import get_admin_client
+    from app.db.quant_results import load_latest_quant_result
+    from app.services.email_service import send_drift_alert
+    from app.services.portfolio_service import load_portfolio_data
+
+    db = get_admin_client()
+    pos_res = db.table("positions").select("user_id").execute()
+    user_ids = list({row["user_id"] for row in (pos_res.data or [])})
+    log.info("Drift alert check: %d user(s)", len(user_ids))
+
+    for user_id in user_ids:
+        try:
+            settings_res = db.table("user_settings").select("*").eq("user_id", user_id).maybe_single().execute()
+            settings = settings_res.data or {}
+
+            if not settings.get("drift_alerts_enabled"):
+                continue
+            alert_email = settings.get("drift_alert_email", "")
+            if not alert_email:
+                continue
+
+            alert_threshold = float(settings.get("drift_alert_threshold") or 0.08)
+            qr = load_latest_quant_result(user_id)
+            if not qr:
+                continue
+
+            optimal_weights = qr.get("optimal_weights") or {}
+            if not optimal_weights:
+                continue
+
+            try:
+                summary, tickers, _ = load_portfolio_data(user_id)
+            except Exception:
+                continue
+
+            total_value = float(summary.total_value_base)
+            base_currency = settings.get("base_currency", "USD")
+            current_weights = {
+                r.ticker: r.value_base / total_value if total_value > 0 else 0.0
+                for r in summary.rows
+            }
+
+            drifts = []
+            for t in set(list(current_weights.keys()) + list(optimal_weights.keys())):
+                cw = current_weights.get(t, 0.0)
+                ow = float(optimal_weights.get(t, 0.0))
+                drift = ow - cw
+                if abs(drift) > alert_threshold:
+                    drifts.append({
+                        "ticker": t,
+                        "current_pct": cw * 100,
+                        "target_pct": ow * 100,
+                        "drift_pct": drift * 100,
+                    })
+
+            if drifts:
+                drifts.sort(key=lambda d: abs(d["drift_pct"]), reverse=True)
+                ok = send_drift_alert(alert_email, drifts, total_value, base_currency)
+                log.info("  %s %s… — drift alert sent (%d positions)", "✓" if ok else "✗", user_id[:8], len(drifts))
+        except Exception as exc:
+            log.error("  ✗ %s… — drift alert failed: %s", user_id[:8], exc)
+
+
+def _run_dca_for_all_users() -> None:
+    """
+    Run DCA contribution plan for all users whose day_of_month matches today.
+    Runs daily at 09:05 America/Bogota — only executes for matching users.
+    """
+    from datetime import date
+    from app.db.supabase_client import get_admin_client
+
+    today_day = date.today().day
+    db = get_admin_client()
+    res = (
+        db.table("dca_schedule")
+        .select("*")
+        .eq("day_of_month", today_day)
+        .eq("active", True)
+        .execute()
+    )
+    schedules = res.data or []
+    if not schedules:
+        log.info("DCA job: no schedules for day %d", today_day)
+        return
+
+    log.info("DCA job: %d schedule(s) to run for day %d", len(schedules), today_day)
+
+    for sched in schedules:
+        user_id = sched["user_id"]
+        try:
+            from app.routers.contribution import run_contribution_plan, ContributionRequest
+            req = ContributionRequest(
+                available_cash=float(sched["amount"]),
+                profile=sched.get("profile", "base"),
+                time_horizon=sched.get("time_horizon", "long"),
+                tc_model=sched.get("tc_model", "broker"),
+            )
+            run_contribution_plan(req, user_id=user_id)
+            db.table("dca_schedule").update({"last_run_at": "now()"}).eq("user_id", user_id).execute()
+            log.info("  ✓ %s… — DCA run complete (%.2f)", user_id[:8], sched["amount"])
+        except Exception as exc:
+            log.error("  ✗ %s… — DCA run failed: %s", user_id[:8], exc)
+
+
+def _backfill_prediction_prices() -> None:
+    """
+    Backfill price_30d, price_60d, price_90d in prediction_log for rows
+    where the target date has passed but price is still NULL.
+    Runs daily at 17:45 America/Bogota.
+    """
+    from datetime import date, timedelta
+    from app.db.supabase_client import get_admin_client
+    from app.services.market_data import get_historical_multi
+
+    db = get_admin_client()
+    today = date.today()
+
+    # Load rows that need backfilling
+    res = db.table("prediction_log").select("id,ticker,run_at,price_30d,price_60d,price_90d").execute()
+    rows = res.data or []
+    if not rows:
+        return
+
+    # Group tickers that need prices
+    needs_update: list[dict] = []
+    for r in rows:
+        run_date = date.fromisoformat(r["run_at"][:10]) if r.get("run_at") else None
+        if not run_date:
+            continue
+        need = {}
+        if r.get("price_30d") is None and (today - run_date).days >= 30:
+            need["price_30d"] = run_date + timedelta(days=30)
+        if r.get("price_60d") is None and (today - run_date).days >= 60:
+            need["price_60d"] = run_date + timedelta(days=60)
+        if r.get("price_90d") is None and (today - run_date).days >= 90:
+            need["price_90d"] = run_date + timedelta(days=90)
+        if need:
+            needs_update.append({"id": r["id"], "ticker": r["ticker"], "run_date": run_date, "need": need})
+
+    if not needs_update:
+        log.info("Prediction backfill: nothing to update")
+        return
+
+    # Fetch historical data per ticker
+    all_tickers = list({r["ticker"] for r in needs_update})
+    try:
+        hist = get_historical_multi(all_tickers, period="1y")
+    except Exception as exc:
+        log.error("Prediction backfill: hist fetch failed: %s", exc)
+        return
+
+    def _price_on(ticker: str, target_date: date) -> float | None:
+        df = hist.get(ticker)
+        if df is None or df.empty:
+            return None
+        col = "Close" if "Close" in df.columns else df.columns[0]
+        # Find closest date on or after target
+        import pandas as pd
+        target_ts = pd.Timestamp(target_date)
+        after = df[col].dropna()
+        after = after[after.index >= target_ts]
+        if after.empty:
+            return None
+        return float(after.iloc[0])
+
+    updated = 0
+    for item in needs_update:
+        updates: dict = {}
+        for col, target_date in item["need"].items():
+            p = _price_on(item["ticker"], target_date)
+            if p is not None:
+                updates[col] = p
+                # Compute realized return if entry_price is available
+        if updates:
+            try:
+                db.table("prediction_log").update(updates).eq("id", item["id"]).execute()
+                updated += 1
+            except Exception as exc:
+                log.warning("Prediction backfill update failed for %s: %s", item["id"], exc)
+
+    log.info("Prediction backfill: updated %d rows", updated)
+
+
 def start_scheduler() -> BackgroundScheduler:
     """Create and start the APScheduler instance. Returns it so the caller can shut it down."""
     scheduler = BackgroundScheduler(timezone="America/Bogota")
@@ -292,8 +481,29 @@ def start_scheduler() -> BackgroundScheduler:
         replace_existing=True,
         misfire_grace_time=600,
     )
+    scheduler.add_job(
+        _check_drift_alerts_all_users,
+        trigger=CronTrigger(hour=17, minute=0, timezone="America/Bogota"),
+        id="daily_drift_alerts",
+        replace_existing=True,
+        misfire_grace_time=600,
+    )
+    scheduler.add_job(
+        _run_dca_for_all_users,
+        trigger=CronTrigger(hour=9, minute=5, timezone="America/Bogota"),
+        id="daily_dca",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _backfill_prediction_prices,
+        trigger=CronTrigger(hour=17, minute=45, timezone="America/Bogota"),
+        id="daily_prediction_backfill",
+        replace_existing=True,
+        misfire_grace_time=600,
+    )
     scheduler.start()
     log.info(
-        "Schedulers started — snapshot: 17:30 Bogota | quant: 16:05 New York | telegram: 17:35 Bogota"
+        "Schedulers started — snapshot: 17:30 Bogota | quant: 16:05 New York | telegram: 17:35 Bogota | drift-alerts: 17:00 Bogota | dca: 09:05 Bogota | prediction-backfill: 17:45 Bogota"
     )
     return scheduler

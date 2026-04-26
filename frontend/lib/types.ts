@@ -270,6 +270,12 @@ export interface UserSettings {
     min_vol:    { ret: number; vol: number; sharpe: number };
     max_return: { ret: number; vol: number; sharpe: number };
   };
+  // Feature F: Macro overlay — per-ticker mu multiplier
+  macro_overlay?: Record<string, number>;
+  // Feature C: Drift alerts
+  drift_alerts_enabled?: boolean;
+  drift_alert_email?: string;
+  drift_alert_threshold?: number;
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────

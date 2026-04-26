@@ -22,6 +22,10 @@ class UserSettings(BaseModel):
     bl_views: dict = {}  # {profile: [{ticker, ret}]} — Black-Litterman views per profile
     bl_risk_aversion: float = 2.5   # Black-Litterman risk aversion parameter (λ)
     bl_tau: float = 0.05            # Black-Litterman uncertainty scaling (τ)
+    macro_overlay: dict = {}  # {ticker: float} — multiplier applied to mu, e.g. {"QQQ": 1.15, "GLD": 0.85}
+    drift_alerts_enabled: bool = False  # Feature C: enable email drift alerts
+    drift_alert_email: str = ""         # Feature C: email to receive alerts
+    drift_alert_threshold: float = 0.08 # Feature C: drift threshold for alerts (above rebalancing_threshold)
 
 
 class LoginRequest(BaseModel):

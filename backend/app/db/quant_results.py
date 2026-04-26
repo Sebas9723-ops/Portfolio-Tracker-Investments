@@ -99,6 +99,50 @@ def load_latest_quant_result(user_id: str) -> dict | None:
         return None
 
 
+def save_prediction_log(
+    user_id: str,
+    quant_result_id: str | None,
+    allocations: list[dict],
+) -> None:
+    """
+    Insert prediction_log rows for each allocation from a contribution plan run.
+    Saves ticker, recommended_pct, recommended_amount, and entry_price.
+    Price fills (30d/60d/90d) are backfilled by the scheduler job.
+    """
+    from app.services.market_data import get_quotes
+
+    if not allocations:
+        return
+
+    tickers = [a["ticker"] for a in allocations]
+    try:
+        quotes = get_quotes(tickers)
+    except Exception:
+        quotes = {}
+
+    db = get_admin_client()
+    rows = []
+    for a in allocations:
+        ticker = a["ticker"]
+        entry_price = float(quotes.get(ticker, {}).get("price") or 0) or None
+        rows.append({
+            "user_id": user_id,
+            "quant_result_id": quant_result_id,
+            "ticker": ticker,
+            "recommended_pct": a.get("pct_of_capital"),
+            "recommended_amount": a.get("gross_amount"),
+            "entry_price": entry_price,
+        })
+
+    try:
+        db.table("prediction_log").upsert(
+            rows,
+            on_conflict="user_id,run_at,ticker",
+        ).execute()
+    except Exception as exc:
+        log.error("Failed to save prediction_log for user %s: %s", user_id[:8], exc)
+
+
 def load_user_bl_views(user_id: str) -> dict:
     """
     Load Black-Litterman views for a user from the `bl_views` table.

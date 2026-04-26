@@ -1,7 +1,7 @@
 "use client";
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchAnalytics, fetchRollingMetrics, fetchExtendedAnalytics, fetchVolRegime, fetchQuantAdvanced, fetchEquityCurve } from "@/lib/api/analytics";
+import { fetchAnalytics, fetchRollingMetrics, fetchExtendedAnalytics, fetchVolRegime, fetchQuantAdvanced, fetchEquityCurve, fetchVsBenchmark, fetchRecommendations, fetchTaxLoss } from "@/lib/api/analytics";
 import type {
   FactorRisk, TrackingErrorBudget, QuantRegime, NaiveBenchmarkRow, WalkForward,
 } from "@/lib/api/contribution";
@@ -88,6 +88,24 @@ export default function AnalyticsPage() {
     naive_benchmarks?: NaiveBenchmarkRow[];
     walk_forward?: WalkForward;
   } | undefined;
+
+  const { data: vsBenchmark } = useQuery({
+    queryKey: ["vs-benchmark", period, preferred_benchmark],
+    queryFn: () => fetchVsBenchmark(period, preferred_benchmark),
+    staleTime: 10 * 60 * 1000,
+  });
+
+  const { data: recs } = useQuery({
+    queryKey: ["recommendations"],
+    queryFn: fetchRecommendations,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const { data: taxLoss } = useQuery({
+    queryKey: ["tax-loss"],
+    queryFn: () => fetchTaxLoss(5.0),
+    staleTime: 10 * 60 * 1000,
+  });
 
   // Derived from optional data — must be before any early returns (React hooks rules)
   const vrSeries = volRegime?.series ?? [];
@@ -197,6 +215,82 @@ export default function AnalyticsPage() {
               </div>
             );
           })()}
+        </div>
+      )}
+
+      {/* ── Portfolio vs Benchmark ── */}
+      {vsBenchmark && vsBenchmark.series.length > 1 && (
+        <div className="bbg-card">
+          <div className="flex items-center justify-between mb-2">
+            <p className="bbg-header">Portfolio vs {vsBenchmark.benchmark_ticker} (Normalized to 100)</p>
+            {vsBenchmark.alpha_total != null && (
+              <span className={`text-[10px] font-bold ${vsBenchmark.alpha_total >= 0 ? "text-green-400" : "text-red-400"}`}>
+                Alpha: {vsBenchmark.alpha_total >= 0 ? "+" : ""}{vsBenchmark.alpha_total.toFixed(2)} pts
+              </span>
+            )}
+          </div>
+          <div className="h-52">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={vsBenchmark.series} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e2530" />
+                <XAxis dataKey="date" tick={{ fill: "#6b7280", fontSize: 9 }} tickFormatter={(d) => d.slice(5)} interval="preserveStartEnd" minTickGap={40} />
+                <YAxis tick={{ fill: "#6b7280", fontSize: 9 }} width={40} tickFormatter={(v) => v.toFixed(0)} />
+                <Tooltip
+                  contentStyle={{ background: "#0b0f14", border: "1px solid #1e2530", fontSize: 11 }}
+                  formatter={(v: number, name: string) => [`${v?.toFixed(2)}`, name === "portfolio" ? "Portfolio" : name === "benchmark" ? vsBenchmark.benchmark_ticker : "Alpha"]}
+                  labelFormatter={(d) => `Date: ${d}`}
+                />
+                <Legend wrapperStyle={{ fontSize: 10, color: "#6b7280" }} />
+                <ReferenceLine y={100} stroke="#374151" strokeDasharray="2 2" />
+                <Area type="monotone" dataKey="alpha" fill="#f3a71215" stroke="none" name="alpha" />
+                <Line type="monotone" dataKey="portfolio" stroke="#f3a712" strokeWidth={2} dot={false} name="portfolio" />
+                <Line type="monotone" dataKey="benchmark" stroke="#6b7280" strokeWidth={1.5} dot={false} strokeDasharray="4 4" name="benchmark" />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+          {vsBenchmark.inception_date && (
+            <p className="text-bloomberg-muted text-[9px] mt-2">Inception: {vsBenchmark.inception_date} · Both series normalized to 100 at inception</p>
+          )}
+        </div>
+      )}
+
+      {/* ── Recommendation Engine ── */}
+      {recs && recs.cards.length > 0 && (
+        <div className="bbg-card">
+          <div className="flex items-center justify-between mb-3">
+            <p className="bbg-header">Recommendation Engine</p>
+            {recs.generated_at && (
+              <span className="text-bloomberg-muted text-[9px]">Updated: {recs.generated_at.slice(0, 16).replace("T", " ")}</span>
+            )}
+          </div>
+          <div className="space-y-2">
+            {recs.cards.map((card, i) => {
+              const colors = {
+                action:  "border-l-red-500 bg-red-500/5",
+                warning: "border-l-yellow-500 bg-yellow-500/5",
+                info:    "border-l-blue-500 bg-blue-500/5",
+              };
+              const badges = {
+                action:  "bg-red-500/20 text-red-400",
+                warning: "bg-yellow-500/20 text-yellow-400",
+                info:    "bg-blue-500/20 text-blue-400",
+              };
+              return (
+                <div key={i} className={`border-l-2 pl-3 py-2 pr-2 rounded-r ${colors[card.severity]}`}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${badges[card.severity]}`}>{card.severity}</span>
+                        {card.ticker && <span className="text-bloomberg-gold text-[10px] font-bold">{card.ticker}</span>}
+                      </div>
+                      <p className="text-bloomberg-text text-[11px] font-semibold">{card.title}</p>
+                      <p className="text-bloomberg-muted text-[10px] mt-0.5">{card.body}</p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -505,6 +599,43 @@ export default function AnalyticsPage() {
                   <td className="text-bloomberg-muted">{d.end ? fmtDate(d.end) : "Ongoing"}</td>
                   <td className="text-right negative">{fmtPct(d.depth)}</td>
                   <td className="text-right text-bloomberg-muted">{d.duration_days}d</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* ── Tax-Loss Harvesting ── */}
+      {taxLoss && taxLoss.candidates.length > 0 && (
+        <div className="bbg-card">
+          <p className="bbg-header">Tax-Loss Harvesting Candidates</p>
+          <p className="text-bloomberg-muted text-[10px] mb-3">
+            Positions with unrealized losses &gt; 5%. Consult a tax advisor before acting. IRS wash-sale rule: 30-day window.
+          </p>
+          <table className="bbg-table">
+            <thead>
+              <tr>
+                <th>Ticker</th>
+                <th className="text-right">P&L</th>
+                <th className="text-right">Loss %</th>
+                <th className="text-right">Cost Basis</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {taxLoss.candidates.map((c) => (
+                <tr key={c.ticker} className={c.wash_sale_risk ? "opacity-60" : ""}>
+                  <td className="text-bloomberg-gold font-bold">{c.ticker}</td>
+                  <td className="text-right text-red-400">{taxLoss.base_currency} {c.unrealized_pnl.toLocaleString(undefined, {maximumFractionDigits: 2})}</td>
+                  <td className="text-right text-red-400 font-bold">{c.unrealized_pct.toFixed(1)}%</td>
+                  <td className="text-right text-bloomberg-muted">{taxLoss.base_currency} {c.cost_basis.toLocaleString(undefined, {maximumFractionDigits: 2})}</td>
+                  <td>
+                    <div className="text-[10px]">
+                      {c.wash_sale_risk && <span className="text-yellow-400 mr-1">⚠ Wash sale risk.</span>}
+                      <span className="text-bloomberg-muted">{c.action}</span>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>

@@ -137,3 +137,48 @@ export const fetchBlackLitterman = (body: {
   profile?: string;
 }) =>
   apiClient.post<{ weights: Record<string, number> }>("/api/optimization/black-litterman", body).then((r) => r.data);
+
+export const fetchVsBenchmark = (period = "1y", benchmark = "VOO") =>
+  apiClient
+    .get<{
+      series: { date: string; portfolio: number | null; benchmark: number | null; alpha: number | null }[];
+      inception_date: string | null;
+      base_currency: string;
+      benchmark_ticker: string;
+      alpha_total: number | null;
+    }>("/api/analytics/vs-benchmark", { params: { period, benchmark } })
+    .then((r) => r.data);
+
+export const fetchRecommendations = () =>
+  apiClient
+    .get<{
+      cards: {
+        type: string;
+        title: string;
+        body: string;
+        severity: "info" | "warning" | "action";
+        ticker: string | null;
+      }[];
+      generated_at: string | null;
+    }>("/api/analytics/recommendations")
+    .then((r) => r.data);
+
+export const fetchTaxLoss = (lossThresholdPct = 5.0) =>
+  apiClient
+    .get<{
+      candidates: {
+        ticker: string;
+        shares: number;
+        avg_cost: number;
+        current_price: number;
+        cost_basis: number;
+        current_value: number;
+        unrealized_pnl: number;
+        unrealized_pct: number;
+        wash_sale_risk: boolean;
+        wash_sale_note: string | null;
+        action: string;
+      }[];
+      base_currency: string;
+    }>("/api/analytics/tax-loss", { params: { loss_threshold_pct: lossThresholdPct } })
+    .then((r) => r.data);
