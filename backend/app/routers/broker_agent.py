@@ -129,14 +129,14 @@ def _parse_xtb_xlsx(content: bytes) -> list[dict]:
         amount     = row[idx_amount] if idx_amount < len(row) else None
         comment    = str(row[idx_comment] or "").strip() if idx_comment < len(row) else ""
 
-        if tx_type == "Deposit":
+        if tx_type.lower() in ("deposit",):
             try:
                 deposits_total += float(amount or 0)
             except Exception:
                 pass
             continue
 
-        if tx_type not in ("Stock purchase", "Stock sell"):
+        if tx_type not in ("Stock purchase", "Stock sale", "Stock sell"):
             continue
         if not ticker_raw:
             continue
@@ -170,13 +170,17 @@ def _parse_xtb_xlsx(content: bytes) -> list[dict]:
 def _is_duplicate(tx: dict, existing: list[dict]) -> bool:
     """
     Check if a transaction already exists in DB.
-    Match on: ticker + date + action + quantity (rounded to 4dp).
+    Match on: ticker (any known alias) + date + action + quantity (rounded to 4dp).
     """
     qty_rounded = round(tx["quantity"], 4)
+    tx_aliases = set(_ticker_aliases(tx["ticker"]))
     for e in existing:
+        e_ticker = e.get("ticker", "")
+        # Accept if DB ticker matches any alias of the incoming ticker
+        if e_ticker not in tx_aliases and tx["ticker"] not in _ticker_aliases(e_ticker):
+            continue
         if (
-            e.get("ticker") == tx["ticker"]
-            and (e.get("date") or "")[:10] == tx["date"]
+            (e.get("date") or "")[:10] == tx["date"]
             and e.get("action") == tx["action"]
             and abs(float(e.get("quantity", 0)) - qty_rounded) < 0.0001
         ):
@@ -184,11 +188,54 @@ def _is_duplicate(tx: dict, existing: list[dict]) -> bool:
     return False
 
 
+# ── Duplicate transaction cleanup ────────────────────────────────────────────
+
+def _dedup_transactions(user_id: str, db) -> int:
+    """
+    Remove exact duplicate transactions (same ticker, date, action, quantity).
+    Keeps the oldest record (lowest created_at) per group.
+    Returns number of duplicates deleted.
+    """
+    tx_res = (
+        db.table("transactions")
+        .select("id,ticker,date,action,quantity,created_at")
+        .eq("user_id", user_id)
+        .order("created_at")
+        .execute()
+    )
+    all_txs = tx_res.data or []
+
+    seen: dict[tuple, str] = {}   # key → first-seen id
+    to_delete: list[str] = []
+
+    for tx in all_txs:
+        key = (
+            tx["ticker"],
+            str(tx["date"])[:10],
+            tx["action"],
+            round(float(tx.get("quantity", 0)), 4),
+        )
+        if key in seen:
+            to_delete.append(tx["id"])
+        else:
+            seen[key] = tx["id"]
+
+    for tx_id in to_delete:
+        try:
+            db.table("transactions").delete().eq("id", tx_id).execute()
+        except Exception as exc:
+            log.warning("Could not delete duplicate tx %s: %s", tx_id, exc)
+
+    return len(to_delete)
+
+
 # ── Position reconciliation ───────────────────────────────────────────────────
 
 def _reconcile_positions(user_id: str, db) -> dict[str, dict]:
     """
-    Recompute net shares and weighted avg cost per ticker from ALL transactions.
+    Recompute net shares and FIFO avg cost per ticker from ALL transactions.
+    FIFO means sells consume the oldest lots first, so avg cost reflects only
+    remaining open lots — matching XTB's cost basis display.
     Returns {ticker: {shares, avg_cost_native, currency, market}}
     """
     tx_res = (
@@ -200,11 +247,8 @@ def _reconcile_positions(user_id: str, db) -> dict[str, dict]:
     )
     all_txs = tx_res.data or []
 
-    # Weighted average cost tracking
-    # avg_cost = total_cost / total_shares (reset-on-sell not needed, we use running avg)
-    net_shares: dict[str, float] = {}
-    total_cost: dict[str, float] = {}   # cumulative buy cost for avg
-    total_bought: dict[str, float] = {}  # cumulative shares bought
+    # FIFO lot tracking: ticker → list of [remaining_qty, price]
+    lots: dict[str, list[list[float]]] = {}
 
     for tx in all_txs:
         if tx.get("action") not in ("BUY", "SELL"):
@@ -214,19 +258,25 @@ def _reconcile_positions(user_id: str, db) -> dict[str, dict]:
         price = float(tx.get("price_native", 0))
 
         if tx["action"] == "BUY":
-            net_shares[t] = net_shares.get(t, 0) + qty
-            total_cost[t] = total_cost.get(t, 0) + qty * price
-            total_bought[t] = total_bought.get(t, 0) + qty
+            lots.setdefault(t, []).append([qty, price])
         elif tx["action"] == "SELL":
-            net_shares[t] = max(0.0, net_shares.get(t, 0) - qty)
+            remaining = qty
+            for lot in lots.get(t, []):
+                if remaining <= 0:
+                    break
+                consumed = min(lot[0], remaining)
+                lot[0] -= consumed
+                remaining -= consumed
 
     result = {}
-    for ticker, shares in net_shares.items():
-        bought = total_bought.get(ticker, 0)
-        avg_cost = total_cost.get(ticker, 0) / bought if bought > 0 else 0
+    for ticker, lot_list in lots.items():
+        open_lots = [(q, p) for q, p in lot_list if q > 1e-8]
+        total_qty = sum(q for q, p in open_lots)
+        total_cost = sum(q * p for q, p in open_lots)
+        avg_cost = total_cost / total_qty if total_qty > 0 else 0
         ex = _ticker_exchange_info(ticker)
         result[ticker] = {
-            "shares": round(shares, 6),
+            "shares": round(total_qty, 6),
             "avg_cost_native": round(avg_cost, 6),
             "currency": ex["currency"],
             "market": ex["market"],
@@ -320,6 +370,9 @@ async def broker_reconcile(
         raise HTTPException(status_code=422, detail="No trades found in file.")
 
     db = get_admin_client()
+
+    # 1b. Remove any exact duplicate transactions already in DB
+    _dedup_transactions(user_id, db)
 
     # 2. Load existing transactions for duplicate detection
     existing_res = (
