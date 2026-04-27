@@ -1,7 +1,7 @@
 "use client";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchAnalytics, fetchRollingMetrics, fetchExtendedAnalytics, fetchVolRegime, fetchQuantAdvanced, fetchEquityCurve, fetchVsBenchmark, fetchRecommendations, fetchTaxLoss } from "@/lib/api/analytics";
+import { fetchAnalytics, fetchRollingMetrics, fetchExtendedAnalytics, fetchVolRegime, fetchQuantAdvanced, fetchEquityCurve, fetchVsBenchmark, fetchRecommendations, fetchTaxLoss, fetchHealthScore, fetchAttribution, fetchPortfolioNews, runKellySizing, runMonteCarlo } from "@/lib/api/analytics";
 import type {
   FactorRisk, TrackingErrorBudget, QuantRegime, NaiveBenchmarkRow, WalkForward,
 } from "@/lib/api/contribution";
@@ -107,6 +107,53 @@ export default function AnalyticsPage() {
     staleTime: 10 * 60 * 1000,
   });
 
+  const { data: healthScore } = useQuery({
+    queryKey: ["health-score", period],
+    queryFn: () => fetchHealthScore(period),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const { data: attribution } = useQuery({
+    queryKey: ["attribution"],
+    queryFn: fetchAttribution,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const { data: portfolioNews } = useQuery({
+    queryKey: ["portfolio-news"],
+    queryFn: fetchPortfolioNews,
+    staleTime: 10 * 60 * 1000,
+  });
+
+  // Kelly calculator state
+  const [kellyTicker, setKellyTicker] = useState("");
+  const [kellyConviction, setKellyConviction] = useState(65);
+  const [kellyExpRet, setKellyExpRet] = useState(12);
+  const [kellyResult, setKellyResult] = useState<Awaited<ReturnType<typeof runKellySizing>> | null>(null);
+  const [kellyLoading, setKellyLoading] = useState(false);
+
+  // Monte Carlo state
+  const [mcMonthly, setMcMonthly] = useState(500);
+  const [mcYears, setMcYears] = useState(10);
+  const [mcTarget, setMcTarget] = useState(100000);
+  const [mcResult, setMcResult] = useState<Awaited<ReturnType<typeof runMonteCarlo>> | null>(null);
+  const [mcLoading, setMcLoading] = useState(false);
+
+  const runKelly = useCallback(async () => {
+    if (!kellyTicker) return;
+    setKellyLoading(true);
+    try { const r = await runKellySizing({ ticker: kellyTicker, conviction_pct: kellyConviction, expected_annual_return: kellyExpRet }); setKellyResult(r); }
+    catch (e) { console.error(e); }
+    setKellyLoading(false);
+  }, [kellyTicker, kellyConviction, kellyExpRet]);
+
+  const runMC = useCallback(async () => {
+    setMcLoading(true);
+    try { const r = await runMonteCarlo({ monthly_contribution: mcMonthly, years: mcYears, target_goal: mcTarget }); setMcResult(r); }
+    catch (e) { console.error(e); }
+    setMcLoading(false);
+  }, [mcMonthly, mcYears, mcTarget]);
+
   // Derived from optional data — must be before any early returns (React hooks rules)
   const vrSeries = volRegime?.series ?? [];
   const highVolRanges = useMemo(() => getRegimeRanges(vrSeries, "high"), [vrSeries]);
@@ -160,6 +207,37 @@ export default function AnalyticsPage() {
           </button>
         </div>
       </div>
+
+      {/* ── Health Score ── */}
+      {healthScore && healthScore.score !== null && (
+        <div className="bbg-card">
+          <div className="flex items-center justify-between mb-3">
+            <p className="bbg-header">Portfolio Health Score</p>
+            <div className="flex items-center gap-3">
+              <span className={`text-3xl font-black ${healthScore.score >= 85 ? "text-green-400" : healthScore.score >= 70 ? "text-bloomberg-gold" : healthScore.score >= 55 ? "text-yellow-500" : "text-red-400"}`}>
+                {healthScore.score.toFixed(0)}
+              </span>
+              <span className={`text-xl font-black px-2 py-0.5 rounded ${healthScore.grade === "A" ? "bg-green-500/20 text-green-400" : healthScore.grade === "B" ? "bg-bloomberg-gold/20 text-bloomberg-gold" : healthScore.grade === "C" ? "bg-yellow-500/20 text-yellow-500" : "bg-red-500/20 text-red-400"}`}>
+                {healthScore.grade}
+              </span>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {Object.entries(healthScore.components).map(([key, comp]) => (
+              <div key={key} className="border border-bloomberg-border p-2">
+                <p className="text-bloomberg-muted text-[9px] uppercase tracking-widest">{comp.label}</p>
+                <div className="flex items-center gap-2 mt-1">
+                  <div className="flex-1 h-1.5 bg-bloomberg-border rounded-full overflow-hidden">
+                    <div className={`h-full rounded-full ${comp.score >= 20 ? "bg-green-500" : comp.score >= 12 ? "bg-bloomberg-gold" : "bg-red-500"}`} style={{ width: `${(comp.score / 25) * 100}%` }} />
+                  </div>
+                  <span className="text-bloomberg-text text-[10px] font-bold">{comp.score.toFixed(0)}/25</span>
+                </div>
+                <p className="text-bloomberg-muted text-[9px] mt-1">{comp.detail}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ── Equity Curve ── */}
       {equityCurve && equityCurve.series.length > 1 && (
@@ -878,6 +956,189 @@ export default function AnalyticsPage() {
           </>
         );
       })()}
+
+      {/* ── Kelly Position Sizing ── */}
+      <div className="bbg-card">
+        <p className="bbg-header">Kelly Position Sizing Calculator</p>
+        <p className="text-bloomberg-muted text-[10px] mb-3">Tamaño óptimo de posición según el criterio de Kelly. Se recomienda ½ Kelly para gestión del riesgo de ruina.</p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+          <div>
+            <label className="block text-bloomberg-muted text-[10px] uppercase tracking-widest mb-1">Ticker</label>
+            <input type="text" value={kellyTicker} onChange={(e) => setKellyTicker(e.target.value.toUpperCase())}
+              placeholder="NVDA" className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1.5 text-xs focus:outline-none focus:border-bloomberg-gold uppercase" />
+          </div>
+          <div>
+            <label className="block text-bloomberg-muted text-[10px] uppercase tracking-widest mb-1">Convicción (%)</label>
+            <input type="number" min={10} max={100} value={kellyConviction} onChange={(e) => setKellyConviction(Number(e.target.value))}
+              className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1.5 text-xs focus:outline-none focus:border-bloomberg-gold" />
+          </div>
+          <div>
+            <label className="block text-bloomberg-muted text-[10px] uppercase tracking-widest mb-1">Retorno esperado (%)</label>
+            <input type="number" min={1} max={100} value={kellyExpRet} onChange={(e) => setKellyExpRet(Number(e.target.value))}
+              className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1.5 text-xs focus:outline-none focus:border-bloomberg-gold" />
+          </div>
+          <div className="flex items-end">
+            <button onClick={runKelly} disabled={kellyLoading || !kellyTicker}
+              className="w-full bg-bloomberg-gold text-bloomberg-bg text-[10px] font-bold px-3 py-1.5 hover:opacity-90 disabled:opacity-50 uppercase tracking-wider">
+              {kellyLoading ? "…" : "Calcular"}
+            </button>
+          </div>
+        </div>
+        {kellyResult && (
+          <div className="border-t border-bloomberg-border pt-3 space-y-3">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {[
+                { label: "Kelly Completo", value: `${kellyResult.kelly_pct.toFixed(1)}%`, sub: "Alto riesgo" },
+                { label: "½ Kelly (recomendado)", value: `${kellyResult.half_kelly_pct.toFixed(1)}%`, sub: "Estándar" },
+                { label: "¼ Kelly (conservador)", value: `${kellyResult.quarter_kelly_pct.toFixed(1)}%`, sub: "Máxima protección" },
+                { label: "Monto ½ Kelly", value: `$${kellyResult.recommended_amount.toLocaleString(undefined, {maximumFractionDigits: 0})}`, sub: "Estimado" },
+              ].map(({ label, value, sub }) => (
+                <div key={label} className="border border-bloomberg-border p-2">
+                  <p className="text-bloomberg-muted text-[9px] uppercase tracking-widest">{label}</p>
+                  <p className="text-bloomberg-gold text-lg font-black mt-0.5">{value}</p>
+                  <p className="text-bloomberg-muted text-[9px]">{sub}</p>
+                </div>
+              ))}
+            </div>
+            <p className="text-bloomberg-muted text-[10px]">
+              <span className="text-bloomberg-text">Análisis:</span> {kellyResult.rationale} &middot; Vol estimada: {kellyResult.inputs.estimated_ann_vol_pct.toFixed(1)}%
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* ── Monte Carlo Goal Simulator ── */}
+      <div className="bbg-card">
+        <p className="bbg-header">Monte Carlo — Simulador de Meta Financiera</p>
+        <p className="text-bloomberg-muted text-[10px] mb-3">Proyección con DCA mensual usando 5,000 simulaciones basadas en el retorno/volatilidad histórica del portafolio.</p>
+        <div className="grid grid-cols-3 gap-3 mb-3">
+          <div>
+            <label className="block text-bloomberg-muted text-[10px] uppercase tracking-widest mb-1">Aporte mensual ($)</label>
+            <input type="number" min={0} value={mcMonthly} onChange={(e) => setMcMonthly(Number(e.target.value))}
+              className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1.5 text-xs focus:outline-none focus:border-bloomberg-gold" />
+          </div>
+          <div>
+            <label className="block text-bloomberg-muted text-[10px] uppercase tracking-widest mb-1">Años</label>
+            <input type="number" min={1} max={40} value={mcYears} onChange={(e) => setMcYears(Number(e.target.value))}
+              className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1.5 text-xs focus:outline-none focus:border-bloomberg-gold" />
+          </div>
+          <div>
+            <label className="block text-bloomberg-muted text-[10px] uppercase tracking-widest mb-1">Meta ($)</label>
+            <input type="number" min={1000} value={mcTarget} onChange={(e) => setMcTarget(Number(e.target.value))}
+              className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1.5 text-xs focus:outline-none focus:border-bloomberg-gold" />
+          </div>
+        </div>
+        <button onClick={runMC} disabled={mcLoading}
+          className="bg-bloomberg-gold text-bloomberg-bg text-[10px] font-bold px-4 py-1.5 hover:opacity-90 disabled:opacity-50 uppercase tracking-wider mb-4">
+          {mcLoading ? "Simulando…" : "Ejecutar Simulación"}
+        </button>
+        {mcResult && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {[
+                { label: "Prob. de meta", value: `${mcResult.probability_of_goal.toFixed(1)}%`, color: mcResult.probability_of_goal >= 70 ? "text-green-400" : mcResult.probability_of_goal >= 40 ? "text-bloomberg-gold" : "text-red-400" },
+                { label: `Mediana (año ${mcResult.years})`, value: `$${mcResult.median_outcome.toLocaleString(undefined, {maximumFractionDigits: 0})}`, color: "text-bloomberg-text" },
+                { label: "Retorno anual", value: `${mcResult.ann_return_pct.toFixed(1)}%`, color: "text-bloomberg-muted" },
+                { label: "Volatilidad", value: `${mcResult.ann_vol_pct.toFixed(1)}%`, color: "text-bloomberg-muted" },
+              ].map(({ label, value, color }) => (
+                <div key={label} className="border border-bloomberg-border p-2">
+                  <p className="text-bloomberg-muted text-[9px] uppercase tracking-widest">{label}</p>
+                  <p className={`text-sm font-black mt-0.5 ${color}`}>{value}</p>
+                </div>
+              ))}
+            </div>
+            {mcResult.fan_series.length > 0 && (
+              <div className="h-56">
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={mcResult.fan_series} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1e2530" />
+                    <XAxis dataKey="year" tick={{ fill: "#6b7280", fontSize: 9 }} tickFormatter={(v) => `Y${v}`} />
+                    <YAxis tick={{ fill: "#6b7280", fontSize: 9 }} tickFormatter={(v) => `$${(v/1000).toFixed(0)}k`} width={48} />
+                    <Tooltip contentStyle={{ background: "#0b0f14", border: "1px solid #1e2530", fontSize: 11 }}
+                      formatter={(v: number) => [`$${v.toLocaleString(undefined, {maximumFractionDigits: 0})}`, ""]} />
+                    <Area type="monotone" dataKey="p95" stroke="none" fill="#f3a71210" />
+                    <Area type="monotone" dataKey="p75" stroke="none" fill="#f3a71218" />
+                    <Area type="monotone" dataKey="p25" stroke="none" fill="#f3a71208" />
+                    <Line type="monotone" dataKey="median" stroke="#f3a712" strokeWidth={2} dot={false} name="Mediana" />
+                    <Line type="monotone" dataKey="p95" stroke="#4dff4d" strokeWidth={1} dot={false} strokeDasharray="3 3" name="P95" />
+                    <Line type="monotone" dataKey="p5" stroke="#ff4d4d" strokeWidth={1} dot={false} strokeDasharray="3 3" name="P5" />
+                    <ReferenceLine y={mcResult.target_goal} stroke="#f3a712" strokeDasharray="5 5" />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+            <p className="text-bloomberg-muted text-[9px]">Rango P5–P95 sombreado · Línea punteada = meta · {mcResult.n_sims.toLocaleString()} simulaciones Monte Carlo.</p>
+          </div>
+        )}
+      </div>
+
+      {/* ── Return Attribution ── */}
+      {attribution && attribution.rows.length > 0 && (
+        <div className="bbg-card">
+          <p className="bbg-header">Atribución de Retornos por Posición</p>
+          <table className="bbg-table">
+            <thead>
+              <tr>
+                <th>Ticker</th>
+                <th className="text-right">Precio</th>
+                <th className="text-right">FX</th>
+                <th className="text-right">Dividendo</th>
+                <th className="text-right">Total</th>
+                <th className="text-right">P&L ({attribution.base_currency})</th>
+              </tr>
+            </thead>
+            <tbody>
+              {attribution.rows.map((r) => (
+                <tr key={r.ticker}>
+                  <td className="text-bloomberg-gold font-bold">{r.ticker}</td>
+                  <td className={`text-right ${r.price_return_pct >= 0 ? "text-green-400" : "text-red-400"}`}>{r.price_return_pct >= 0 ? "+" : ""}{r.price_return_pct.toFixed(2)}%</td>
+                  <td className="text-right text-bloomberg-muted">{r.fx_return_pct !== 0 ? `${r.fx_return_pct >= 0 ? "+" : ""}${r.fx_return_pct.toFixed(2)}%` : "—"}</td>
+                  <td className={`text-right ${r.dividend_return_pct > 0 ? "text-green-400" : "text-bloomberg-muted"}`}>{r.dividend_return_pct > 0 ? `+${r.dividend_return_pct.toFixed(2)}%` : "—"}</td>
+                  <td className={`text-right font-bold ${r.total_return_pct >= 0 ? "text-green-400" : "text-red-400"}`}>{r.total_return_pct >= 0 ? "+" : ""}{r.total_return_pct.toFixed(2)}%</td>
+                  <td className={`text-right ${r.unrealized_pnl_base >= 0 ? "text-green-400" : "text-red-400"}`}>{r.unrealized_pnl_base >= 0 ? "+" : ""}{r.unrealized_pnl_base.toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="border-t-2 border-bloomberg-border">
+                <td className="font-bold text-bloomberg-text pt-2">Total</td>
+                <td colSpan={3} />
+                <td className={`text-right font-black pt-2 ${attribution.totals.total_return_pct >= 0 ? "text-green-400" : "text-red-400"}`}>
+                  {attribution.totals.total_return_pct >= 0 ? "+" : ""}{attribution.totals.total_return_pct.toFixed(2)}%
+                </td>
+                <td className={`text-right font-black pt-2 ${attribution.totals.total_pnl_base >= 0 ? "text-green-400" : "text-red-400"}`}>
+                  {attribution.totals.total_pnl_base >= 0 ? "+" : ""}{attribution.totals.total_pnl_base.toLocaleString(undefined, {maximumFractionDigits: 0})}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+
+      {/* ── Portfolio News Feed ── */}
+      {portfolioNews && portfolioNews.items.length > 0 && (
+        <div className="bbg-card">
+          <p className="bbg-header">News Feed — Portafolio</p>
+          <div className="space-y-2">
+            {portfolioNews.items.map((item, i) => (
+              <div key={i} className="flex items-start gap-3 border-b border-bloomberg-border/40 pb-2">
+                <span className="text-bloomberg-gold font-bold text-[10px] w-16 shrink-0">{item.ticker}</span>
+                <div className="flex-1 min-w-0">
+                  {item.url ? (
+                    <a href={item.url} target="_blank" rel="noopener noreferrer"
+                      className="text-bloomberg-text text-[10px] hover:text-bloomberg-gold leading-snug line-clamp-2 block">
+                      {item.title}
+                    </a>
+                  ) : (
+                    <p className="text-bloomberg-text text-[10px] leading-snug line-clamp-2">{item.title}</p>
+                  )}
+                  <p className="text-bloomberg-muted text-[9px] mt-0.5">{item.source && `${item.source} · `}{item.published}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

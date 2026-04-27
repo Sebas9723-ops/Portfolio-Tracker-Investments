@@ -182,3 +182,56 @@ export const fetchTaxLoss = (lossThresholdPct = 5.0) =>
       base_currency: string;
     }>("/api/analytics/tax-loss", { params: { loss_threshold_pct: lossThresholdPct } })
     .then((r) => r.data);
+
+export const fetchHealthScore = (period = "1y") =>
+  apiClient
+    .get<{
+      score: number | null;
+      grade: string | null;
+      components: Record<string, { score: number; label: string; detail: string }>;
+      profile: string;
+    }>("/api/analytics/health-score", { params: { period } })
+    .then((r) => r.data);
+
+export const fetchAttribution = () =>
+  apiClient
+    .get<{
+      rows: {
+        ticker: string; shares: number; currency: string;
+        avg_cost_native: number; current_price_native: number;
+        price_return_pct: number; fx_return_pct: number;
+        dividend_return_pct: number; total_return_pct: number;
+        cost_basis_base: number; current_value_base: number; unrealized_pnl_base: number;
+      }[];
+      totals: { total_cost_base: number; total_value_base: number; total_pnl_base: number; total_return_pct: number };
+      base_currency: string;
+    }>("/api/analytics/attribution")
+    .then((r) => r.data);
+
+export const fetchPortfolioNews = () =>
+  apiClient
+    .get<{ items: { ticker: string; title: string; url: string; published: string; source: string }[] }>("/api/analytics/news")
+    .then((r) => r.data);
+
+export const runKellySizing = (body: { ticker: string; conviction_pct: number; expected_annual_return: number; win_rate?: number }) =>
+  apiClient
+    .post<{
+      ticker: string; kelly_pct: number; half_kelly_pct: number; quarter_kelly_pct: number;
+      recommended_amount: number; portfolio_value: number;
+      inputs: { conviction_pct: number; expected_return_pct: number; estimated_ann_vol_pct: number; win_rate: number };
+      rationale: string;
+    }>("/api/analytics/kelly", body)
+    .then((r) => r.data);
+
+export const runMonteCarlo = (body: { monthly_contribution: number; years: number; target_goal: number; n_sims?: number }) =>
+  apiClient
+    .post<{
+      probability_of_goal: number; median_outcome: number;
+      p5: number; p25: number; p75: number; p95: number;
+      current_value: number; target_goal: number; monthly_contribution: number;
+      years: number; ann_return_pct: number; ann_vol_pct: number; n_sims: number;
+      base_currency: string;
+      fan_series: { month: number; year?: number; p5: number; p25: number; median: number; p75: number; p95: number }[];
+      sample_paths: number[][]; checkpoint_months: number[];
+    }>("/api/analytics/monte-carlo", body, { timeout: 60_000 })
+    .then((r) => r.data);

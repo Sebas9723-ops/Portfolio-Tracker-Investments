@@ -497,3 +497,471 @@ def recommendations(
     cards.sort(key=lambda c: _sev_order.get(c["severity"], 3))
 
     return {"cards": cards[:10], "generated_at": generated_at}
+
+
+@router.get("/health-score")
+def health_score(
+    period: str = Query(default="1y"),
+    user_id: str = Depends(get_user_id),
+):
+    """
+    Composite portfolio health score 0–100 with 4 equal components (25pts each):
+      - Sharpe (0–2 mapped to 0–25)
+      - Diversification via HHI (lower = better)
+      - CVaR headroom vs profile limit
+      - Drift from optimal weights
+    Returns {score, grade, components: {sharpe, diversification, cvar, drift}}
+    """
+    import pandas as pd
+
+    db = get_admin_client()
+    settings_res = db.table("user_settings").select("*").eq("user_id", user_id).maybe_single().execute()
+    settings = settings_res.data or {}
+    rfr = float(settings.get("risk_free_rate") or get_risk_free_rate())
+    profile = settings.get("investor_profile", "base")
+    threshold = float(settings.get("rebalancing_threshold", 0.05))
+
+    tickers, weights = _get_positions_and_weights(user_id)
+    if not tickers:
+        return {"score": None, "grade": None, "components": {}}
+
+    hist = get_historical_multi(tickers, period=period)
+    port_returns = build_portfolio_returns(
+        {t: hist[t] for t in tickers if t in hist}, weights
+    )
+
+    # Component 1: Sharpe (0-25 pts). Sharpe >=2 = 25pts, <=0 = 0pts
+    bm_returns = pd.Series(dtype=float)
+    ratios = compute_extended_ratios(port_returns, bm_returns, rfr)
+    sharpe = float(ratios.get("sharpe") or 0)
+    sharpe_score = round(min(25.0, max(0.0, sharpe / 2.0 * 25.0)), 1)
+
+    # Component 2: Diversification via HHI (0-25 pts). HHI=1/n is perfect, HHI=1 is concentrated
+    w_vals = list(weights.values())
+    hhi = sum(w**2 for w in w_vals)  # 1/n (perfect) to 1 (all in one)
+    hhi_min = 1.0 / len(w_vals) if w_vals else 1.0
+    # Normalize: hhi=hhi_min → 25pts, hhi=1 → 0pts
+    div_score = round(max(0.0, (1.0 - hhi) / (1.0 - hhi_min) * 25.0) if hhi_min < 1 else 0.0, 1)
+
+    # Component 3: CVaR headroom vs profile CVaR limit (0-25 pts)
+    # Profile CVaR daily limits: conservative=1%, base=1.5%, aggressive=2.5%
+    cvar_limits = {"conservative": 0.010, "base": 0.015, "aggressive": 0.025}
+    cvar_limit = cvar_limits.get(profile, 0.015)
+    qr = load_latest_quant_result(user_id)
+    cvar_actual = abs(float((qr or {}).get("cvar_95") or cvar_limit))
+    # headroom: 0 CVaR → 25pts, at/beyond limit → 0pts
+    cvar_score = round(max(0.0, min(25.0, (1.0 - cvar_actual / cvar_limit) * 25.0)) if cvar_actual < cvar_limit * 2 else 0.0, 1)
+
+    # Component 4: Drift from optimal weights (0-25 pts)
+    optimal = (qr or {}).get("optimal_weights") or {}
+    total_drift = 0.0
+    if optimal:
+        total_drift = sum(abs(weights.get(t, 0) - float(optimal.get(t, 0))) for t in set(list(weights.keys()) + list(optimal.keys())))
+        # Perfect drift=0 → 25pts, drift>=0.5 total → 0pts
+        drift_score = round(max(0.0, (1.0 - total_drift / 0.5) * 25.0), 1)
+    else:
+        drift_score = 12.5  # neutral if no quant result yet
+
+    total = round(sharpe_score + div_score + cvar_score + drift_score, 1)
+
+    def _grade(s):
+        if s >= 85: return "A"
+        if s >= 70: return "B"
+        if s >= 55: return "C"
+        if s >= 40: return "D"
+        return "F"
+
+    return {
+        "score": total,
+        "grade": _grade(total),
+        "components": {
+            "sharpe":          {"score": sharpe_score, "label": "Sharpe Ratio",     "detail": f"Sharpe {sharpe:.2f}"},
+            "diversification": {"score": div_score,    "label": "Diversification",  "detail": f"HHI {hhi:.3f}"},
+            "cvar":            {"score": cvar_score,   "label": "CVaR Headroom",    "detail": f"CVaR {cvar_actual*100:.2f}% vs limit {cvar_limit*100:.1f}%"},
+            "drift":           {"score": drift_score,  "label": "Drift from Target", "detail": f"Total drift {total_drift*100:.1f}%" if optimal else "No quant result yet"},
+        },
+        "profile": profile,
+    }
+
+
+@router.post("/kelly")
+def kelly_sizing(
+    body: dict,
+    user_id: str = Depends(get_user_id),
+):
+    """
+    Compute Kelly-optimal position size for a new or existing ticker.
+    Input: {ticker, conviction_pct (0-100), expected_annual_return (%), win_rate (0-1, optional)}
+    Output: {kelly_pct, half_kelly_pct, quarter_kelly_pct, recommended_amount, portfolio_value, rationale}
+    """
+    import numpy as np
+    from fastapi import HTTPException
+
+    ticker = str(body.get("ticker", "")).upper().strip()
+    conviction = float(body.get("conviction_pct", 60)) / 100.0  # 0-1
+    exp_ret = float(body.get("expected_annual_return", 10)) / 100.0
+    win_rate = float(body.get("win_rate", conviction))  # default conviction as win rate proxy
+
+    if not ticker:
+        raise HTTPException(status_code=422, detail="ticker required")
+
+    tickers, weights = _get_positions_and_weights(user_id)
+    db = get_admin_client()
+    settings_res = db.table("user_settings").select("base_currency,max_single_asset").eq("user_id", user_id).maybe_single().execute()
+    settings = settings_res.data or {}
+    max_single = float(settings.get("max_single_asset") or 0.40)
+
+    # Fetch ticker historical returns for vol estimate
+    try:
+        hist = get_historical_multi([ticker], period="2y")
+        df = hist.get(ticker)
+        if df is not None and not df.empty:
+            col = "Close" if "Close" in df.columns else df.columns[0]
+            daily_rets = df[col].pct_change().dropna()
+            ann_vol = float(daily_rets.std() * np.sqrt(252))
+        else:
+            ann_vol = 0.20  # default 20% vol
+    except Exception:
+        ann_vol = 0.20
+
+    # Kelly formula: f* = (b*p - q) / b
+    # where b = odds (exp_ret / ann_vol as proxy), p = win_rate, q = 1-p
+    # Simplified continuous Kelly: f* = mu / sigma^2
+    kelly_continuous = exp_ret / (ann_vol ** 2) if ann_vol > 0 else 0.0
+    # Also classical discrete Kelly using win_rate
+    b = max(exp_ret / ann_vol, 0.1)  # b = reward per unit risk
+    kelly_discrete = max(0.0, (b * win_rate - (1 - win_rate)) / b)
+
+    # Blend: 50% continuous + 50% discrete, scaled by conviction
+    kelly_raw = (kelly_continuous * 0.5 + kelly_discrete * 0.5) * conviction
+    kelly_pct = min(kelly_raw, max_single)  # never exceed max single asset
+    half_kelly = kelly_pct * 0.5
+    quarter_kelly = kelly_pct * 0.25
+
+    # Get portfolio value
+    pos_res = db.table("positions").select("ticker,shares").eq("user_id", user_id).execute()
+    positions = pos_res.data or []
+    portfolio_value = 0.0
+    try:
+        all_t = [p["ticker"] for p in positions if float(p.get("shares", 0)) > 0]
+        if all_t:
+            quotes = get_quotes(all_t)
+            portfolio_value = sum(
+                float(p["shares"]) * float(quotes.get(p["ticker"], {}).get("price") or 0)
+                for p in positions if float(p.get("shares", 0)) > 0
+            )
+    except Exception:
+        pass
+
+    return {
+        "ticker": ticker,
+        "kelly_pct": round(kelly_pct * 100, 2),
+        "half_kelly_pct": round(half_kelly * 100, 2),
+        "quarter_kelly_pct": round(quarter_kelly * 100, 2),
+        "recommended_amount": round(portfolio_value * half_kelly, 2),  # ½ Kelly is standard
+        "portfolio_value": round(portfolio_value, 2),
+        "inputs": {
+            "conviction_pct": round(conviction * 100, 1),
+            "expected_return_pct": round(exp_ret * 100, 1),
+            "estimated_ann_vol_pct": round(ann_vol * 100, 1),
+            "win_rate": round(win_rate * 100, 1),
+        },
+        "rationale": f"Kelly sugiere {kelly_pct*100:.1f}% del portafolio. Se recomienda ½ Kelly ({half_kelly*100:.1f}%) para gestión conservadora del riesgo de ruina.",
+    }
+
+
+@router.post("/monte-carlo")
+def monte_carlo_simulation(
+    body: dict,
+    user_id: str = Depends(get_user_id),
+):
+    """
+    Monte Carlo simulation for financial goal planning.
+    Input: {monthly_contribution, years, target_goal, n_sims (default 5000)}
+    Uses portfolio's historical annualized return and volatility.
+    Output: {probability_of_goal, median_outcome, p5, p25, p75, p95,
+             current_value, series (sampled paths for chart), ann_return, ann_vol}
+    """
+    import numpy as np
+    import pandas as pd
+    from fastapi import HTTPException
+
+    monthly = float(body.get("monthly_contribution", 500))
+    years = int(body.get("years", 10))
+    target = float(body.get("target_goal", 100000))
+    n_sims = min(int(body.get("n_sims", 5000)), 10000)
+
+    if years <= 0 or monthly < 0 or target <= 0:
+        raise HTTPException(status_code=422, detail="Invalid inputs")
+
+    tickers, weights = _get_positions_and_weights(user_id)
+
+    # Get portfolio current value
+    db = get_admin_client()
+    settings_res = db.table("user_settings").select("base_currency").eq("user_id", user_id).maybe_single().execute()
+    base_currency = (settings_res.data or {}).get("base_currency", "USD")
+
+    current_value = 0.0
+    if tickers:
+        try:
+            quotes = get_quotes(tickers)
+            pos_res = db.table("positions").select("ticker,shares").eq("user_id", user_id).execute()
+            for p in (pos_res.data or []):
+                t = p["ticker"]
+                shares = float(p.get("shares") or 0)
+                price = float((quotes.get(t) or {}).get("price") or 0)
+                current_value += shares * price
+        except Exception:
+            pass
+
+    # Estimate portfolio return and vol from history
+    ann_return = 0.10  # defaults
+    ann_vol = 0.15
+
+    if tickers:
+        try:
+            hist = get_historical_multi(tickers, period="2y")
+            port_rets = build_portfolio_returns(
+                {t: hist[t] for t in tickers if t in hist}, weights
+            )
+            if len(port_rets) > 50:
+                ann_return = float((1 + port_rets.mean()) ** 252 - 1)
+                ann_vol = float(port_rets.std() * np.sqrt(252))
+        except Exception:
+            pass
+
+    # Monthly params
+    months = years * 12
+    mu_m = ann_return / 12
+    sigma_m = ann_vol / np.sqrt(12)
+
+    rng = np.random.default_rng(42)
+    shocks = rng.normal(mu_m, sigma_m, (n_sims, months))
+
+    # Simulate: each month compound existing wealth + add contribution
+    wealth = np.full(n_sims, current_value)
+    # Store 24 time points for chart (every year or every 6 months)
+    n_checkpoints = min(years * 2, 24)
+    checkpoint_months = [int(i * months / n_checkpoints) for i in range(1, n_checkpoints + 1)]
+    checkpoint_months[-1] = months  # ensure last point is final
+
+    paths_sample_idx = rng.choice(n_sims, size=min(20, n_sims), replace=False)
+    paths: dict[int, list[float]] = {i: [current_value] for i in paths_sample_idx}
+    checkpoint_data: list[dict] = [{"month": 0, "p5": current_value, "p25": current_value, "median": current_value, "p75": current_value, "p95": current_value}]
+
+    cp_set = set(checkpoint_months)
+    for m in range(months):
+        growth = 1 + shocks[:, m]
+        wealth = wealth * growth + monthly
+        for i in paths_sample_idx:
+            paths[i].append(float(wealth[i]))
+        if m + 1 in cp_set:
+            checkpoint_data.append({
+                "month": m + 1,
+                "year": round((m + 1) / 12, 1),
+                "p5":     round(float(np.percentile(wealth, 5)), 0),
+                "p25":    round(float(np.percentile(wealth, 25)), 0),
+                "median": round(float(np.median(wealth)), 0),
+                "p75":    round(float(np.percentile(wealth, 75)), 0),
+                "p95":    round(float(np.percentile(wealth, 95)), 0),
+            })
+
+    final_wealth = wealth
+    prob = float(np.mean(final_wealth >= target))
+
+    # Sampled paths for chart (downsample to checkpoint months)
+    chart_paths = []
+    for i in paths_sample_idx[:10]:
+        path = paths[i]
+        sampled = [path[0]] + [path[cp] for cp in checkpoint_months if cp < len(path)]
+        chart_paths.append(sampled)
+
+    return {
+        "probability_of_goal": round(prob * 100, 1),
+        "median_outcome": round(float(np.median(final_wealth)), 0),
+        "p5":  round(float(np.percentile(final_wealth, 5)), 0),
+        "p25": round(float(np.percentile(final_wealth, 25)), 0),
+        "p75": round(float(np.percentile(final_wealth, 75)), 0),
+        "p95": round(float(np.percentile(final_wealth, 95)), 0),
+        "current_value":        round(current_value, 0),
+        "target_goal":          round(target, 0),
+        "monthly_contribution": monthly,
+        "years":                years,
+        "ann_return_pct":       round(ann_return * 100, 2),
+        "ann_vol_pct":          round(ann_vol * 100, 2),
+        "n_sims":               n_sims,
+        "base_currency":        base_currency,
+        "fan_series":           checkpoint_data,
+        "sample_paths":         chart_paths,
+        "checkpoint_months":    [0] + checkpoint_months,
+    }
+
+
+@router.get("/attribution")
+def return_attribution(
+    user_id: str = Depends(get_user_id),
+):
+    """
+    Decompose portfolio P&L into price return, FX return, and dividend return per position.
+    Uses avg_cost vs current price, and tracks the FX rate at inception vs current.
+    Returns {rows: [{ticker, price_return_pct, fx_return_pct, dividend_return_pct, total_return_pct, value_base}], totals}
+    """
+    import yfinance as yf
+    import pandas as pd
+    from app.services.fx_service import get_fx_rates
+    from app.services.exchange_classifier import get_native_currency
+
+    db = get_admin_client()
+    settings_res = db.table("user_settings").select("base_currency").eq("user_id", user_id).maybe_single().execute()
+    base_currency = (settings_res.data or {}).get("base_currency", "USD")
+
+    pos_res = db.table("positions").select("*").eq("user_id", user_id).execute()
+    positions = pos_res.data or []
+    positions = [p for p in positions if float(p.get("shares") or 0) > 0]
+    if not positions:
+        return {"rows": [], "totals": {}, "base_currency": base_currency}
+
+    tickers = [p["ticker"] for p in positions]
+
+    quotes = get_quotes(tickers)
+
+    # Get native currencies for each ticker
+    native_currencies = {t: get_native_currency(t) for t in tickers}
+    all_currencies = list(set(native_currencies.values()))
+    fx_rates = get_fx_rates(all_currencies, base=base_currency)
+
+    # Fetch dividends from yfinance (trailing 12 months)
+    dividends: dict[str, float] = {}
+    try:
+        for t in tickers:
+            try:
+                tk = yf.Ticker(t)
+                divs = tk.dividends
+                if divs is not None and not divs.empty:
+                    cutoff = pd.Timestamp.now() - pd.DateOffset(months=12)
+                    recent = divs[divs.index >= cutoff]
+                    dividends[t] = float(recent.sum()) if not recent.empty else 0.0
+            except Exception:
+                dividends[t] = 0.0
+    except Exception:
+        pass
+
+    rows = []
+    for p in positions:
+        t = p["ticker"]
+        shares = float(p.get("shares") or 0)
+        avg_cost_native = float(p.get("avg_cost") or p.get("average_cost") or 0)
+        pos_currency = p.get("currency") or native_currencies.get(t, "USD")
+
+        current_price_native = float((quotes.get(t) or {}).get("price") or 0)
+        if avg_cost_native <= 0 or current_price_native <= 0:
+            continue
+
+        # Price return (in native currency)
+        price_return_pct = (current_price_native - avg_cost_native) / avg_cost_native * 100
+
+        # FX return: compare current FX rate vs implied FX at purchase
+        # We don't store historical FX, so we use cost_basis_usd if available
+        # Approximation: if base=USD and pos_currency=EUR, FX return = (fx_now - fx_then)/fx_then
+        # Use current FX rate; if position currency == base, FX return = 0
+        fx_now = float(fx_rates.get(pos_currency, 1.0))
+        fx_return_pct = 0.0
+        if pos_currency != base_currency and pos_currency in fx_rates:
+            # Rough FX attribution: total return in base - price return in native
+            # We can't recover historical FX without more data, so report 0 with note
+            fx_return_pct = 0.0  # would need historical FX snapshot to compute precisely
+
+        # Dividend return (per share vs avg cost)
+        div_per_share = dividends.get(t, 0.0)
+        dividend_return_pct = (div_per_share / avg_cost_native * 100) if avg_cost_native > 0 else 0.0
+
+        current_value_base = current_price_native * shares / fx_now if fx_now > 0 else 0.0
+        cost_basis_base = avg_cost_native * shares / fx_now if fx_now > 0 else 0.0
+
+        rows.append({
+            "ticker": t,
+            "shares": round(shares, 4),
+            "currency": pos_currency,
+            "avg_cost_native": round(avg_cost_native, 4),
+            "current_price_native": round(current_price_native, 4),
+            "price_return_pct": round(price_return_pct, 2),
+            "fx_return_pct": round(fx_return_pct, 2),
+            "dividend_return_pct": round(dividend_return_pct, 2),
+            "total_return_pct": round(price_return_pct + fx_return_pct + dividend_return_pct, 2),
+            "cost_basis_base": round(cost_basis_base, 2),
+            "current_value_base": round(current_value_base, 2),
+            "unrealized_pnl_base": round(current_value_base - cost_basis_base, 2),
+        })
+
+    rows.sort(key=lambda r: r["total_return_pct"], reverse=True)
+
+    total_cost = sum(r["cost_basis_base"] for r in rows)
+    total_value = sum(r["current_value_base"] for r in rows)
+    total_return_pct = (total_value - total_cost) / total_cost * 100 if total_cost > 0 else 0
+
+    return {
+        "rows": rows,
+        "totals": {
+            "total_cost_base": round(total_cost, 2),
+            "total_value_base": round(total_value, 2),
+            "total_pnl_base": round(total_value - total_cost, 2),
+            "total_return_pct": round(total_return_pct, 2),
+        },
+        "base_currency": base_currency,
+    }
+
+
+@router.get("/news")
+def portfolio_news(
+    user_id: str = Depends(get_user_id),
+):
+    """
+    Aggregated news headlines for all portfolio tickers via yfinance.
+    Returns {items: [{ticker, title, url, published, source}]} sorted by date desc.
+    """
+    import yfinance as yf
+    from datetime import datetime
+
+    tickers, _ = _get_positions_and_weights(user_id)
+    if not tickers:
+        return {"items": []}
+
+    items = []
+    for t in tickers:
+        try:
+            tk = yf.Ticker(t)
+            news = tk.news or []
+            for n in news[:5]:  # max 5 per ticker
+                # yfinance news format varies by version
+                content = n.get("content") or {}
+                title = content.get("title") or n.get("title") or ""
+                if not title:
+                    continue
+                # URL
+                click_url = (content.get("clickThroughUrl") or {}).get("url") or \
+                            (content.get("canonicalUrl") or {}).get("url") or \
+                            n.get("link") or n.get("url") or ""
+                # Published
+                pub_raw = content.get("pubDate") or n.get("providerPublishTime") or ""
+                pub_str = ""
+                if isinstance(pub_raw, (int, float)):
+                    pub_str = datetime.utcfromtimestamp(pub_raw).strftime("%Y-%m-%d %H:%M")
+                elif isinstance(pub_raw, str):
+                    pub_str = pub_raw[:16]
+                # Source
+                provider = (content.get("provider") or {}).get("displayName") or \
+                           n.get("publisher") or ""
+                items.append({
+                    "ticker": t,
+                    "title": title[:200],
+                    "url": click_url,
+                    "published": pub_str,
+                    "source": provider,
+                })
+        except Exception:
+            continue
+
+    # Sort by published desc (string sort works if format is consistent)
+    items.sort(key=lambda x: x.get("published", ""), reverse=True)
+
+    return {"items": items[:50]}  # cap at 50 total

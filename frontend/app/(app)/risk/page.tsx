@@ -123,35 +123,46 @@ export default function RiskPage() {
         )}
       </div>
 
-      {/* Correlation matrix */}
+      {/* Correlation heatmap */}
       {corr && corr.tickers?.length > 0 && (
-        <div className="bbg-card">
-          <p className="bbg-header">Correlation Matrix</p>
-          <div className="overflow-x-auto">
-            <table className="bbg-table text-center">
-              <thead>
-                <tr>
-                  <th className="text-left">—</th>
-                  {corr.tickers.map((t: string) => <th key={t}>{t}</th>)}
-                </tr>
-              </thead>
-              <tbody>
-                {corr.tickers.map((ticker: string, i: number) => (
-                  <tr key={ticker}>
-                    <td className="text-bloomberg-gold text-left">{ticker}</td>
-                    {corr.matrix[i].map((v: number, j: number) => {
-                      const intensity = Math.abs(v);
-                      const bg = v === 1 ? "#1e2535" : v > 0.7 ? `rgba(255,77,77,${intensity * 0.5})` : v < -0.3 ? `rgba(77,255,77,${intensity * 0.5})` : "transparent";
-                      return (
-                        <td key={j} style={{ background: bg }}>
-                          {v.toFixed(2)}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <div className="bbg-card overflow-x-auto">
+          <p className="bbg-header">Correlation Heatmap</p>
+          <p className="text-bloomberg-muted text-[10px] mb-3">
+            Retornos diarios. <span className="text-red-400">Rojo</span> = alta correlación (riesgo concentración). <span className="text-blue-400">Azul</span> = negativa (diversificación). <span className="text-bloomberg-gold">Dorado</span> = diagonal.
+          </p>
+          <div className="inline-block min-w-full">
+            <div className="flex">
+              <div className="w-20 shrink-0" />
+              {corr.tickers.map((t: string) => (
+                <div key={t} className="w-14 shrink-0 text-[8px] text-bloomberg-muted text-center truncate px-0.5 pb-1 font-bold" title={t}>
+                  {t.length > 7 ? t.slice(0, 7) : t}
+                </div>
+              ))}
+            </div>
+            {corr.tickers.map((rowTicker: string, i: number) => (
+              <div key={rowTicker} className="flex items-center">
+                <div className="w-20 shrink-0 text-[9px] text-bloomberg-gold font-bold truncate pr-2">{rowTicker}</div>
+                {corr.matrix[i].map((val: number, j: number) => {
+                  const isDiag = i === j;
+                  const abs = Math.abs(val);
+                  let bg = "";
+                  if (isDiag) bg = "rgba(243,167,18,0.3)";
+                  else if (val > 0.7) bg = `rgba(255,77,77,${0.25 + abs * 0.55})`;
+                  else if (val > 0.3) bg = `rgba(255,140,0,${abs * 0.45})`;
+                  else if (val < -0.3) bg = `rgba(77,130,255,${abs * 0.45})`;
+                  else bg = "rgba(30,37,48,0.7)";
+                  return (
+                    <div key={j}
+                      className="w-14 h-10 shrink-0 flex items-center justify-center text-[8px] font-bold border border-bloomberg-bg/20 cursor-default"
+                      style={{ background: bg, color: isDiag ? "#f3a712" : "#e2e8f0" }}
+                      title={`${rowTicker} ↔ ${corr.tickers[j]}: ${val.toFixed(3)}`}
+                    >
+                      {val.toFixed(2)}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
           </div>
         </div>
       )}
