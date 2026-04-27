@@ -331,7 +331,7 @@ async def import_xtb_xlsx(
                 "currency": native_ccy,
                 "fee_native": 0.0,
                 "date": tx_date,
-                "note": f"XTB: {comment[:80]}",
+                "comment": f"XTB: {comment[:80]}",
             }
             db.table("transactions").insert(tx_row).execute()
             tickers.add(app_ticker)

@@ -26,3 +26,4 @@ statsmodels>=0.14
 xgboost>=2.0
 groq
 reportlab
+openpyxl>=3.1.0
