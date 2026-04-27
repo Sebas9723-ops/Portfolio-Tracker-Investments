@@ -920,7 +920,7 @@ export default function RebalancingPage() {
                   setResearchData(null);
                   try {
                     const r = await runContributionResearch(
-                      quantData.contribution_plan.allocations,
+                      (quantData.contribution_plan.allocations as unknown) as { ticker: string; pct_of_capital?: number; [key: string]: unknown }[],
                       quantData.profile ?? profile,
                       ccy,
                     );
