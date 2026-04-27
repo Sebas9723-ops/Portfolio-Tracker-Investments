@@ -39,10 +39,24 @@ def _xtb_to_app_ticker(xtb: str) -> str:
 
 def _ticker_exchange_info(ticker: str) -> dict:
     if ticker.endswith(".DE"):
-        return {"currency": "EUR", "market": "DE"}
+        return {"currency": "EUR", "market": "XETRA"}
     if ticker.endswith(".L"):
-        return {"currency": "GBP", "market": "UK"}
+        return {"currency": "GBP", "market": "LSE"}
     return {"currency": "USD", "market": "US"}
+
+
+def _ticker_aliases(ticker: str) -> list[str]:
+    """Return all formats a ticker might be stored under in positions."""
+    aliases = [ticker]
+    if ticker.endswith(".L"):
+        aliases.append(ticker[:-2] + ".UK")   # EIMI.L → EIMI.UK
+    elif ticker.endswith(".UK"):
+        aliases.append(ticker[:-3] + ".L")    # EIMI.UK → EIMI.L
+    elif "." not in ticker:
+        aliases.append(ticker + ".US")         # VOO → VOO.US
+    elif ticker.endswith(".US"):
+        aliases.append(ticker[:-3])            # VOO.US → VOO
+    return aliases
 
 
 # ── XTB parser ────────────────────────────────────────────────────────────────
@@ -330,13 +344,27 @@ async def broker_reconcile(
     positions_updated = 0
     positions_created = 0
 
+    # Zero out sold-off positions still showing shares in DB
+    for ticker, computed in reconciled.items():
+        if computed["shares"] > 0:
+            continue
+        aliases = _ticker_aliases(ticker)
+        matched_key = next((a for a in aliases if a in existing_positions), None)
+        if matched_key and float(existing_positions[matched_key].get("shares", 0)) > 0:
+            db.table("positions").update({"shares": 0}).eq("user_id", user_id).eq("ticker", matched_key).execute()
+            positions_updated += 1
+
     for ticker, computed in reconciled.items():
         if computed["shares"] <= 0:
             continue  # Don't touch zero-share positions (keep for history)
 
-        if ticker in existing_positions:
+        # Find existing position using any known alias (e.g. EIMI.L ↔ EIMI.UK)
+        aliases = _ticker_aliases(ticker)
+        matched_key = next((a for a in aliases if a in existing_positions), None)
+
+        if matched_key is not None:
             # Update shares + avg_cost only if they differ meaningfully
-            existing = existing_positions[ticker]
+            existing = existing_positions[matched_key]
             needs_update = (
                 abs(float(existing.get("shares", 0)) - computed["shares"]) > 0.0001
                 or (computed["avg_cost_native"] > 0 and abs(float(existing.get("avg_cost_native") or 0) - computed["avg_cost_native"]) > 0.01)
@@ -345,7 +373,8 @@ async def broker_reconcile(
                 update_data: dict = {"shares": computed["shares"]}
                 if computed["avg_cost_native"] > 0:
                     update_data["avg_cost_native"] = computed["avg_cost_native"]
-                db.table("positions").update(update_data).eq("user_id", user_id).eq("ticker", ticker).execute()
+                # Update by the key the DB actually has
+                db.table("positions").update(update_data).eq("user_id", user_id).eq("ticker", matched_key).execute()
                 positions_updated += 1
         else:
             # Create new position
