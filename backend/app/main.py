@@ -16,6 +16,7 @@ from app.routers import quant_analytics as quant_analytics_router
 from app.routers.import_transactions import router as import_router
 from app.routers.dca import router as dca_router
 from app.routers.agents import router as agents_router
+from app.routers.broker_agent import router as broker_agent_router
 
 
 @asynccontextmanager
@@ -76,6 +77,7 @@ app.include_router(quant_analytics_router.router)
 app.include_router(import_router)
 app.include_router(dca_router)
 app.include_router(agents_router)
+app.include_router(broker_agent_router)
 
 
 @app.api_route("/health", methods=["GET", "HEAD"])
