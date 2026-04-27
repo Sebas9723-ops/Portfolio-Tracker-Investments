@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from app.auth.dependencies import get_user_id
-from app.services.agent_pipeline import run_full_agent_pipeline
+from app.services.agent_pipeline import run_full_agent_pipeline, run_contribution_research_agent
 from app.db.agent_results import save_agent_result, load_latest_agent_result
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
@@ -127,6 +127,30 @@ def run_now(user_id: str = Depends(get_user_id)) -> dict[str, Any]:
         save_agent_result(user_id, "doctor", doctor_result, triggered_by="manual")
 
     return {"macro": macro_result, "doctor": doctor_result}
+
+
+class ContributionResearchRequest(BaseModel):
+    allocations: list[dict]
+    profile: str = "base"
+    base_currency: str = "USD"
+
+
+@router.post("/contribution-research")
+def contribution_research(
+    req: ContributionResearchRequest,
+    user_id: str = Depends(get_user_id),
+) -> dict[str, Any]:
+    """
+    Contribution Research Agent: evaluates each ticker in the contribution plan
+    across momentum, fundamentals, quality, and valuation signals weighted by profile.
+    Returns per-ticker {score, signals, weight_adjustment, key_insight}.
+    """
+    result = run_contribution_research_agent(
+        allocations=req.allocations,
+        profile=req.profile,
+        base_currency=req.base_currency,
+    )
+    return result or {}
 
 
 @router.post("/analyze")

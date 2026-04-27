@@ -293,7 +293,185 @@ Usa los nombres exactos de los tickers como keys. Sé específico y usa datos re
     return None
 
 
-# ── Agent 4: Macro Agent ──────────────────────────────────────────────────────
+# ── Agent 4: Contribution Research Agent ─────────────────────────────────────
+
+def _fetch_ticker_research_data(tickers: list[str]) -> dict[str, dict]:
+    """
+    Fetch momentum, fundamentals, quality, and valuation data per ticker via yfinance.
+    Returns rich data dict for the Contribution Research Agent.
+    """
+    import yfinance as yf
+
+    result: dict[str, dict] = {}
+    for t in tickers:
+        try:
+            tk = yf.Ticker(t)
+            info = tk.info or {}
+            hist = tk.history(period="1y")
+
+            def _mom(n: int) -> float | None:
+                if len(hist) < n + 1:
+                    return None
+                c0 = float(hist["Close"].iloc[-1])
+                cn = float(hist["Close"].iloc[-(n + 1)])
+                return round((c0 / cn - 1) * 100, 2) if cn else None
+
+            # RSI(14)
+            rsi = None
+            if len(hist) >= 15:
+                try:
+                    delta = hist["Close"].diff()
+                    gain = delta.where(delta > 0, 0.0).rolling(14).mean()
+                    loss = (-delta.where(delta < 0, 0.0)).rolling(14).mean()
+                    rs = gain / loss
+                    rsi_s = 100 - (100 / (1 + rs))
+                    rsi = round(float(rsi_s.iloc[-1]), 1)
+                except Exception:
+                    pass
+
+            # Analyst upside
+            target = info.get("targetMeanPrice")
+            price = info.get("regularMarketPrice") or info.get("previousClose")
+            analyst_upside = round((target / price - 1) * 100, 1) if target and price else None
+
+            result[t] = {
+                "name":              info.get("shortName") or info.get("longName") or t,
+                "sector":            info.get("sector") or info.get("category") or "N/A",
+                "beta":              round(info.get("beta", 1.0), 2) if info.get("beta") else None,
+                # Momentum
+                "mom_1m":  _mom(21),
+                "mom_3m":  _mom(63),
+                "mom_6m":  _mom(126),
+                "mom_12m": _mom(252),
+                "rsi_14":  rsi,
+                # Fundamentals / Growth
+                "pe_ratio":       round(info.get("trailingPE", 0), 1) if info.get("trailingPE") else None,
+                "pb_ratio":       round(info.get("priceToBook", 0), 2) if info.get("priceToBook") else None,
+                "revenue_growth": round(info.get("revenueGrowth", 0) * 100, 1) if info.get("revenueGrowth") else None,
+                "eps_growth":     round(info.get("earningsGrowth", 0) * 100, 1) if info.get("earningsGrowth") else None,
+                # Quality
+                "roe":           round(info.get("returnOnEquity", 0) * 100, 1) if info.get("returnOnEquity") else None,
+                "debt_equity":   round(info.get("debtToEquity", 0), 1) if info.get("debtToEquity") else None,
+                "profit_margin": round(info.get("profitMargins", 0) * 100, 1) if info.get("profitMargins") else None,
+                "current_ratio": round(info.get("currentRatio", 0), 2) if info.get("currentRatio") else None,
+                # Valuation
+                "analyst_upside":        analyst_upside,
+                "analyst_recommendation": info.get("recommendationKey"),
+                "peg_ratio":             round(info.get("pegRatio", 0), 2) if info.get("pegRatio") else None,
+            }
+        except Exception as exc:
+            log.warning("Research data fetch failed for %s: %s", t, exc)
+            result[t] = {"name": t, "sector": "N/A"}
+    return result
+
+
+def run_contribution_research_agent(
+    allocations: list[dict],
+    profile: str,
+    base_currency: str = "USD",
+) -> dict[str, Any] | None:
+    """
+    Contribution Research Agent: evaluates each ticker across 4 signal dimensions
+    (momentum, fundamentals, quality, valuation) weighted by investor profile.
+
+    Returns per-ticker:
+      {score: 0-100, momentum_signal, fundamental_signal, quality_signal,
+       valuation_signal, weight_adjustment: float, key_insight: str}
+    """
+    tickers = [a["ticker"] for a in allocations if a.get("ticker")]
+    if not tickers:
+        return None
+
+    research_data = _fetch_ticker_research_data(tickers)
+
+    # Profile-specific weights for each signal dimension
+    PROFILE_WEIGHTS = {
+        "conservative": {"momentum": 0.15, "fundamentals": 0.25, "quality": 0.40, "valuation": 0.20},
+        "base":         {"momentum": 0.25, "fundamentals": 0.30, "quality": 0.25, "valuation": 0.20},
+        "aggressive":   {"momentum": 0.45, "fundamentals": 0.30, "quality": 0.10, "valuation": 0.15},
+    }
+    pw = PROFILE_WEIGHTS.get(profile, PROFILE_WEIGHTS["base"])
+
+    profile_desc = {
+        "conservative": "conservador — prioriza calidad (ROE, márgenes, deuda baja) y valoración razonable; penaliza momentum especulativo y alto beta",
+        "base":         "balanceado — equilibra momentum, crecimiento fundamental, calidad y valoración sin sesgos extremos",
+        "aggressive":   "agresivo — maximiza retorno esperado; sobrepondera momentum fuerte y crecimiento; tolera valoraciones altas si el crecimiento lo justifica",
+    }
+
+    ticker_blocks = []
+    for a in allocations:
+        t = a.get("ticker", "")
+        d = research_data.get(t, {})
+        quant_pct = a.get("pct_of_capital", 0)
+
+        def _fmt(v, suffix=""):
+            return f"{v}{suffix}" if v is not None else "N/A"
+
+        block = (
+            f"### {t} ({d.get('name', t)}) — Quant allocation: {quant_pct:.1f}%\n"
+            f"Sector: {d.get('sector', 'N/A')} | Beta: {_fmt(d.get('beta'))}\n"
+            f"MOMENTUM: 1m={_fmt(d.get('mom_1m'), '%')} 3m={_fmt(d.get('mom_3m'), '%')} "
+            f"6m={_fmt(d.get('mom_6m'), '%')} 12m={_fmt(d.get('mom_12m'), '%')} | RSI14={_fmt(d.get('rsi_14'))}\n"
+            f"FUNDAMENTALS: P/E={_fmt(d.get('pe_ratio'))} | PEG={_fmt(d.get('peg_ratio'))} | "
+            f"Rev.Growth={_fmt(d.get('revenue_growth'), '%')} | EPS.Growth={_fmt(d.get('eps_growth'), '%')}\n"
+            f"QUALITY: ROE={_fmt(d.get('roe'), '%')} | D/E={_fmt(d.get('debt_equity'))} | "
+            f"Margin={_fmt(d.get('profit_margin'), '%')} | CurrentRatio={_fmt(d.get('current_ratio'))}\n"
+            f"VALUATION: Analyst upside={_fmt(d.get('analyst_upside'), '%')} | "
+            f"Recommendation={_fmt(d.get('analyst_recommendation'))} | P/B={_fmt(d.get('pb_ratio'))}"
+        )
+        ticker_blocks.append(block)
+
+    blocks_text = "\n\n".join(ticker_blocks)
+
+    prompt = f"""Eres el Contribution Research Agent de un hedge fund cuantitativo. Evalúa los tickers del plan de contribución según señales cuantitativas y cualitativas, ponderadas por el perfil del inversor.
+
+PERFIL: {profile_desc.get(profile, profile)}
+
+PESOS DE EVALUACIÓN PARA PERFIL {profile.upper()}:
+- Momentum (precio): {pw['momentum']*100:.0f}%
+- Fundamentals (crecimiento): {pw['fundamentals']*100:.0f}%
+- Calidad (ROE, márgenes, deuda): {pw['quality']*100:.0f}%
+- Valoración (upside analistas, P/B): {pw['valuation']*100:.0f}%
+
+TICKERS Y DATOS:
+{blocks_text}
+
+INSTRUCCIÓN: Evalúa cada ticker según los pesos del perfil. Responde EXACTAMENTE en este formato JSON (sin markdown, sin texto adicional):
+{{
+  "TICKER1": {{
+    "score": <número 0-100, puntuación total ponderada>,
+    "momentum_signal": "<alcista | neutral | bajista>",
+    "fundamental_signal": "<fuerte | moderado | débil>",
+    "quality_signal": "<alta | media | baja>",
+    "valuation_signal": "<subvalorado | justo | sobrevalorado>",
+    "weight_adjustment": <float 0.5-1.5; 1.0=mantener quant, >1.0=aumentar peso, <1.0=reducir peso>,
+    "key_insight": "<máximo 12 palabras: el factor más crítico para este perfil específicamente>"
+  }}
+}}
+
+Reglas para weight_adjustment según perfil {profile}:
+- Si momentum es alcista Y perfil agresivo → mayor boost (hasta 1.4)
+- Si calidad es baja Y perfil conservador → penalización fuerte (hasta 0.6)
+- Si sobrevalorado Y perfil conservador → penalización moderada (0.75-0.85)
+- Si score > 75 → weight_adjustment ≥ 1.1
+- Si score < 40 → weight_adjustment ≤ 0.85
+- Usa los tickers exactos como keys JSON."""
+
+    raw = _call_groq(prompt, max_tokens=1000)
+    if not raw:
+        return None
+
+    import json, re
+    try:
+        match = re.search(r'\{.*\}', raw, re.DOTALL)
+        if match:
+            return json.loads(match.group())
+    except Exception as exc:
+        log.warning("Contribution research agent JSON parse failed: %s | raw: %s", exc, raw[:300])
+    return None
+
+
+# ── Agent 5: Macro Agent ──────────────────────────────────────────────────────
 
 def _fetch_macro_indicators() -> dict[str, dict]:
     """Fetch key macro indicators via yfinance."""

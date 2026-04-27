@@ -4,8 +4,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchRebalancing, fetchRequiredForMaxSharpe } from "@/lib/api/analytics";
 import { fetchContributionPlan } from "@/lib/api/contribution";
 import type { ContributionPlanResponse } from "@/lib/api/contribution";
-import { runAgentAnalysis } from "@/lib/api/agents";
-import type { AgentAnalysisResult } from "@/lib/api/agents";
+import { runAgentAnalysis, runContributionResearch } from "@/lib/api/agents";
+import type { AgentAnalysisResult, ContributionResearchResult, TickerResearchSignal } from "@/lib/api/agents";
 import { useAIChat } from "@/lib/context/aiChatContext";
 import { fetchSettings, updateSettings } from "@/lib/api/settings";
 import { usePortfolio } from "@/lib/hooks/usePortfolio";
@@ -73,6 +73,8 @@ export default function RebalancingPage() {
   const [agentData, setAgentData] = useState<AgentAnalysisResult | null>(null);
   const [agentLoading, setAgentLoading] = useState(false);
   const [agentError, setAgentError] = useState<string | null>(null);
+  const [researchData, setResearchData] = useState<ContributionResearchResult | null>(null);
+  const [researchLoading, setResearchLoading] = useState(false);
   const [horizon, setHorizon] = useState<"short" | "medium" | "long">("long");
   const queryClient = useQueryClient();
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: fetchSettings });
@@ -907,9 +909,30 @@ export default function RebalancingPage() {
             <div>
               <p className="bbg-header">AI Agent Pipeline</p>
               <p className="text-bloomberg-muted text-[10px]">
-                Director · Risk Manager · Research Analyst — powered by Llama 3.3 70B
+                Director · Risk Manager · Research Analyst · Research Signals — powered by Llama 3.3 70B
               </p>
             </div>
+            <div className="flex gap-2">
+              <button
+                onClick={async () => {
+                  if (!quantData?.contribution_plan?.allocations) return;
+                  setResearchLoading(true);
+                  setResearchData(null);
+                  try {
+                    const r = await runContributionResearch(
+                      quantData.contribution_plan.allocations,
+                      quantData.profile ?? profile,
+                      ccy,
+                    );
+                    setResearchData(r);
+                  } catch (e) { console.error(e); }
+                  setResearchLoading(false);
+                }}
+                disabled={researchLoading}
+                className="border border-bloomberg-gold text-bloomberg-gold text-[10px] font-bold px-3 py-1.5 hover:bg-bloomberg-gold/10 disabled:opacity-50 uppercase tracking-wider whitespace-nowrap"
+              >
+                {researchLoading ? "ANALYZING…" : researchData ? "RE-RUN SIGNALS" : "RESEARCH SIGNALS"}
+              </button>
             <button
               onClick={async () => {
                 if (!quantData?.contribution_plan?.allocations) return;
@@ -943,6 +966,7 @@ export default function RebalancingPage() {
             >
               {agentLoading ? "ANALYZING…" : agentData ? "RE-RUN AGENTS" : "RUN AGENTS"}
             </button>
+            </div>
           </div>
 
           {agentLoading && (
@@ -1016,6 +1040,96 @@ export default function RebalancingPage() {
 
             </div>
           )}
+
+          {/* Research Signals table */}
+          {researchLoading && (
+            <div className="mt-4 space-y-1 animate-pulse">
+              {[...Array(3)].map((_, i) => <div key={i} className="h-8 bg-bloomberg-border rounded" />)}
+              <p className="text-bloomberg-muted text-[10px]">Evaluando momentum, fundamentals, calidad y valoración… ~20s</p>
+            </div>
+          )}
+
+          {researchData && !researchLoading && (() => {
+            const SIGNAL_COLORS: Record<string, string> = {
+              alcista:       "text-green-400",
+              neutral:       "text-bloomberg-muted",
+              bajista:       "text-red-400",
+              fuerte:        "text-green-400",
+              moderado:      "text-bloomberg-gold",
+              "débil":       "text-red-400",
+              alta:          "text-green-400",
+              media:         "text-bloomberg-gold",
+              baja:          "text-red-400",
+              subvalorado:   "text-green-400",
+              justo:         "text-bloomberg-muted",
+              sobrevalorado: "text-red-400",
+            };
+
+            const allocs = quantData?.contribution_plan?.allocations ?? [];
+            const allocMap: Record<string, number> = {};
+            allocs.forEach(a => { allocMap[a.ticker] = a.pct_of_capital ?? 0; });
+
+            return (
+              <div className="mt-4">
+                <p className="text-bloomberg-muted text-[10px] font-bold uppercase tracking-widest mb-2">
+                  Research Signals — {(quantData?.profile ?? profile).charAt(0).toUpperCase() + (quantData?.profile ?? profile).slice(1)} Profile
+                </p>
+                <div className="overflow-x-auto">
+                  <table className="bbg-table w-full">
+                    <thead>
+                      <tr>
+                        <th>Ticker</th>
+                        <th className="text-center">Score</th>
+                        <th className="text-center">Momentum</th>
+                        <th className="text-center">Fundamentals</th>
+                        <th className="text-center">Calidad</th>
+                        <th className="text-center">Valoración</th>
+                        <th className="text-right">Quant %</th>
+                        <th className="text-right">Adj. ×</th>
+                        <th>Key Insight</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(researchData).map(([ticker, sig]: [string, TickerResearchSignal]) => {
+                        const adj = sig.weight_adjustment ?? 1;
+                        const quant = allocMap[ticker] ?? 0;
+                        return (
+                          <tr key={ticker}>
+                            <td className="text-bloomberg-gold font-bold">{ticker}</td>
+                            <td className="text-center">
+                              <span className={`font-bold text-[11px] ${sig.score >= 70 ? "text-green-400" : sig.score >= 45 ? "text-bloomberg-gold" : "text-red-400"}`}>
+                                {sig.score}
+                              </span>
+                            </td>
+                            <td className={`text-center text-[10px] font-semibold ${SIGNAL_COLORS[sig.momentum_signal] ?? ""}`}>
+                              {sig.momentum_signal}
+                            </td>
+                            <td className={`text-center text-[10px] font-semibold ${SIGNAL_COLORS[sig.fundamental_signal] ?? ""}`}>
+                              {sig.fundamental_signal}
+                            </td>
+                            <td className={`text-center text-[10px] font-semibold ${SIGNAL_COLORS[sig.quality_signal] ?? ""}`}>
+                              {sig.quality_signal}
+                            </td>
+                            <td className={`text-center text-[10px] font-semibold ${SIGNAL_COLORS[sig.valuation_signal] ?? ""}`}>
+                              {sig.valuation_signal}
+                            </td>
+                            <td className="text-right text-[11px]">{quant.toFixed(1)}%</td>
+                            <td className={`text-right font-bold text-[11px] ${adj > 1.05 ? "text-green-400" : adj < 0.95 ? "text-red-400" : "text-bloomberg-muted"}`}>
+                              {adj.toFixed(2)}×
+                            </td>
+                            <td className="text-bloomberg-muted text-[10px] max-w-[180px]">{sig.key_insight}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="text-bloomberg-muted text-[9px] mt-2">
+                  Adj. × = multiplicador de ajuste sobre la allocation del quant engine según señales del perfil. &gt;1 = señales favorecen aumentar peso; &lt;1 = reducir.
+                </p>
+              </div>
+            );
+          })()}
 
           {!agentLoading && !agentData && !agentError && (
             <p className="text-bloomberg-muted text-[10px]">

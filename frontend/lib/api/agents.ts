@@ -74,3 +74,28 @@ export const runAgentsNow = () =>
   apiClient
     .post<{ macro: MacroAgentResult | null; doctor: DoctorAgentResult | null }>("/api/agents/run-now", {}, { timeout: 90_000 })
     .then((r) => r.data);
+
+export interface TickerResearchSignal {
+  score: number;
+  momentum_signal: "alcista" | "neutral" | "bajista";
+  fundamental_signal: "fuerte" | "moderado" | "débil";
+  quality_signal: "alta" | "media" | "baja";
+  valuation_signal: "subvalorado" | "justo" | "sobrevalorado";
+  weight_adjustment: number;
+  key_insight: string;
+}
+
+export type ContributionResearchResult = Record<string, TickerResearchSignal>;
+
+export const runContributionResearch = (
+  allocations: { ticker: string; pct_of_capital?: number; [key: string]: unknown }[],
+  profile: string,
+  base_currency = "USD",
+) =>
+  apiClient
+    .post<ContributionResearchResult>(
+      "/api/agents/contribution-research",
+      { allocations, profile, base_currency },
+      { timeout: 90_000 },
+    )
+    .then((r) => r.data);
