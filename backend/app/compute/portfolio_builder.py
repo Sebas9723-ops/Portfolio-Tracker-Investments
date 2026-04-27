@@ -50,10 +50,11 @@ def build_portfolio(
         value_native = shares * price_native
         value_base = shares * price_base
 
-        # Avg cost: prefer transaction-computed, fall back to position record
+        # Avg cost: prefer position record (set by broker agent) over tx-computed
+        # Broker agent reconciles from all transactions and writes authoritative value to position.
         avg_cost_native: Optional[float] = (
-            tx_avg_costs.get(ticker)
-            or pos.get("avg_cost_native")
+            pos.get("avg_cost_native")
+            or tx_avg_costs.get(ticker)
         )
         # Avg cost may be in pos_currency (e.g. USD if user entered cost in USD)
         avg_cost_fx_rate = fx_rates.get(pos_currency, 1.0)

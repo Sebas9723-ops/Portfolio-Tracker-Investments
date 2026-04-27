@@ -9,8 +9,7 @@ import { Trash2, Bell, BellOff } from "lucide-react";
 import type { UserSettings } from "@/lib/types";
 import { fetchDCASchedule, upsertDCASchedule, deleteDCASchedule, runDCANow } from "@/lib/api/dca";
 import type { DCASchedule } from "@/lib/api/dca";
-import { importIBKRCsv, importXTBXlsx, brokerReconcile } from "@/lib/api/import";
-import type { BrokerReconcileResult } from "@/lib/api/import";
+import { importIBKRCsv } from "@/lib/api/import";
 
 const PROFILES_LABELS: Record<string, string> = { conservative: "Conservative", base: "Base", aggressive: "Aggressive" };
 const PROFILE_COLORS: Record<string, string> = { conservative: "#2563eb", base: "#16a34a", aggressive: "#dc2626" };
@@ -48,10 +47,6 @@ export default function SettingsPage() {
   const [ibkrFile, setIbkrFile] = useState<File | null>(null);
   const [ibkrResult, setIbkrResult] = useState<{ imported: number; skipped: number; errors: string[]; tickers: string[] } | null>(null);
   const [ibkrLoading, setIbkrLoading] = useState(false);
-  const [xtbFile, setXtbFile] = useState<File | null>(null);
-  const [xtbResult, setXtbResult] = useState<BrokerReconcileResult | null>(null);
-  const [xtbLoading, setXtbLoading] = useState(false);
-  const xtbFileRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: dcaSchedule } = useQuery({ queryKey: ["dca-schedule"], queryFn: fetchDCASchedule, staleTime: 60_000 });
@@ -481,90 +476,6 @@ export default function SettingsPage() {
             </>
           )}
         </div>
-      </div>
-
-      {/* ── Broker Reconciliation Agent (XTB) ── */}
-      <div className="bbg-card">
-        <div className="flex items-start justify-between mb-1">
-          <p className="bbg-header mb-0">🤖 Broker Reconciliation Agent (XTB)</p>
-          <span className="text-[9px] text-bloomberg-gold border border-bloomberg-gold/30 px-1.5 py-0.5 rounded">AI</span>
-        </div>
-        <p className="text-bloomberg-muted text-[10px] mb-3">
-          Sube tu reporte XTB (Cash Operations .xlsx). El agente importa transacciones, detecta duplicados,
-          reconcilia posiciones (shares + avg cost) y valida con IA.<br/>
-          <span className="text-bloomberg-gold">XTB: Mi Cuenta → Historial → Cash Operations → Exportar Excel</span>
-        </p>
-        <div className="flex items-center gap-3 flex-wrap">
-          <input
-            ref={xtbFileRef}
-            type="file"
-            accept=".xlsx"
-            onChange={(e) => setXtbFile(e.target.files?.[0] || null)}
-            className="text-bloomberg-muted text-[10px] file:bg-bloomberg-border file:text-bloomberg-text file:border-0 file:px-2 file:py-1 file:text-[10px] file:mr-2 file:cursor-pointer"
-          />
-          <button
-            onClick={async () => {
-              if (!xtbFile) return;
-              setXtbLoading(true);
-              setXtbResult(null);
-              try {
-                const result = await brokerReconcile(xtbFile);
-                setXtbResult(result);
-                qc.invalidateQueries({ queryKey: ["portfolio"] });
-                qc.invalidateQueries({ queryKey: ["transactions"] });
-                qc.invalidateQueries({ queryKey: ["portfolio-history"] });
-                qc.invalidateQueries({ queryKey: ["rebalancing"] });
-              } catch (e) {
-                setXtbResult({ imported: 0, skipped_duplicates: 0, errors: [String(e)], positions_updated: 0, positions_created: 0, reconciled_tickers: [], deposits_usd: 0, agent_summary: null });
-              }
-              setXtbLoading(false);
-            }}
-            disabled={!xtbFile || xtbLoading}
-            className="bg-bloomberg-gold text-bloomberg-bg text-[10px] font-bold px-3 py-1.5 hover:opacity-90 disabled:opacity-50 uppercase tracking-wider"
-          >
-            {xtbLoading ? "Reconciliando…" : "RECONCILE"}
-          </button>
-          {xtbLoading && <span className="text-bloomberg-muted text-[10px]">Importando + reconciliando posiciones + validando con IA… ~20s</span>}
-        </div>
-        {xtbResult && (
-          <div className={`mt-3 p-3 text-[10px] border space-y-2 ${xtbResult.imported > 0 || xtbResult.positions_updated > 0 ? "border-green-500/30 bg-green-500/5" : "border-bloomberg-border"}`}>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-              <div>
-                <p className="text-bloomberg-muted uppercase tracking-widest text-[9px]">Importadas</p>
-                <p className="font-bold text-bloomberg-text text-sm">{xtbResult.imported}</p>
-              </div>
-              <div>
-                <p className="text-bloomberg-muted uppercase tracking-widest text-[9px]">Duplicadas omitidas</p>
-                <p className="font-bold text-bloomberg-muted text-sm">{xtbResult.skipped_duplicates}</p>
-              </div>
-              <div>
-                <p className="text-bloomberg-muted uppercase tracking-widest text-[9px]">Posiciones actualizadas</p>
-                <p className="font-bold text-bloomberg-gold text-sm">{xtbResult.positions_updated}</p>
-              </div>
-              <div>
-                <p className="text-bloomberg-muted uppercase tracking-widest text-[9px]">Posiciones creadas</p>
-                <p className="font-bold text-green-400 text-sm">{xtbResult.positions_created}</p>
-              </div>
-            </div>
-            {xtbResult.deposits_usd > 0 && (
-              <p className="text-bloomberg-muted">Depósitos detectados: <span className="text-bloomberg-gold">${xtbResult.deposits_usd.toFixed(2)}</span></p>
-            )}
-            {xtbResult.reconciled_tickers.length > 0 && (
-              <p className="text-bloomberg-muted">Tickers reconciliados: <span className="text-bloomberg-text">{xtbResult.reconciled_tickers.join(", ")}</span></p>
-            )}
-            {xtbResult.agent_summary && (
-              <div className="border-l-2 border-bloomberg-gold pl-2 mt-2">
-                <p className="text-[9px] text-bloomberg-gold uppercase tracking-widest mb-0.5">Validación IA</p>
-                <p className="text-bloomberg-text leading-relaxed">{xtbResult.agent_summary}</p>
-              </div>
-            )}
-            {xtbResult.errors.length > 0 && (
-              <ul className="text-red-400">
-                {xtbResult.errors.map((e, i) => <li key={i}>⚠ {e}</li>)}
-              </ul>
-            )}
-          </div>
-        )}
       </div>
 
       {/* ── IBKR Import ── */}
