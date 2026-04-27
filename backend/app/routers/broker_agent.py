@@ -73,32 +73,61 @@ def _parse_xtb_comment(comment: str) -> tuple[float, float] | None:
 
 
 def _parse_xtb_xlsx(content: bytes) -> list[dict]:
-    """Parse XTB Cash Operations xlsx. Returns list of raw trade dicts."""
+    """
+    Parse XTB Cash Operations xlsx.
+    Handles both fixed-column and dynamic-header layouts.
+    Returns (trades_list, deposits_total).
+    """
     import openpyxl
+    from datetime import datetime
+
     wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
     ws = wb.active
 
-    # Find header row
-    header_row = None
-    for i, row in enumerate(ws.iter_rows(values_only=True), start=1):
-        if row and row[0] == "Type":
-            header_row = i
-            break
-    if header_row is None:
-        raise ValueError("Header row not found. Expected 'Type' column.")
+    # ── Find header row: "Type" anywhere in first 30 rows ────────────────────
+    header_row_idx = None
+    col_map: dict[str, int] = {}
 
-    from datetime import datetime
-    trades = []
+    for i, row in enumerate(ws.iter_rows(values_only=True), start=1):
+        if not row:
+            continue
+        cells = [str(c).strip() if c is not None else "" for c in row]
+        if "Type" in cells:
+            header_row_idx = i
+            col_map = {name: idx for idx, name in enumerate(cells) if name}
+            break
+        if i > 30:
+            break
+
+    if header_row_idx is None:
+        raise ValueError(
+            "Header row not found in first 30 rows. "
+            "Expected a row containing 'Type'. "
+            "Please export 'Cash Operations' from XTB (Mi Cuenta → Historial → Cash Operations → Exportar Excel)."
+        )
+
+    # ── Map required columns (fall back to positional defaults) ──────────────
+    def col(name: str, default: int) -> int:
+        return col_map.get(name, default)
+
+    idx_type    = col("Type",    0)
+    idx_symbol  = col("Symbol",  1)
+    idx_time    = col("Time",    3)
+    idx_amount  = col("Amount",  4)
+    idx_comment = col("Comment", 6)
+
+    trades: list[dict] = []
     deposits_total = 0.0
 
-    for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
-        if not row or row[0] is None:
+    for row in ws.iter_rows(min_row=header_row_idx + 1, values_only=True):
+        if not row or row[idx_type] is None:
             continue
-        tx_type = str(row[0]).strip()
-        ticker_raw = str(row[1] or "").strip()
-        time_val = row[3]
-        amount = row[4]
-        comment = str(row[6] or "").strip()
+
+        tx_type    = str(row[idx_type]).strip()
+        ticker_raw = str(row[idx_symbol] or "").strip() if idx_symbol < len(row) else ""
+        time_val   = row[idx_time]   if idx_time   < len(row) else None
+        amount     = row[idx_amount] if idx_amount < len(row) else None
+        comment    = str(row[idx_comment] or "").strip() if idx_comment < len(row) else ""
 
         if tx_type == "Deposit":
             try:

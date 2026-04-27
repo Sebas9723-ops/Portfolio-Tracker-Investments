@@ -303,8 +303,9 @@ export default function ManagePage() {
                 qc.invalidateQueries({ queryKey: ["portfolio-history"] });
                 qc.invalidateQueries({ queryKey: ["rebalancing"] });
                 qc.invalidateQueries({ queryKey: ["cash"] });
-              } catch (e) {
-                setXtbResult({ imported: 0, skipped_duplicates: 0, errors: [String(e)], positions_updated: 0, positions_created: 0, reconciled_tickers: [], deposits_usd: 0, agent_summary: null });
+              } catch (e: any) {
+                const detail = e?.response?.data?.detail || String(e);
+                setXtbResult({ imported: 0, skipped_duplicates: 0, errors: [detail], positions_updated: 0, positions_created: 0, reconciled_tickers: [], deposits_usd: 0, agent_summary: null });
               }
               setXtbLoading(false);
             }}
