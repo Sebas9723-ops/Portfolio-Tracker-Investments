@@ -9,7 +9,7 @@ import { Trash2, Bell, BellOff } from "lucide-react";
 import type { UserSettings } from "@/lib/types";
 import { fetchDCASchedule, upsertDCASchedule, deleteDCASchedule, runDCANow } from "@/lib/api/dca";
 import type { DCASchedule } from "@/lib/api/dca";
-import { importIBKRCsv } from "@/lib/api/import";
+import { importIBKRCsv, importXTBXlsx } from "@/lib/api/import";
 
 const PROFILES_LABELS: Record<string, string> = { conservative: "Conservative", base: "Base", aggressive: "Aggressive" };
 const PROFILE_COLORS: Record<string, string> = { conservative: "#2563eb", base: "#16a34a", aggressive: "#dc2626" };
@@ -47,6 +47,10 @@ export default function SettingsPage() {
   const [ibkrFile, setIbkrFile] = useState<File | null>(null);
   const [ibkrResult, setIbkrResult] = useState<{ imported: number; skipped: number; errors: string[]; tickers: string[] } | null>(null);
   const [ibkrLoading, setIbkrLoading] = useState(false);
+  const [xtbFile, setXtbFile] = useState<File | null>(null);
+  const [xtbResult, setXtbResult] = useState<{ imported: number; skipped: number; errors: string[]; tickers: string[]; deposits_usd: number } | null>(null);
+  const [xtbLoading, setXtbLoading] = useState(false);
+  const xtbFileRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: dcaSchedule } = useQuery({ queryKey: ["dca-schedule"], queryFn: fetchDCASchedule, staleTime: 60_000 });
@@ -476,6 +480,61 @@ export default function SettingsPage() {
             </>
           )}
         </div>
+      </div>
+
+      {/* ── XTB Import ── */}
+      <div className="bbg-card">
+        <p className="bbg-header">Import Transactions (XTB)</p>
+        <p className="text-bloomberg-muted text-[10px] mb-3">
+          Sube tu reporte de XTB (Cash Operations .xlsx) para importar compras y ventas automáticamente.
+          En XTB: Mi Cuenta → Historial → Cash Operations → Exportar Excel.
+        </p>
+        <div className="flex items-center gap-3 flex-wrap">
+          <input
+            ref={xtbFileRef}
+            type="file"
+            accept=".xlsx"
+            onChange={(e) => setXtbFile(e.target.files?.[0] || null)}
+            className="text-bloomberg-muted text-[10px] file:bg-bloomberg-border file:text-bloomberg-text file:border-0 file:px-2 file:py-1 file:text-[10px] file:mr-2 file:cursor-pointer"
+          />
+          <button
+            onClick={async () => {
+              if (!xtbFile) return;
+              setXtbLoading(true);
+              setXtbResult(null);
+              try {
+                const result = await importXTBXlsx(xtbFile);
+                setXtbResult(result);
+                qc.invalidateQueries({ queryKey: ["portfolio"] });
+                qc.invalidateQueries({ queryKey: ["transactions"] });
+                qc.invalidateQueries({ queryKey: ["portfolio-history"] });
+              } catch (e) {
+                setXtbResult({ imported: 0, skipped: 0, errors: [String(e)], tickers: [], deposits_usd: 0 });
+              }
+              setXtbLoading(false);
+            }}
+            disabled={!xtbFile || xtbLoading}
+            className="bg-bloomberg-gold text-bloomberg-bg text-[10px] font-bold px-3 py-1.5 hover:opacity-90 disabled:opacity-50 uppercase tracking-wider"
+          >
+            {xtbLoading ? "Importando…" : "Import XTB"}
+          </button>
+        </div>
+        {xtbResult && (
+          <div className={`mt-3 p-2 text-[10px] border ${xtbResult.imported > 0 ? "border-green-500/30 bg-green-500/5" : "border-red-500/30 bg-red-500/5"}`}>
+            <p className="font-bold text-bloomberg-text">
+              {xtbResult.imported} transacciones importadas · {xtbResult.skipped} omitidas
+              {xtbResult.deposits_usd > 0 && ` · Depósitos detectados: $${xtbResult.deposits_usd.toFixed(2)}`}
+            </p>
+            {xtbResult.tickers.length > 0 && (
+              <p className="text-bloomberg-muted mt-0.5">Tickers: {xtbResult.tickers.join(", ")}</p>
+            )}
+            {xtbResult.errors.length > 0 && (
+              <ul className="mt-1 text-red-400">
+                {xtbResult.errors.map((e, i) => <li key={i}>⚠ {e}</li>)}
+              </ul>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── IBKR Import ── */}

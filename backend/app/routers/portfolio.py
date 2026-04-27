@@ -110,14 +110,6 @@ def get_portfolio_history(
 
     pos_res = db.table("positions").select("*").eq("user_id", user_id).execute()
     positions = pos_res.data or []
-    if not positions:
-        return []
-
-    tickers = [p["ticker"] for p in positions if float(p.get("shares", 0)) > 0]
-    if not tickers:
-        return []
-
-    current_shares = {p["ticker"]: float(p.get("shares", 0)) for p in positions}
 
     tx_res = (
         db.table("transactions")
@@ -128,13 +120,30 @@ def get_portfolio_history(
     )
     transactions = tx_res.data or []
 
+    # Current tickers (shares > 0)
+    tickers = [p["ticker"] for p in positions if float(p.get("shares", 0)) > 0]
+
+    # ALL tickers ever bought/sold — needed to reconstruct history for sold positions.
+    # Without this, selling a ticker causes a false $0 drop in historical value.
+    all_tx_tickers = list({
+        tx["ticker"] for tx in transactions
+        if tx.get("ticker") and tx.get("action") in ("BUY", "SELL")
+    })
+    all_tickers = list(set(tickers + all_tx_tickers))
+
+    if not all_tickers:
+        return []
+
+    current_shares = {p["ticker"]: float(p.get("shares", 0)) for p in positions}
+
     # Use today as exclusive end so the last bar is yesterday's confirmed close.
     # Today's live value is already shown in the portfolio header; including
     # today's incomplete intraday bar causes a misleading drop in the chart.
     end_str = str(date.today())
 
     # ── Historical prices ──────────────────────────────────────────────────────
-    yf_map = {yf_ticker(t): t for t in tickers}
+    # Use all_tickers (includes sold positions) so history is never broken.
+    yf_map = {yf_ticker(t): t for t in all_tickers}
     try:
         raw = yf.download(
             list(yf_map.keys()),
@@ -169,7 +178,7 @@ def get_portfolio_history(
         return []
 
     # ── Historical FX rates ────────────────────────────────────────────────────
-    exchange_currencies = list(set(get_native_currency(t) for t in tickers))
+    exchange_currencies = list(set(get_native_currency(t) for t in all_tickers))
     non_base = [c for c in exchange_currencies if c != base_currency]
 
     # Build fx_df aligned to price_df index
@@ -211,25 +220,23 @@ def get_portfolio_history(
                 fx_df[ccy] = _FALLBACK_RATES.get(ccy, 1.0)
 
     # ── Reconstruct shares held on each day ────────────────────────────────────
-    # Replay BUY/SELL transactions before start_date to get the initial state
-    running: dict[str, float] = {t: 0.0 for t in tickers}
+    # Replay BUY/SELL transactions before start_date to get the initial state.
+    # Use all_tickers so sold positions are tracked correctly in history.
+    running: dict[str, float] = {t: 0.0 for t in all_tickers}
     for tx in transactions:
         tx_date = (tx.get("date") or "")[:10]
         if tx_date >= start:
             break
         ticker = tx.get("ticker", "")
         if ticker not in running:
-            continue
+            running[ticker] = 0.0
         qty = float(tx.get("quantity", 0))
         if tx.get("action") == "BUY":
             running[ticker] += qty
         elif tx.get("action") == "SELL":
             running[ticker] = max(0.0, running[ticker] - qty)
 
-    # Fall back to current shares only when there are zero BUY/SELL transactions
-    # anywhere in history.  If BUY/SELL transactions exist, the reconstruction
-    # below handles the share evolution correctly; using current_shares as a
-    # baseline AND replaying buys would double-count shares.
+    # Fall back to current shares only when there are zero BUY/SELL transactions.
     has_buy_sell = any(tx.get("action") in ("BUY", "SELL") for tx in transactions)
     if not has_buy_sell and all(v == 0.0 for v in running.values()):
         running = dict(current_shares)
@@ -245,8 +252,6 @@ def get_portfolio_history(
         if tx_date < start:
             continue
         ticker = tx.get("ticker", "")
-        if ticker not in tickers:
-            continue
         qty = float(tx.get("quantity", 0))
         delta = qty if tx.get("action") == "BUY" else -qty
         changes.setdefault(tx_date, {})[ticker] = changes.get(tx_date, {}).get(ticker, 0) + delta
@@ -315,7 +320,7 @@ def get_portfolio_history(
                 cumulative_invested += event["amount_native"] * fx_inv
 
         total = 0.0
-        for ticker in tickers:
+        for ticker in all_tickers:
             shares = running.get(ticker, 0.0)
             if shares <= 0 or ticker not in price_df.columns:
                 continue

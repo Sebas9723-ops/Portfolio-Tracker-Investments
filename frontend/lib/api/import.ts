@@ -16,3 +16,17 @@ export const importIBKRCsv = (file: File): Promise<ImportResult> => {
     })
     .then((r) => r.data);
 };
+
+export interface XTBImportResult extends ImportResult {
+  deposits_usd: number;
+}
+
+export const importXTBXlsx = (file: File): Promise<XTBImportResult> => {
+  const formData = new FormData();
+  formData.append("file", file);
+  return apiClient
+    .post<XTBImportResult>("/api/import/xtb-xlsx", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    })
+    .then((r) => r.data);
+};
