@@ -1,8 +1,10 @@
 """
 Multi-agent AI pipeline inspired by AutoHedge:
-  1. Director Agent  — generates trade thesis (WHY the engine chose these allocations)
-  2. Risk Manager Agent — qualitative risk assessment (concentration, regime, correlation)
-  3. Research Agent  — per-ticker fundamentals + news analysis (batched into one Groq call)
+  1. Director Agent       — generates trade thesis (WHY the engine chose these allocations)
+  2. Risk Manager Agent   — qualitative risk assessment (concentration, regime, correlation)
+  3. Research Agent       — per-ticker fundamentals + news analysis (batched into one Groq call)
+  4. Macro Agent          — analyzes macro environment, suggests macro_overlay adjustments
+  5. Portfolio Doctor     — holistic diagnosis: health score + VaR + drift → actionable bullets
 
 Uses Groq Llama 3.3 70B. All agents run in sequence and return structured output.
 """
@@ -288,6 +290,152 @@ Usa los nombres exactos de los tickers como keys. Sé específico y usa datos re
             return json.loads(match.group())
     except Exception as exc:
         log.warning("Research agent JSON parse failed: %s", exc)
+    return None
+
+
+# ── Agent 4: Macro Agent ──────────────────────────────────────────────────────
+
+def _fetch_macro_indicators() -> dict[str, dict]:
+    """Fetch key macro indicators via yfinance."""
+    import yfinance as yf
+    indicators = {
+        "VIX":      "^VIX",
+        "10Y Yield": "^TNX",
+        "DXY":      "DX-Y.NYB",
+        "S&P 500":  "^GSPC",
+        "Gold":     "GC=F",
+        "Crude Oil": "CL=F",
+    }
+    result: dict[str, dict] = {}
+    for name, symbol in indicators.items():
+        try:
+            hist = yf.Ticker(symbol).history(period="5d")
+            if hist.empty:
+                continue
+            current = float(hist["Close"].iloc[-1])
+            prev = float(hist["Close"].iloc[-2]) if len(hist) > 1 else current
+            change_pct = (current - prev) / prev * 100 if prev else 0
+            result[name] = {"value": round(current, 2), "change_pct": round(change_pct, 2)}
+        except Exception:
+            pass
+    return result
+
+
+def run_macro_agent(
+    portfolio_tickers: list[str],
+    portfolio_weights: dict[str, float],
+    base_currency: str = "USD",
+) -> dict[str, Any] | None:
+    """
+    Macro Agent: analyzes current macro environment and suggests macro_overlay adjustments.
+    Returns {macro_regime: str, narrative: str, suggested_overlay: {ticker: float}}
+    """
+    macro_data = _fetch_macro_indicators()
+    if not macro_data:
+        log.warning("Macro agent: no macro data available")
+        return None
+
+    macro_lines = "\n".join(
+        f"  • {name}: {data['value']} ({data['change_pct']:+.2f}% today)"
+        for name, data in macro_data.items()
+    )
+    portfolio_lines = "\n".join(
+        f"  • {t}: {w * 100:.1f}%"
+        for t, w in sorted(portfolio_weights.items(), key=lambda x: x[1], reverse=True)
+    )
+
+    prompt = f"""Eres el Macro Analyst de un hedge fund cuantitativo. Analiza el entorno macroeconómico actual y sugiere ajustes de overlay para el portafolio.
+
+INDICADORES MACRO ACTUALES:
+{macro_lines}
+
+PORTAFOLIO ({base_currency}):
+{portfolio_lines}
+
+INSTRUCCIÓN: Responde EXACTAMENTE en este formato JSON (sin markdown, sin texto adicional):
+{{
+  "macro_regime": "<risk_on | risk_off | stagflation | goldilocks | crisis>",
+  "narrative": "<50-70 palabras en español: estado macro actual y su implicación para este portafolio específico>",
+  "suggested_overlay": {{
+    "TICKER": <número entre 0.5 y 2.0 donde 1.0=neutral>
+  }}
+}}
+
+El overlay multiplica retornos esperados en el optimizador. Solo incluye tickers con convicción clara (diferente de 1.0). Máximo 3 tickers. Si el entorno es neutro, devuelve suggested_overlay vacío {{}}."""
+
+    raw = _call_groq(prompt, max_tokens=350)
+    if not raw:
+        return None
+
+    import json, re
+    try:
+        match = re.search(r'\{.*\}', raw, re.DOTALL)
+        if match:
+            return json.loads(match.group())
+    except Exception as exc:
+        log.warning("Macro agent JSON parse failed: %s | raw: %s", exc, raw[:200])
+    return None
+
+
+# ── Agent 5: Portfolio Doctor ─────────────────────────────────────────────────
+
+def run_portfolio_doctor_agent(
+    health_score: float,
+    health_components: dict[str, float],
+    var_1d: float,
+    cvar_1d: float,
+    max_stress_loss_pct: float,
+    avg_drift_pct: float,
+    risk_level: str = "amarillo",
+    base_currency: str = "USD",
+) -> dict[str, Any] | None:
+    """
+    Portfolio Doctor: holistic diagnosis combining all risk/health metrics.
+    Returns {urgency: str, diagnosis: str, actions: [str]}
+    """
+    components_lines = "\n".join(
+        f"  • {k}: {v:.1f}/25 pts" for k, v in health_components.items()
+    )
+
+    prompt = f"""Eres el Portfolio Doctor de un hedge fund. Tu rol es dar un diagnóstico claro y accionable del estado del portafolio esta semana.
+
+MÉTRICAS ACTUALES:
+- Health Score total: {health_score:.1f}/100
+- Componentes:
+{components_lines}
+- VaR 1-día 95%: {base_currency} {var_1d:,.0f}
+- CVaR 1-día 95%: {base_currency} {cvar_1d:,.0f}
+- Peor escenario stress test: -{max_stress_loss_pct:.1f}%
+- Drift promedio vs óptimo: {avg_drift_pct:.1f}%
+- Nivel de riesgo (Risk Manager): {risk_level}
+
+INSTRUCCIÓN: Responde EXACTAMENTE en este formato JSON (sin markdown, sin texto adicional):
+{{
+  "urgency": "<low | medium | high>",
+  "diagnosis": "<2 oraciones en español resumiendo el estado actual del portafolio>",
+  "actions": [
+    "<acción concreta y específica 1>",
+    "<acción concreta y específica 2>",
+    "<acción concreta y específica 3>"
+  ]
+}}
+
+- low: portafolio saludable, monitoreo rutinario
+- medium: hay puntos de atención que requieren acción en los próximos días
+- high: acción inmediata recomendada esta semana
+Las acciones deben ser específicas (ej: "Reducir concentración en X porque el drift es Y%"), no genéricas."""
+
+    raw = _call_groq(prompt, max_tokens=350)
+    if not raw:
+        return None
+
+    import json, re
+    try:
+        match = re.search(r'\{.*\}', raw, re.DOTALL)
+        if match:
+            return json.loads(match.group())
+    except Exception as exc:
+        log.warning("Doctor agent JSON parse failed: %s | raw: %s", exc, raw[:200])
     return None
 
 

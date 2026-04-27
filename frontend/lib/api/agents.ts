@@ -40,3 +40,37 @@ export const runAgentAnalysis = (req: AgentAnalysisRequest) =>
   apiClient
     .post<AgentAnalysisResult>("/api/agents/analyze", req, { timeout: 90_000 })
     .then((r) => r.data);
+
+export interface MacroAgentResult {
+  macro_regime: "risk_on" | "risk_off" | "stagflation" | "goldilocks" | "crisis";
+  narrative: string;
+  suggested_overlay: Record<string, number>;
+}
+
+export interface DoctorAgentResult {
+  urgency: "low" | "medium" | "high";
+  diagnosis: string;
+  actions: string[];
+}
+
+export interface AgentResultRow<T> {
+  id: string;
+  user_id: string;
+  run_at: string;
+  agent_type: string;
+  result: T;
+  triggered_by: string;
+}
+
+export interface LastAgentResults {
+  macro: AgentResultRow<MacroAgentResult> | null;
+  doctor: AgentResultRow<DoctorAgentResult> | null;
+}
+
+export const fetchLastAgentResults = () =>
+  apiClient.get<LastAgentResults>("/api/agents/last-results").then((r) => r.data);
+
+export const runAgentsNow = () =>
+  apiClient
+    .post<{ macro: MacroAgentResult | null; doctor: DoctorAgentResult | null }>("/api/agents/run-now", {}, { timeout: 90_000 })
+    .then((r) => r.data);

@@ -1,16 +1,19 @@
 """
-POST /api/agents/analyze
-Runs the 3-agent AI pipeline (Director + Risk Manager + Research) on a contribution plan.
+Agent endpoints:
+  POST /api/agents/analyze       — run 3-agent pipeline on a contribution plan
+  GET  /api/agents/last-results  — retrieve latest scheduled agent results (macro, doctor)
+  POST /api/agents/run-now       — manually trigger macro + doctor agents
 """
 from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from app.auth.dependencies import get_user_id
 from app.services.agent_pipeline import run_full_agent_pipeline
+from app.db.agent_results import save_agent_result, load_latest_agent_result
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
 
@@ -29,6 +32,101 @@ class AgentAnalysisRequest(BaseModel):
     n_corr_alerts: int = 0
     correlation_alerts: list[dict] = []
     base_currency: str = "USD"
+
+
+@router.get("/last-results")
+def last_results(user_id: str = Depends(get_user_id)) -> dict[str, Any]:
+    """Return latest macro and doctor agent results for this user."""
+    macro = load_latest_agent_result(user_id, "macro")
+    doctor = load_latest_agent_result(user_id, "doctor")
+    return {
+        "macro": macro,
+        "doctor": doctor,
+    }
+
+
+@router.post("/run-now")
+def run_now(user_id: str = Depends(get_user_id)) -> dict[str, Any]:
+    """Manually trigger Macro + Portfolio Doctor agents for the current user."""
+    from app.db.supabase_client import get_admin_client
+    from app.db.quant_results import load_latest_quant_result
+    from app.services.agent_pipeline import run_macro_agent, run_portfolio_doctor_agent
+    from app.services.market_data import get_quotes
+    from app.services.fx_service import get_fx_rates
+    from app.services.exchange_classifier import get_native_currency
+    from app.compute.portfolio_builder import build_portfolio
+
+    db = get_admin_client()
+    settings_res = db.table("user_settings").select("*").eq("user_id", user_id).maybe_single().execute()
+    settings = settings_res.data or {}
+    base_currency = settings.get("base_currency", "USD")
+
+    positions = db.table("positions").select("*").eq("user_id", user_id).execute().data or []
+    tickers = [p["ticker"] for p in positions if float(p.get("shares", 0)) > 0]
+    if not tickers:
+        return {"macro": None, "doctor": None, "error": "No positions found"}
+
+    shares = {p["ticker"]: float(p["shares"]) for p in positions if float(p.get("shares", 0)) > 0}
+    total_shares = sum(shares.values())
+    weights = {t: shares[t] / total_shares for t in tickers} if total_shares > 0 else {}
+
+    qr = load_latest_quant_result(user_id)
+    expected_sharpe = float((qr or {}).get("expected_sharpe") or 1.0)
+    cvar_95 = float((qr or {}).get("cvar_95") or 0.02)
+    optimal_weights = (qr or {}).get("optimal_weights") or {}
+
+    avg_drift = 0.0
+    if optimal_weights:
+        drifts = [abs(float(optimal_weights.get(t, 0)) - weights.get(t, 0)) for t in set(list(weights) + list(optimal_weights))]
+        avg_drift = (sum(drifts) / len(drifts) * 100) if drifts else 0.0
+
+    sharpe_score = min(25.0, max(0.0, expected_sharpe * 10.0))
+    cvar_score = max(0.0, 25.0 - cvar_95 * 500)
+    drift_score = max(0.0, 25.0 - avg_drift * 2.5)
+    n = len(weights)
+    hhi = sum(w ** 2 for w in weights.values()) if weights else 1.0
+    hhi_score = max(0.0, 25.0 - (hhi - 1 / n if n > 0 else hhi) * 100) if n > 0 else 0.0
+    health_score = sharpe_score + cvar_score + drift_score + hhi_score
+    health_components = {
+        "Sharpe": sharpe_score,
+        "Diversificación": hhi_score,
+        "CVaR headroom": cvar_score,
+        "Drift": drift_score,
+    }
+
+    quotes = get_quotes(tickers)
+    exchange_currencies = [get_native_currency(t) for t in tickers]
+    fx_rates = get_fx_rates(list(set(exchange_currencies)), base=base_currency)
+    transactions = db.table("transactions").select("*").eq("user_id", user_id).execute().data or []
+    summary = build_portfolio(positions, quotes, fx_rates, base_currency, transactions)
+    total_value = float(summary.total_value_base)
+
+    macro_result = run_macro_agent(tickers, weights, base_currency)
+    if macro_result:
+        save_agent_result(user_id, "macro", macro_result, triggered_by="manual")
+
+    risk_level = "amarillo"
+    if macro_result:
+        regime = macro_result.get("macro_regime", "")
+        if regime == "crisis":
+            risk_level = "rojo"
+        elif regime in ("risk_on", "goldilocks"):
+            risk_level = "verde"
+
+    doctor_result = run_portfolio_doctor_agent(
+        health_score=health_score,
+        health_components=health_components,
+        var_1d=total_value * cvar_95 * 0.8,
+        cvar_1d=total_value * cvar_95,
+        max_stress_loss_pct=cvar_95 * 300,
+        avg_drift_pct=avg_drift,
+        risk_level=risk_level,
+        base_currency=base_currency,
+    )
+    if doctor_result:
+        save_agent_result(user_id, "doctor", doctor_result, triggered_by="manual")
+
+    return {"macro": macro_result, "doctor": doctor_result}
 
 
 @router.post("/analyze")

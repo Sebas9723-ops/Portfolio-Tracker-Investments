@@ -378,6 +378,132 @@ def _run_dca_for_all_users() -> None:
             log.error("  ✗ %s… — DCA run failed: %s", user_id[:8], exc)
 
 
+def _run_weekly_agents() -> None:
+    """
+    Weekly AI agent run (Sundays 18:00 Bogota):
+      1. Macro Agent  — fetches macro indicators, suggests macro_overlay, auto-applies if user has no manual override
+      2. Portfolio Doctor — holistic health + VaR + drift diagnosis
+    Results saved to agent_results table for frontend retrieval.
+    """
+    from app.db.supabase_client import get_admin_client
+    from app.db.quant_results import load_latest_quant_result
+    from app.db.agent_results import save_agent_result
+    from app.services.agent_pipeline import run_macro_agent, run_portfolio_doctor_agent
+    from app.services.market_data import get_quotes
+    from app.services.fx_service import get_fx_rates
+    from app.services.exchange_classifier import get_native_currency
+    from app.compute.portfolio_builder import build_portfolio
+
+    db = get_admin_client()
+    pos_res = db.table("positions").select("user_id").execute()
+    user_ids = list({row["user_id"] for row in (pos_res.data or [])})
+
+    if not user_ids:
+        log.info("Weekly agents: no users with positions, skipping.")
+        return
+
+    log.info("Weekly agents: running for %d user(s)", len(user_ids))
+
+    for user_id in user_ids:
+        try:
+            settings_res = db.table("user_settings").select("*").eq("user_id", user_id).maybe_single().execute()
+            settings = settings_res.data or {}
+            base_currency = settings.get("base_currency", "USD")
+
+            positions = db.table("positions").select("*").eq("user_id", user_id).execute().data or []
+            tickers = [p["ticker"] for p in positions if float(p.get("shares", 0)) > 0]
+            if not tickers:
+                continue
+
+            # Build current portfolio weights
+            shares = {p["ticker"]: float(p["shares"]) for p in positions if float(p.get("shares", 0)) > 0}
+            total_shares = sum(shares.values())
+            weights = {t: shares[t] / total_shares for t in tickers} if total_shares > 0 else {}
+
+            # Load latest quant result for health metrics
+            qr = load_latest_quant_result(user_id)
+            expected_sharpe = float((qr or {}).get("expected_sharpe") or 1.0)
+            cvar_95 = float((qr or {}).get("cvar_95") or 0.02)
+            optimal_weights = (qr or {}).get("optimal_weights") or {}
+
+            # Compute avg drift
+            avg_drift = 0.0
+            if optimal_weights:
+                drifts = [abs(float(optimal_weights.get(t, 0)) - weights.get(t, 0)) for t in set(list(weights) + list(optimal_weights))]
+                avg_drift = (sum(drifts) / len(drifts) * 100) if drifts else 0.0
+
+            # Simplified health score from quant metrics
+            sharpe_score = min(25.0, max(0.0, expected_sharpe * 10.0))
+            cvar_score = max(0.0, 25.0 - cvar_95 * 500)
+            drift_score = max(0.0, 25.0 - avg_drift * 2.5)
+            n = len(weights)
+            hhi = sum(w ** 2 for w in weights.values()) if weights else 1.0
+            hhi_score = max(0.0, 25.0 - (hhi - 1 / n if n > 0 else hhi) * 100) if n > 0 else 0.0
+            health_score = sharpe_score + cvar_score + drift_score + hhi_score
+            health_components = {
+                "Sharpe": sharpe_score,
+                "Diversificación": hhi_score,
+                "CVaR headroom": cvar_score,
+                "Drift": drift_score,
+            }
+
+            # ── Macro Agent ────────────────────────────────────────────────────
+            macro_result = None
+            try:
+                macro_result = run_macro_agent(tickers, weights, base_currency)
+                if macro_result:
+                    save_agent_result(user_id, "macro", macro_result, triggered_by="scheduler")
+                    # Auto-apply suggested overlay if user has no manual overlay set
+                    suggested = macro_result.get("suggested_overlay") or {}
+                    existing_overlay = settings.get("macro_overlay") or {}
+                    if suggested and not existing_overlay:
+                        db.table("user_settings").update({"macro_overlay": suggested}).eq("user_id", user_id).execute()
+                        log.info("  ✓ %s… — macro overlay auto-applied: %s", user_id[:8], suggested)
+                    log.info("  ✓ %s… — macro agent done (%s)", user_id[:8], macro_result.get("macro_regime", "?"))
+            except Exception as exc:
+                log.error("  ✗ %s… — macro agent failed: %s", user_id[:8], exc)
+
+            # ── Portfolio Doctor ───────────────────────────────────────────────
+            try:
+                # Portfolio value for VaR estimate
+                quotes = get_quotes(tickers)
+                exchange_currencies = [get_native_currency(t) for t in tickers]
+                fx_rates = get_fx_rates(list(set(exchange_currencies)), base=base_currency)
+                transactions = db.table("transactions").select("*").eq("user_id", user_id).execute().data or []
+                summary = build_portfolio(positions, quotes, fx_rates, base_currency, transactions)
+                total_value = float(summary.total_value_base)
+
+                var_1d = total_value * cvar_95 * 0.8
+                cvar_1d = total_value * cvar_95
+
+                risk_level = "amarillo"
+                if macro_result and isinstance(macro_result, dict):
+                    macro_regime = macro_result.get("macro_regime", "")
+                    if macro_regime == "crisis":
+                        risk_level = "rojo"
+                    elif macro_regime in ("risk_on", "goldilocks"):
+                        risk_level = "verde"
+
+                doctor_result = run_portfolio_doctor_agent(
+                    health_score=health_score,
+                    health_components=health_components,
+                    var_1d=var_1d,
+                    cvar_1d=cvar_1d,
+                    max_stress_loss_pct=cvar_95 * 300,
+                    avg_drift_pct=avg_drift,
+                    risk_level=risk_level,
+                    base_currency=base_currency,
+                )
+                if doctor_result:
+                    save_agent_result(user_id, "doctor", doctor_result, triggered_by="scheduler")
+                    log.info("  ✓ %s… — portfolio doctor done (urgency=%s)", user_id[:8], doctor_result.get("urgency", "?"))
+            except Exception as exc:
+                log.error("  ✗ %s… — portfolio doctor failed: %s", user_id[:8], exc)
+
+        except Exception as exc:
+            log.error("  ✗ %s… — weekly agents failed: %s", user_id[:8], exc)
+
+
 def _backfill_prediction_prices() -> None:
     """
     Backfill price_30d, price_60d, price_90d in prediction_log for rows
@@ -502,8 +628,15 @@ def start_scheduler() -> BackgroundScheduler:
         replace_existing=True,
         misfire_grace_time=600,
     )
+    scheduler.add_job(
+        _run_weekly_agents,
+        trigger=CronTrigger(day_of_week="sun", hour=18, minute=0, timezone="America/Bogota"),
+        id="weekly_agents",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
     scheduler.start()
     log.info(
-        "Schedulers started — snapshot: 17:30 Bogota | quant: 16:05 New York | telegram: 17:35 Bogota | drift-alerts: 17:00 Bogota | dca: 09:05 Bogota | prediction-backfill: 17:45 Bogota"
+        "Schedulers started — snapshot: 17:30 Bogota | quant: 16:05 New York | telegram: 17:35 Bogota | drift-alerts: 17:00 Bogota | dca: 09:05 Bogota | prediction-backfill: 17:45 Bogota | weekly-agents: Sun 18:00 Bogota"
     )
     return scheduler

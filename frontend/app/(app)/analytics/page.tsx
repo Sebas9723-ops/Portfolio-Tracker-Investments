@@ -2,6 +2,8 @@
 import { useState, useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAnalytics, fetchRollingMetrics, fetchExtendedAnalytics, fetchVolRegime, fetchQuantAdvanced, fetchEquityCurve, fetchVsBenchmark, fetchRecommendations, fetchTaxLoss, fetchHealthScore, fetchAttribution, fetchPortfolioNews, runKellySizing, runMonteCarlo } from "@/lib/api/analytics";
+import { fetchLastAgentResults, runAgentsNow } from "@/lib/api/agents";
+import type { MacroAgentResult, DoctorAgentResult } from "@/lib/api/agents";
 import type {
   FactorRisk, TrackingErrorBudget, QuantRegime, NaiveBenchmarkRow, WalkForward,
 } from "@/lib/api/contribution";
@@ -139,6 +141,26 @@ export default function AnalyticsPage() {
   const [mcResult, setMcResult] = useState<Awaited<ReturnType<typeof runMonteCarlo>> | null>(null);
   const [mcLoading, setMcLoading] = useState(false);
 
+  // Agent results state
+  const [agentsRunning, setAgentsRunning] = useState(false);
+  const [liveAgentResult, setLiveAgentResult] = useState<{ macro: MacroAgentResult | null; doctor: DoctorAgentResult | null } | null>(null);
+
+  const { data: lastAgentResults, refetch: refetchAgents } = useQuery({
+    queryKey: ["last-agent-results"],
+    queryFn: fetchLastAgentResults,
+    staleTime: 10 * 60 * 1000,
+  });
+
+  const runAgents = useCallback(async () => {
+    setAgentsRunning(true);
+    try {
+      const r = await runAgentsNow();
+      setLiveAgentResult(r);
+      refetchAgents();
+    } catch (e) { console.error(e); }
+    setAgentsRunning(false);
+  }, [refetchAgents]);
+
   const runKelly = useCallback(async () => {
     if (!kellyTicker) return;
     setKellyLoading(true);
@@ -238,6 +260,102 @@ export default function AnalyticsPage() {
           </div>
         </div>
       )}
+
+      {/* ── AI Agents: Macro + Portfolio Doctor ── */}
+      {(() => {
+        const macro: MacroAgentResult | null = liveAgentResult?.macro ?? lastAgentResults?.macro?.result ?? null;
+        const doctor: DoctorAgentResult | null = liveAgentResult?.doctor ?? lastAgentResults?.doctor?.result ?? null;
+        const runAt = lastAgentResults?.doctor?.run_at;
+        const REGIME_COLORS: Record<string, string> = {
+          risk_on: "text-green-400 border-green-400/40 bg-green-400/10",
+          goldilocks: "text-green-400 border-green-400/40 bg-green-400/10",
+          risk_off: "text-red-400 border-red-400/40 bg-red-400/10",
+          crisis: "text-red-400 border-red-400/40 bg-red-400/10",
+          stagflation: "text-yellow-500 border-yellow-500/40 bg-yellow-500/10",
+        };
+        const URGENCY_COLORS: Record<string, string> = {
+          low: "text-green-400 bg-green-400/10",
+          medium: "text-bloomberg-gold bg-bloomberg-gold/10",
+          high: "text-red-400 bg-red-400/10",
+        };
+        return (
+          <div className="bbg-card">
+            <div className="flex items-center justify-between mb-3">
+              <p className="bbg-header mb-0">AI Agents — Macro + Portfolio Doctor</p>
+              <div className="flex items-center gap-2">
+                {runAt && <span className="text-[9px] text-bloomberg-muted">Último: {new Date(runAt).toLocaleDateString()}</span>}
+                <button
+                  onClick={runAgents}
+                  disabled={agentsRunning}
+                  className="text-[10px] text-bloomberg-gold border border-bloomberg-gold/40 px-2.5 py-1 rounded-lg hover:bg-bloomberg-gold/10 transition-colors disabled:opacity-50"
+                >
+                  {agentsRunning ? "Analizando…" : "🤖 Ejecutar ahora"}
+                </button>
+              </div>
+            </div>
+
+            {!macro && !doctor && !agentsRunning && (
+              <p className="text-bloomberg-muted text-[10px]">Sin resultados aún. Los agentes corren automáticamente cada domingo a las 18:00. Puedes ejecutarlos manualmente ahora.</p>
+            )}
+
+            {agentsRunning && (
+              <div className="space-y-2">
+                {[...Array(2)].map((_, i) => <div key={i} className="h-10 bg-bloomberg-bg animate-pulse rounded" />)}
+              </div>
+            )}
+
+            {(macro || doctor) && !agentsRunning && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Macro Agent */}
+                {macro && (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[9px] text-bloomberg-muted uppercase tracking-widest">Macro Regime</span>
+                      <span className={`text-[9px] px-2 py-0.5 rounded border font-bold uppercase ${REGIME_COLORS[macro.macro_regime] ?? "text-bloomberg-muted border-bloomberg-border"}`}>
+                        {macro.macro_regime.replace("_", " ")}
+                      </span>
+                    </div>
+                    <p className="text-bloomberg-text text-[11px] leading-relaxed">{macro.narrative}</p>
+                    {Object.keys(macro.suggested_overlay).length > 0 && (
+                      <div className="border border-bloomberg-border p-2 mt-1">
+                        <p className="text-[9px] text-bloomberg-muted uppercase tracking-widest mb-1">Overlay sugerido</p>
+                        <div className="flex flex-wrap gap-2">
+                          {Object.entries(macro.suggested_overlay).map(([t, v]) => (
+                            <span key={t} className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${v > 1 ? "text-green-400 bg-green-400/10" : "text-red-400 bg-red-400/10"}`}>
+                              {t} {v > 1 ? "↑" : "↓"} {v.toFixed(2)}x
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Portfolio Doctor */}
+                {doctor && (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[9px] text-bloomberg-muted uppercase tracking-widest">Urgencia</span>
+                      <span className={`text-[9px] px-2 py-0.5 rounded font-bold uppercase ${URGENCY_COLORS[doctor.urgency] ?? ""}`}>
+                        {doctor.urgency}
+                      </span>
+                    </div>
+                    <p className="text-bloomberg-text text-[11px] leading-relaxed">{doctor.diagnosis}</p>
+                    <ul className="space-y-1 mt-1">
+                      {doctor.actions.map((action, i) => (
+                        <li key={i} className="flex items-start gap-1.5 text-[10px] text-bloomberg-text">
+                          <span className="text-bloomberg-gold mt-0.5 shrink-0">›</span>
+                          {action}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* ── Equity Curve ── */}
       {equityCurve && equityCurve.series.length > 1 && (
