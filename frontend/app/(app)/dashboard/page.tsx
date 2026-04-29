@@ -420,10 +420,21 @@ export default function DashboardPage() {
                   )}
                 </div>
                 <div className="flex items-center gap-2 mt-1">
-                  <Chg v={periodChangePct} pct className="text-[10px]" />
-                  <span className="text-bloomberg-muted text-[10px]">
-                    ({periodChange >= 0 ? "+" : ""}{fmtCurrency(periodChange, ccy)}) · {chartPeriod}
-                  </span>
+                  {basis > 0 ? (
+                    <>
+                      <Chg v={priceGainPct} pct className="text-[10px]" />
+                      <span className="text-bloomberg-muted text-[10px]">
+                        ({priceGain >= 0 ? "+" : ""}{fmtCurrency(priceGain, ccy)}) · Max
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <Chg v={periodChangePct} pct className="text-[10px]" />
+                      <span className="text-bloomberg-muted text-[10px]">
+                        ({periodChange >= 0 ? "+" : ""}{fmtCurrency(periodChange, ccy)}) · {chartPeriod}
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
               <div className="flex flex-col items-end gap-1 shrink-0">

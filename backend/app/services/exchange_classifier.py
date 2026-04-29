@@ -13,7 +13,8 @@ PROXY_TICKER_MAP: dict[str, str] = {
 
 # Tickers where currency is not derivable from the suffix
 TICKER_CURRENCY_OVERRIDE: dict[str, str] = {
-    "IGLN.L": "USD",   # physically-backed gold, priced in USD on LSE
+    "IGLN.L":  "USD",  # physically-backed gold, priced in USD on LSE
+    "IGLN.UK": "USD",  # same instrument, UK ticker variant
     "EIMI.UK": "USD",  # USD share class — price from EIMI.L proxy, treated as USD
 }
 

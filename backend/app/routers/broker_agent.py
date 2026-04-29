@@ -21,6 +21,10 @@ from pydantic import BaseModel
 
 from app.auth.dependencies import get_user_id
 from app.db.supabase_client import get_admin_client
+from app.services.exchange_classifier import (
+    get_native_currency as _gcn,
+    get_exchange as _gex,
+)
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/agents", tags=["agents"])
@@ -37,12 +41,36 @@ def _xtb_to_app_ticker(xtb: str) -> str:
     return xtb                     # QDVE.DE → QDVE.DE
 
 
-def _ticker_exchange_info(ticker: str) -> dict:
-    if ticker.endswith(".DE"):
-        return {"currency": "EUR", "market": "XETRA"}
-    if ticker.endswith(".L"):
-        return {"currency": "GBP", "market": "LSE"}
-    return {"currency": "USD", "market": "US"}
+_MARKET_MAP = {
+    "US": "US", "LSE": "LSE", "XETRA": "XETRA",
+    "EURONEXT": "EURONEXT", "AU": "ASX", "INDEX": "US", "OTHER": "US",
+}
+
+# Tickers that are stored in DB under an app alias but whose avg_cost currency
+# is determined by the original XTB ticker (different from app ticker's native).
+# e.g. EIMI.UK (USD class) → stored as EIMI.L → avg_cost in USD, not GBP.
+_APP_TICKER_CURRENCY_OVERRIDE: dict[str, str] = {
+    "EIMI.L": "USD",  # proxy for EIMI.UK (USD share class on LSE)
+}
+
+
+def _ticker_exchange_info(app_ticker: str, xtb_ticker: str | None = None) -> dict:
+    """
+    Return {currency, market} for a position.
+    Uses exchange_classifier (which has currency overrides for special cases like
+    IGLN.L=USD). When the XTB ticker and the app ticker differ (e.g. EIMI.UK→EIMI.L),
+    prefer the XTB ticker's currency since XTB denominates it in its native unit.
+    """
+    currency = _gcn(app_ticker)
+    # Check app-ticker-level override first (e.g. EIMI.L always stores USD avg_cost)
+    if app_ticker in _APP_TICKER_CURRENCY_OVERRIDE:
+        currency = _APP_TICKER_CURRENCY_OVERRIDE[app_ticker]
+    elif xtb_ticker and xtb_ticker != app_ticker:
+        xtb_ccy = _gcn(xtb_ticker)
+        if xtb_ccy != currency:
+            currency = xtb_ccy   # e.g. EIMI.UK→USD overrides EIMI.L→GBP
+    market = _MARKET_MAP.get(_gex(app_ticker), "US")
+    return {"currency": currency, "market": market}
 
 
 def _ticker_aliases(ticker: str) -> list[str]:
@@ -407,7 +435,7 @@ async def broker_reconcile(
                 "quantity":     trade["quantity"],
                 "price_native": trade["price_native"],
                 "fee_native":   0.0,
-                "currency":     _ticker_exchange_info(trade["ticker"])["currency"],
+                "currency":     _ticker_exchange_info(trade["ticker"], trade["ticker_xtb"])["currency"],
                 "date":         trade["date"],
                 "comment":      f"XTB: {trade['comment_raw'][:120]}",
             }).execute()
