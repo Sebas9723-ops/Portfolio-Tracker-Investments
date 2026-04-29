@@ -71,3 +71,36 @@ def get_native_currency(ticker: str) -> str:
 def yf_ticker(ticker: str) -> str:
     """Return the yfinance-compatible ticker symbol (handle proxies)."""
     return PROXY_TICKER_MAP.get(ticker, ticker)
+
+
+def get_ticker_pairs(ticker: str) -> list[str]:
+    """
+    Return alternative ticker symbols to try if the primary fails in a data provider.
+    Order matters — best alternative first.
+    Examples:
+      EIMI.L  → [EIMI.UK]
+      EIMI.UK → [EIMI.L]
+      VOO.US  → [VOO]
+      VOO     → [VOO.US]
+      IGLN.L  → [IGLN.UK]
+      8RMY.DE → [8RMY.F]   (Frankfurt mirror on yfinance)
+    """
+    # Already in proxy map → its target is the canonical yfinance symbol; no extra pairs needed
+    if ticker in PROXY_TICKER_MAP:
+        return []
+
+    pairs: list[str] = []
+
+    if ticker.endswith(".L"):
+        pairs.append(ticker[:-2] + ".UK")
+    elif ticker.endswith(".UK"):
+        pairs.append(ticker[:-3] + ".L")
+    elif ticker.endswith(".US"):
+        pairs.append(ticker[:-3])
+    elif ticker.endswith(".DE"):
+        # yfinance sometimes lists German ETFs under .F (Frankfurt) instead of .DE
+        pairs.append(ticker[:-3] + ".F")
+    elif "." not in ticker:
+        pairs.append(ticker + ".US")
+
+    return pairs

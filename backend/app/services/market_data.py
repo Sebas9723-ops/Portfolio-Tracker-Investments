@@ -14,7 +14,7 @@ from typing import Optional
 from app.config import get_settings
 from app.models.market import QuoteResponse, HistoricalBar, HistoricalResponse
 from app.services import cache
-from app.services.exchange_classifier import is_us, get_native_currency, yf_ticker
+from app.services.exchange_classifier import is_us, get_native_currency, yf_ticker, get_ticker_pairs
 
 
 @lru_cache
@@ -86,14 +86,22 @@ def _fetch_quote_finnhub(ticker: str) -> QuoteResponse:
             )
     except Exception:
         pass
-    # fallback
-    return _fetch_quote_yfinance(ticker)
+    # yfinance fallback (uses proxy map internally)
+    result = _fetch_quote_yfinance(ticker)
+    if result.price > 0:
+        return result
+    # Try ticker pairs as last resort
+    for pair in get_ticker_pairs(ticker):
+        r = _fetch_quote_yfinance_raw(pair, original_ticker=ticker)
+        if r.price > 0:
+            return r
+    return result
 
 
-def _fetch_quote_yfinance(ticker: str) -> QuoteResponse:
+def _fetch_quote_yfinance_raw(yf_symbol: str, original_ticker: str) -> QuoteResponse:
+    """Fetch a quote from yfinance using an explicit yf symbol, returning result tagged with original_ticker."""
     try:
-        yft = yf_ticker(ticker)
-        t = yf.Ticker(yft)
+        t = yf.Ticker(yf_symbol)
         info = t.fast_info
         price = getattr(info, "last_price", None) or getattr(info, "previous_close", None)
         prev = getattr(info, "previous_close", None)
@@ -101,12 +109,12 @@ def _fetch_quote_yfinance(ticker: str) -> QuoteResponse:
             change = (price - prev) if prev else None
             change_pct = (change / prev * 100) if (prev and change is not None) else None
             return QuoteResponse(
-                ticker=ticker,
+                ticker=original_ticker,
                 price=price,
                 change=change,
                 change_pct=change_pct,
                 prev_close=prev,
-                currency=get_native_currency(ticker),
+                currency=get_native_currency(original_ticker),
                 source="yfinance",
                 delay_minutes=15,
                 as_of=datetime.now(tz=timezone.utc),
@@ -114,9 +122,22 @@ def _fetch_quote_yfinance(ticker: str) -> QuoteResponse:
     except Exception:
         pass
     return QuoteResponse(
-        ticker=ticker, price=0.0, currency=get_native_currency(ticker),
+        ticker=original_ticker, price=0.0, currency=get_native_currency(original_ticker),
         source="unavailable", delay_minutes=-1,
     )
+
+
+def _fetch_quote_yfinance(ticker: str) -> QuoteResponse:
+    # Try the canonical yfinance symbol (handles proxy map e.g. EIMI.UK → EIMI.L)
+    result = _fetch_quote_yfinance_raw(yf_ticker(ticker), original_ticker=ticker)
+    if result.price > 0:
+        return result
+    # Try ticker pairs (e.g. IGLN.L → IGLN.UK, 8RMY.DE → 8RMY.F)
+    for pair in get_ticker_pairs(ticker):
+        r = _fetch_quote_yfinance_raw(yf_ticker(pair), original_ticker=ticker)
+        if r.price > 0:
+            return r
+    return result
 
 
 def _fetch_quotes_yfinance(tickers: list[str]) -> dict[str, QuoteResponse]:
@@ -137,7 +158,6 @@ def _fetch_quotes_yfinance(tickers: list[str]) -> dict[str, QuoteResponse]:
                 daily_series = daily_closes[yft].dropna() if yft in daily_closes.columns else pd.Series()
                 if len(series) >= 1:
                     price = float(series.iloc[-1])
-                    # Use yesterday's daily close as prev_close for accurate 1d change
                     prev = float(daily_series.iloc[-2]) if len(daily_series) >= 2 else None
                     change = (price - prev) if prev else None
                     change_pct = (change / prev * 100) if (prev and change is not None) else None
@@ -147,11 +167,24 @@ def _fetch_quotes_yfinance(tickers: list[str]) -> dict[str, QuoteResponse]:
                         source="yfinance", delay_minutes=60,
                         as_of=datetime.now(tz=timezone.utc),
                     )
+                else:
+                    # No data in batch — try individual fetch with pair fallback
+                    results[orig] = _fetch_quote_yfinance(orig)
             except Exception:
                 results[orig] = _fetch_quote_yfinance(orig)
     except Exception:
         for t in tickers:
             results[t] = _fetch_quote_yfinance(t)
+
+    # Final pass: any ticker still at price=0 → try its pairs individually
+    for orig in list(results):
+        if results[orig].price == 0:
+            for pair in get_ticker_pairs(orig):
+                r = _fetch_quote_yfinance_raw(yf_ticker(pair), original_ticker=orig)
+                if r.price > 0:
+                    results[orig] = r
+                    break
+
     return results
 
 

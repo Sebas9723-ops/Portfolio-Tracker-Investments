@@ -219,6 +219,61 @@ def _reconcile_positions(user_id: str, db) -> dict[str, dict]:
     return result
 
 
+# ── Name enrichment ──────────────────────────────────────────────────────────
+
+def _enrich_names(tickers: list[str], db, user_id: str) -> None:
+    """
+    For every ticker in the list that has no name in positions,
+    fetch the human-readable name from yfinance and write it back to DB.
+    Uses pair fallback: if primary yf symbol returns nothing, tries alternatives.
+    """
+    import yfinance as yf
+    from app.services.exchange_classifier import yf_ticker, get_ticker_pairs
+
+    if not tickers:
+        return
+
+    # Load existing names to avoid unnecessary API calls
+    pos_res = (
+        db.table("positions")
+        .select("ticker,name")
+        .eq("user_id", user_id)
+        .in_("ticker", tickers)
+        .execute()
+    )
+    name_map = {p["ticker"]: p.get("name") for p in (pos_res.data or [])}
+
+    for ticker in tickers:
+        if name_map.get(ticker):  # already has a name
+            continue
+
+        # Build ordered list of yfinance symbols to try
+        yf_symbols_to_try = [yf_ticker(ticker)] + [
+            yf_ticker(p) for p in get_ticker_pairs(ticker)
+        ]
+
+        name = None
+        for yf_sym in yf_symbols_to_try:
+            try:
+                info = yf.Ticker(yf_sym).info
+                name = info.get("shortName") or info.get("longName")
+                if name:
+                    break
+            except Exception:
+                continue
+
+        if name:
+            try:
+                db.table("positions") \
+                  .update({"name": name}) \
+                  .eq("user_id", user_id) \
+                  .eq("ticker", ticker) \
+                  .execute()
+                log.info("Enriched name for %s: %s", ticker, name)
+            except Exception as exc:
+                log.warning("Could not write name for %s: %s", ticker, exc)
+
+
 # ── Groq validation ───────────────────────────────────────────────────────────
 
 def _groq_validate(trades: list[dict], reconciled: dict[str, dict], deposits_usd: float) -> str | None:
@@ -382,7 +437,11 @@ async def broker_reconcile(
             }).execute()
             positions_created += 1
 
-    # 6. Groq validation
+    # 6. Enrich names for all active positions (no-op if name already set)
+    active_tickers = [t for t, v in reconciled.items() if v["shares"] > 0]
+    _enrich_names(active_tickers, db, user_id)
+
+    # 7. Groq validation
     agent_summary = _groq_validate(trades, reconciled, deposits_usd)
 
     log.info(
