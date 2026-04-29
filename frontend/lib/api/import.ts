@@ -33,10 +33,10 @@ export const importXTBXlsx = (file: File): Promise<XTBImportResult> => {
 
 export interface BrokerReconcileResult {
   imported: number;
-  skipped_duplicates: number;
   errors: string[];
   positions_updated: number;
   positions_created: number;
+  positions_zeroed: number;
   reconciled_tickers: string[];
   deposits_usd: number;
   agent_summary: string | null;

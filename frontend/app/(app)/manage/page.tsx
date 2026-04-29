@@ -277,8 +277,8 @@ export default function ManagePage() {
           <span className="text-[9px] text-bloomberg-gold border border-bloomberg-gold/30 px-1.5 py-0.5">AI</span>
         </div>
         <p className="text-bloomberg-muted text-[10px] mb-3">
-          Sube tu reporte XTB (Cash Operations .xlsx). El agente importa transacciones, detecta duplicados,
-          reconcilia posiciones (shares + avg cost) y valida con IA.<br />
+          Sube tu reporte XTB (Cash Operations .xlsx). El agente reemplaza todas las transacciones con el archivo,
+          reconcilia posiciones por FIFO (shares + avg cost exacto) y valida con IA. <span className="text-bloomberg-gold">Un solo upload = estado correcto.</span><br />
           <span className="text-bloomberg-gold">XTB: Mi Cuenta → Historial → Cash Operations → Exportar Excel</span>
         </p>
         <div className="flex items-center gap-3 flex-wrap">
@@ -305,7 +305,7 @@ export default function ManagePage() {
                 qc.invalidateQueries({ queryKey: ["cash"] });
               } catch (e: any) {
                 const detail = e?.response?.data?.detail || String(e);
-                setXtbResult({ imported: 0, skipped_duplicates: 0, errors: [detail], positions_updated: 0, positions_created: 0, reconciled_tickers: [], deposits_usd: 0, agent_summary: null });
+                setXtbResult({ imported: 0, errors: [detail], positions_updated: 0, positions_created: 0, positions_zeroed: 0, reconciled_tickers: [], deposits_usd: 0, agent_summary: null });
               }
               setXtbLoading(false);
             }}
@@ -320,20 +320,20 @@ export default function ManagePage() {
           <div className={`mt-3 p-3 text-[10px] border space-y-2 ${xtbResult.imported > 0 || xtbResult.positions_updated > 0 ? "border-green-500/30 bg-green-500/5" : "border-bloomberg-border"}`}>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
               <div>
-                <p className="text-bloomberg-muted uppercase tracking-widest text-[9px]">Importadas</p>
+                <p className="text-bloomberg-muted uppercase tracking-widest text-[9px]">Transacciones</p>
                 <p className="font-bold text-bloomberg-text text-sm">{xtbResult.imported}</p>
               </div>
               <div>
-                <p className="text-bloomberg-muted uppercase tracking-widest text-[9px]">Duplicadas omitidas</p>
-                <p className="font-bold text-bloomberg-muted text-sm">{xtbResult.skipped_duplicates}</p>
-              </div>
-              <div>
-                <p className="text-bloomberg-muted uppercase tracking-widest text-[9px]">Posiciones actualizadas</p>
+                <p className="text-bloomberg-muted uppercase tracking-widest text-[9px]">Actualizadas</p>
                 <p className="font-bold text-bloomberg-gold text-sm">{xtbResult.positions_updated}</p>
               </div>
               <div>
-                <p className="text-bloomberg-muted uppercase tracking-widest text-[9px]">Posiciones creadas</p>
+                <p className="text-bloomberg-muted uppercase tracking-widest text-[9px]">Creadas</p>
                 <p className="font-bold text-green-400 text-sm">{xtbResult.positions_created}</p>
+              </div>
+              <div>
+                <p className="text-bloomberg-muted uppercase tracking-widest text-[9px]">Cerradas (vendidas)</p>
+                <p className="font-bold text-bloomberg-muted text-sm">{xtbResult.positions_zeroed}</p>
               </div>
             </div>
             {xtbResult.deposits_usd > 0 && (
