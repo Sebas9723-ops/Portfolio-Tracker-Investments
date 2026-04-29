@@ -349,16 +349,52 @@ async def broker_reconcile(
     db = get_admin_client()
     errors: list[str] = []
 
-    # 2. Wipe all XTB-sourced transactions for this user
+    # 2. Collect all tickers present in the file (all aliases)
+    #    and wipe ALL their transactions — not just XTB-tagged ones.
+    #    This prevents manually-entered "Auto-registered" transactions from
+    #    interfering with FIFO when the same ticker appears in the Excel.
+    file_tickers: set[str] = set()
+    for trade in trades:
+        for alias in _ticker_aliases(trade["ticker"]):
+            file_tickers.add(alias)
+
+    for ticker in file_tickers:
+        try:
+            db.table("transactions") \
+              .delete() \
+              .eq("user_id", user_id) \
+              .eq("ticker", ticker) \
+              .execute()
+        except Exception as exc:
+            log.warning("Could not wipe transactions for %s: %s", ticker, exc)
+
+    # 2b. Dedup transactions for tickers NOT in the file (e.g. NU doubled from
+    #     a previous buggy import). Keep the oldest record per (ticker,date,action,qty).
     try:
-        db.table("transactions") \
-          .delete() \
-          .eq("user_id", user_id) \
-          .like("comment", "XTB:%") \
-          .execute()
+        all_tx_res = (
+            db.table("transactions")
+            .select("id,ticker,date,action,quantity,created_at")
+            .eq("user_id", user_id)
+            .order("created_at")
+            .execute()
+        )
+        seen_keys: dict[tuple, str] = {}
+        to_delete_ids: list[str] = []
+        for tx in (all_tx_res.data or []):
+            t = tx["ticker"]
+            if t in file_tickers:
+                continue  # already wiped above
+            key = (t, str(tx["date"])[:10], tx["action"], round(float(tx.get("quantity", 0)), 4))
+            if key in seen_keys:
+                to_delete_ids.append(tx["id"])
+            else:
+                seen_keys[key] = tx["id"]
+        for tx_id in to_delete_ids:
+            db.table("transactions").delete().eq("id", tx_id).execute()
+        if to_delete_ids:
+            log.info("Removed %d duplicate transactions outside file tickers", len(to_delete_ids))
     except Exception as exc:
-        log.error("Could not wipe XTB transactions: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Error limpiando transacciones previas: {exc}")
+        log.warning("Dedup of non-file transactions failed: %s", exc)
 
     # 3. Insert all trades from the file
     imported = 0
@@ -379,7 +415,8 @@ async def broker_reconcile(
         except Exception as exc:
             errors.append(f"{trade['ticker']} {trade['date']}: {exc}")
 
-    # 4. FIFO-reconcile positions from ALL transactions (XTB + any manual ones)
+    # 4. FIFO-reconcile positions from ALL transactions (XTB + surviving manual ones)
+    #    This also fixes non-file tickers that were deduped above (e.g. NU).
     reconciled = _reconcile_positions(user_id, db)
 
     # 5. Upsert positions
@@ -390,19 +427,28 @@ async def broker_reconcile(
     positions_created = 0
     positions_zeroed  = 0
 
-    # Zero out any ticker that now has 0 shares (fully sold)
+    # Zero out positions for any ticker in the file that resolved to 0 shares.
+    # This covers: fully sold positions AND tickers that appeared in the file
+    # but whose reconciled shares came out to 0 (e.g. all lots consumed).
+    tickers_to_zero: set[str] = set()
     for ticker, computed in reconciled.items():
-        if computed["shares"] > 0:
-            continue
+        if computed["shares"] <= 0:
+            tickers_to_zero.add(ticker)
+    # Also zero any file ticker that didn't make it into reconciled at all
+    # (edge case: ticker only had SELLs with no matching BUYs in the file)
+    for trade in trades:
+        if trade["ticker"] not in reconciled:
+            tickers_to_zero.add(trade["ticker"])
+
+    for ticker in tickers_to_zero:
         for alias in _ticker_aliases(ticker):
             if alias in existing_positions:
-                if float(existing_positions[alias].get("shares", 0)) > 0:
-                    db.table("positions") \
-                      .update({"shares": 0, "avg_cost_native": None}) \
-                      .eq("user_id", user_id) \
-                      .eq("ticker", alias) \
-                      .execute()
-                    positions_zeroed += 1
+                db.table("positions") \
+                  .update({"shares": 0, "avg_cost_native": None}) \
+                  .eq("user_id", user_id) \
+                  .eq("ticker", alias) \
+                  .execute()
+                positions_zeroed += 1
                 break
 
     # Upsert tickers with shares > 0
