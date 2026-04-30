@@ -18,6 +18,16 @@ import {
 
 const COLORS = ["#f3a712", "#4dff4d", "#ff4d4d", "#38b2ff", "#c084fc", "#fb923c", "#34d399"];
 
+function inferCurrency(ticker: string): string {
+  const t = ticker.trim().toUpperCase();
+  if (["IGLN.L", "IGLN.UK", "EIMI.UK", "EIMI.L"].includes(t)) return "USD";
+  if (t.endsWith(".DE") || t.endsWith(".PA") || t.endsWith(".AM") ||
+      t.endsWith(".MI") || t.endsWith(".BR") || t.endsWith(".VI") || t.endsWith(".MC")) return "EUR";
+  if (t.endsWith(".L") || t.endsWith(".UK")) return "GBP";
+  if (t.endsWith(".AX")) return "AUD";
+  return "USD";
+}
+
 import type { PortfolioRow } from "@/lib/types";
 
 const PositionRow = memo(function PositionRow({
@@ -102,7 +112,9 @@ export default function PortfolioPage() {
   const INCEPTION_DATE = "2026-03-26";
   const totalValue = portfolio?.total_value_base ?? 0;
   const invested = portfolio?.total_invested_base ?? 0;
-  const basis = cost_basis_usd ?? invested;
+  // Prefer backend-computed invested_base (avg_cost × shares × FX, kept accurate by broker agent).
+  // Fall back to manual cost_basis_usd only when backend has nothing.
+  const basis = invested > 0 ? invested : (cost_basis_usd ?? 0);
   const currentReturnVal = basis > 0 ? totalValue - basis : null;
   const currentReturnPct = basis > 0 ? ((totalValue - basis) / basis) * 100 : null;
 
@@ -152,7 +164,14 @@ export default function PortfolioPage() {
                 <input
                   className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
                   value={form[field]}
-                  onChange={(e) => setForm((f) => ({ ...f, [field]: e.target.value }))}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (field === "ticker") {
+                      setForm((f) => ({ ...f, ticker: val.toUpperCase(), currency: inferCurrency(val) }));
+                    } else {
+                      setForm((f) => ({ ...f, [field]: val }));
+                    }
+                  }}
                 />
               </div>
             ))}
