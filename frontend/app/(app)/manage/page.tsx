@@ -14,6 +14,17 @@ import type { BrokerReconcileResult } from "@/lib/api/import";
 const CURRENCIES = ["USD", "EUR", "GBP", "COP", "CHF", "AUD"];
 const MARKETS = ["US", "LSE", "XETRA", "EURONEXT", "TSX", "ASX"];
 
+/** Mirror of exchange_classifier.py — derives avg_cost currency from ticker. */
+function inferCurrency(ticker: string): string {
+  const t = ticker.trim().toUpperCase();
+  if (["IGLN.L", "IGLN.UK", "EIMI.UK", "EIMI.L"].includes(t)) return "USD";
+  if (t.endsWith(".DE") || t.endsWith(".PA") || t.endsWith(".AM") ||
+      t.endsWith(".MI") || t.endsWith(".BR") || t.endsWith(".VI") || t.endsWith(".MC")) return "EUR";
+  if (t.endsWith(".L") || t.endsWith(".UK")) return "GBP";
+  if (t.endsWith(".AX")) return "AUD";
+  return "USD";
+}
+
 const today = () => new Date().toISOString().split("T")[0];
 const initPositionForm = { ticker: "", name: "", shares: "", avg_cost_native: "", currency: "USD", date: today() };
 const initCashForm = { currency: "USD", amount: "", account_name: "" };
@@ -398,7 +409,10 @@ export default function ManagePage() {
                 <input
                   type="text"
                   value={posForm.ticker}
-                  onChange={(e) => setPosForm((p) => ({ ...p, ticker: e.target.value.toUpperCase() }))}
+                  onChange={(e) => {
+                    const t = e.target.value.toUpperCase();
+                    setPosForm((p) => ({ ...p, ticker: t, currency: inferCurrency(t) }));
+                  }}
                   className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-2 sm:py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
                 />
               </div>
@@ -432,7 +446,12 @@ export default function ManagePage() {
                 />
               </div>
               <div>
-                <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">Currency</label>
+                <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">
+                  Currency
+                  {posForm.ticker && (
+                    <span className="ml-1 text-bloomberg-gold normal-case">· auto</span>
+                  )}
+                </label>
                 <select
                   value={posForm.currency}
                   onChange={(e) => setPosForm((p) => ({ ...p, currency: e.target.value }))}
