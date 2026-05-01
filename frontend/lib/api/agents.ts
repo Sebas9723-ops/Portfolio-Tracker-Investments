@@ -1,7 +1,7 @@
 import { apiClient } from "./client";
 
 export interface RiskAssessment {
-  risk_level: "verde" | "amarillo" | "rojo";
+  risk_level: "green" | "yellow" | "red";
   top_risk: string;
   narrative: string;
 }
@@ -77,10 +77,10 @@ export const runAgentsNow = () =>
 
 export interface TickerResearchSignal {
   score: number;
-  momentum_signal: "alcista" | "neutral" | "bajista";
-  fundamental_signal: "fuerte" | "moderado" | "débil";
-  quality_signal: "alta" | "media" | "baja";
-  valuation_signal: "subvalorado" | "justo" | "sobrevalorado";
+  momentum_signal: "bullish" | "neutral" | "bearish";
+  fundamental_signal: "strong" | "moderate" | "weak";
+  quality_signal: "high" | "medium" | "low";
+  valuation_signal: "undervalued" | "fair" | "overvalued";
   weight_adjustment: number;
   key_insight: string;
 }

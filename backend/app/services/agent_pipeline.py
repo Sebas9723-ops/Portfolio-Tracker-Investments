@@ -100,20 +100,20 @@ def run_director_agent(
     """
     Director Agent: generates a concise investment thesis explaining why
     the quant engine chose these specific allocations.
-    Returns Spanish narrative (150-200 words).
+    Returns English narrative (150-200 words).
     """
     regime_map = {
-        "bull_strong": "mercado alcista fuerte",
-        "bull_weak":   "mercado alcista débil",
-        "bear_mild":   "mercado bajista moderado",
-        "crisis":      "régimen de crisis",
+        "bull_strong": "strong bull market",
+        "bull_weak":   "weak bull market",
+        "bear_mild":   "mild bear market",
+        "crisis":      "crisis regime",
     }
-    regime_label = regime_map.get(regime or "", regime or "desconocido")
+    regime_label = regime_map.get(regime or "", regime or "unknown")
 
     profile_map = {
-        "aggressive":   "agresivo (maximizar retorno esperado)",
-        "base":         "balanceado (Sharpe-óptimo)",
-        "conservative": "conservador (minimizar varianza)",
+        "aggressive":   "aggressive (maximize expected return)",
+        "base":         "balanced (Sharpe-optimal)",
+        "conservative": "conservative (minimize variance)",
     }
     profile_label = profile_map.get(profile, profile)
 
@@ -124,26 +124,26 @@ def run_director_agent(
         exp_ret = a.get("expected_return_pct", 0)
         signals = a.get("signals", [])
         sig_str = ", ".join(signals) if signals else "—"
-        alloc_lines.append(f"  • {t}: {pct:.1f}% del capital | μ esperado={exp_ret:.1f}% | señales=[{sig_str}]")
+        alloc_lines.append(f"  • {t}: {pct:.1f}% of capital | expected μ={exp_ret:.1f}% | signals=[{sig_str}]")
 
-    alloc_block = "\n".join(alloc_lines) if alloc_lines else "  (sin allocations)"
+    alloc_block = "\n".join(alloc_lines) if alloc_lines else "  (no allocations)"
 
     probs_str = " | ".join(f"{k}={v:.0%}" for k, v in regime_probs.items()) if regime_probs else "N/A"
 
-    prompt = f"""Eres el Director Agent de un hedge fund cuantitativo. Tu rol es generar la TESIS DE INVERSIÓN que explica las decisiones del motor de optimización.
+    prompt = f"""You are the Director Agent of a quantitative hedge fund. Your role is to generate the INVESTMENT THESIS explaining the optimization engine's decisions.
 
-DATOS DEL PLAN DE CONTRIBUCIÓN:
-- Régimen detectado: {regime_label} (confianza {regime_confidence*100:.0f}%)
-- Probabilidades de régimen: {probs_str}
-- Perfil del inversor: {profile_label}
-- Capital a desplegar: {base_currency} {total_cash:,.0f} sobre portafolio total de {base_currency} {total_value:,.0f}
-- Sharpe esperado post-deploy: {expected_sharpe:.2f}
-- CVaR 95% diario: {cvar_95*100:.2f}%
+CONTRIBUTION PLAN DATA:
+- Detected regime: {regime_label} (confidence {regime_confidence*100:.0f}%)
+- Regime probabilities: {probs_str}
+- Investor profile: {profile_label}
+- Capital to deploy: {base_currency} {total_cash:,.0f} on total portfolio of {base_currency} {total_value:,.0f}
+- Expected post-deploy Sharpe: {expected_sharpe:.2f}
+- Daily CVaR 95%: {cvar_95*100:.2f}%
 
-ALLOCATIONS DEL MOTOR (SLSQP + GJR-GARCH + HMM + BL-XGBoost):
+ENGINE ALLOCATIONS (SLSQP + GJR-GARCH + HMM + BL-XGBoost):
 {alloc_block}
 
-INSTRUCCIÓN: Escribe la tesis de inversión en español profesional estilo Bloomberg Intelligence. Explica el RAZONAMIENTO detrás de estas allocations específicas — por qué este régimen favorece estos tickers, qué implication tiene el perfil {profile} en la construcción del portafolio, y cuál es el racional cuantitativo principal. Máximo 180 palabras. Sin bullet points — prosa fluida."""
+INSTRUCTION: Write the investment thesis in professional Bloomberg Intelligence style English. Explain the REASONING behind these specific allocations — why this regime favors these tickers, what implication the {profile} profile has on portfolio construction, and what the main quantitative rationale is. Maximum 180 words. No bullet points — flowing prose."""
 
     return _call_groq(prompt, max_tokens=400)
 
@@ -179,30 +179,30 @@ def run_risk_agent(
     max_pct = top_alloc.get("pct_of_capital", 0)
     deployment_pct = total_cash / total_value * 100 if total_value > 0 else 0
 
-    prompt = f"""Eres el Risk Manager de un hedge fund cuantitativo. Evalúa el riesgo cualitativo de este plan de inversión.
+    prompt = f"""You are the Risk Manager of a quantitative hedge fund. Evaluate the qualitative risk of this investment plan.
 
-PLAN DE INVERSIÓN:
-- Régimen: {regime or "desconocido"} | Perfil: {profile}
-- Capital: ${total_cash:,.0f} ({deployment_pct:.1f}% del portafolio)
-- CVaR 95% diario: {cvar_95*100:.2f}%
-- Alertas de correlación: {n_corr_alerts}
+INVESTMENT PLAN:
+- Regime: {regime or "unknown"} | Profile: {profile}
+- Capital: ${total_cash:,.0f} ({deployment_pct:.1f}% of portfolio)
+- Daily CVaR 95%: {cvar_95*100:.2f}%
+- Correlation alerts: {n_corr_alerts}
 
-Allocations propuestas:
-{chr(10).join(alloc_lines) if alloc_lines else "(ninguna)"}
+Proposed allocations:
+{chr(10).join(alloc_lines) if alloc_lines else "(none)"}
 
-Alertas de correlación activas:
-{chr(10).join(corr_lines) if corr_lines else "(ninguna)"}
+Active correlation alerts:
+{chr(10).join(corr_lines) if corr_lines else "(none)"}
 
-INSTRUCCIÓN: Analiza los riesgos cualitativos. Responde EXACTAMENTE en este formato JSON (sin markdown, sin explicación adicional):
+INSTRUCTION: Analyze qualitative risks. Respond EXACTLY in this JSON format (no markdown, no additional text):
 {{
-  "risk_level": "verde|amarillo|rojo",
-  "top_risk": "<una sola oración con el riesgo principal>",
-  "narrative": "<60-80 palabras evaluando concentración, correlación, riesgo de régimen, y tamaño del deployment>"
+  "risk_level": "green|yellow|red",
+  "top_risk": "<single sentence stating the main risk>",
+  "narrative": "<60-80 words evaluating concentration, correlation, regime risk, and deployment size>"
 }}
 
-- verde: riesgos bajo control, plan equilibrado
-- amarillo: al menos un riesgo moderado que merece atención
-- rojo: concentración excesiva, régimen adverso, o CVaR fuera de control"""
+- green: risks under control, balanced plan
+- yellow: at least one moderate risk deserving attention
+- red: excessive concentration, adverse regime, or CVaR out of control"""
 
     raw = _call_groq(prompt, max_tokens=250)
     if not raw:
@@ -249,35 +249,35 @@ def run_research_agent(
         price = f.get("current_price")
         w52_str = f"{w52l:.2f}–{w52h:.2f}" if w52h and w52l else "N/A"
         news = f.get("news", [])
-        news_str = " | ".join(news[:2]) if news else "Sin noticias recientes."
+        news_str = " | ".join(news[:2]) if news else "No recent news."
 
         ticker_blocks.append(
             f"### {t} ({name})\n"
-            f"Sector: {sector} | Market Cap: {mcap} | P/E: {pe} | Precio: {price} | 52w: {w52_str}\n"
-            f"Allocation: {a.get('pct_of_capital', 0):.1f}% del capital | μ esperado: {a.get('expected_return_pct', 0):.1f}%\n"
-            f"Noticias recientes: {news_str}"
+            f"Sector: {sector} | Market Cap: {mcap} | P/E: {pe} | Price: {price} | 52w: {w52_str}\n"
+            f"Allocation: {a.get('pct_of_capital', 0):.1f}% of capital | expected μ: {a.get('expected_return_pct', 0):.1f}%\n"
+            f"Recent news: {news_str}"
         )
 
     blocks_text = "\n\n".join(ticker_blocks)
 
-    prompt = f"""Eres el Research Analyst de un hedge fund. Para cada ticker del plan de inversión, escribe un análisis de investigación conciso.
+    prompt = f"""You are the Research Analyst of a hedge fund. For each ticker in the investment plan, write a concise research analysis.
 
-TICKERS A ANALIZAR:
+TICKERS TO ANALYZE:
 {blocks_text}
 
-INSTRUCCIÓN: Para CADA ticker, escribe exactamente 2-3 oraciones en español que expliquen:
-1. Qué hace la empresa/fondo y por qué es relevante ahora
-2. Qué implican los fundamentals y las noticias recientes para la tesis
-3. Un factor de riesgo específico a vigilar
+INSTRUCTION: For EACH ticker, write exactly 2-3 sentences in English that explain:
+1. What the company/fund does and why it is relevant now
+2. What the fundamentals and recent news imply for the thesis
+3. One specific risk factor to watch
 
-Responde EXACTAMENTE en este formato JSON (sin markdown):
+Respond EXACTLY in this JSON format (no markdown):
 {{
-  "TICKER1": "análisis aquí...",
-  "TICKER2": "análisis aquí...",
+  "TICKER1": "analysis here...",
+  "TICKER2": "analysis here...",
   ...
 }}
 
-Usa los nombres exactos de los tickers como keys. Sé específico y usa datos reales del contexto."""
+Use the exact ticker names as keys. Be specific and use real data from the context."""
 
     raw = _call_groq(prompt, max_tokens=800)
     if not raw:
@@ -393,9 +393,9 @@ def run_contribution_research_agent(
     pw = PROFILE_WEIGHTS.get(profile, PROFILE_WEIGHTS["base"])
 
     profile_desc = {
-        "conservative": "conservador — prioriza calidad (ROE, márgenes, deuda baja) y valoración razonable; penaliza momentum especulativo y alto beta",
-        "base":         "balanceado — equilibra momentum, crecimiento fundamental, calidad y valoración sin sesgos extremos",
-        "aggressive":   "agresivo — maximiza retorno esperado; sobrepondera momentum fuerte y crecimiento; tolera valoraciones altas si el crecimiento lo justifica",
+        "conservative": "conservative — prioritizes quality (ROE, margins, low debt) and reasonable valuation; penalizes speculative momentum and high beta",
+        "base":         "balanced — balances momentum, fundamental growth, quality and valuation without extreme biases",
+        "aggressive":   "aggressive — maximizes expected return; overweights strong momentum and growth; tolerates high valuations if growth justifies it",
     }
 
     ticker_blocks = []
@@ -423,39 +423,39 @@ def run_contribution_research_agent(
 
     blocks_text = "\n\n".join(ticker_blocks)
 
-    prompt = f"""Eres el Contribution Research Agent de un hedge fund cuantitativo. Evalúa los tickers del plan de contribución según señales cuantitativas y cualitativas, ponderadas por el perfil del inversor.
+    prompt = f"""You are the Contribution Research Agent of a quantitative hedge fund. Evaluate the tickers in the contribution plan based on quantitative and qualitative signals, weighted by the investor profile.
 
-PERFIL: {profile_desc.get(profile, profile)}
+PROFILE: {profile_desc.get(profile, profile)}
 
-PESOS DE EVALUACIÓN PARA PERFIL {profile.upper()}:
-- Momentum (precio): {pw['momentum']*100:.0f}%
-- Fundamentals (crecimiento): {pw['fundamentals']*100:.0f}%
-- Calidad (ROE, márgenes, deuda): {pw['quality']*100:.0f}%
-- Valoración (upside analistas, P/B): {pw['valuation']*100:.0f}%
+EVALUATION WEIGHTS FOR PROFILE {profile.upper()}:
+- Momentum (price): {pw['momentum']*100:.0f}%
+- Fundamentals (growth): {pw['fundamentals']*100:.0f}%
+- Quality (ROE, margins, debt): {pw['quality']*100:.0f}%
+- Valuation (analyst upside, P/B): {pw['valuation']*100:.0f}%
 
-TICKERS Y DATOS:
+TICKERS AND DATA:
 {blocks_text}
 
-INSTRUCCIÓN: Evalúa cada ticker según los pesos del perfil. Responde EXACTAMENTE en este formato JSON (sin markdown, sin texto adicional):
+INSTRUCTION: Evaluate each ticker according to the profile weights. Respond EXACTLY in this JSON format (no markdown, no additional text):
 {{
   "TICKER1": {{
-    "score": <número 0-100, puntuación total ponderada>,
-    "momentum_signal": "<alcista | neutral | bajista>",
-    "fundamental_signal": "<fuerte | moderado | débil>",
-    "quality_signal": "<alta | media | baja>",
-    "valuation_signal": "<subvalorado | justo | sobrevalorado>",
-    "weight_adjustment": <float 0.5-1.5; 1.0=mantener quant, >1.0=aumentar peso, <1.0=reducir peso>,
-    "key_insight": "<máximo 12 palabras: el factor más crítico para este perfil específicamente>"
+    "score": <number 0-100, weighted total score>,
+    "momentum_signal": "<bullish | neutral | bearish>",
+    "fundamental_signal": "<strong | moderate | weak>",
+    "quality_signal": "<high | medium | low>",
+    "valuation_signal": "<undervalued | fair | overvalued>",
+    "weight_adjustment": <float 0.5-1.5; 1.0=keep quant weight, >1.0=increase weight, <1.0=reduce weight>,
+    "key_insight": "<maximum 12 words: the most critical factor for this specific profile>"
   }}
 }}
 
-Reglas para weight_adjustment según perfil {profile}:
-- Si momentum es alcista Y perfil agresivo → mayor boost (hasta 1.4)
-- Si calidad es baja Y perfil conservador → penalización fuerte (hasta 0.6)
-- Si sobrevalorado Y perfil conservador → penalización moderada (0.75-0.85)
-- Si score > 75 → weight_adjustment ≥ 1.1
-- Si score < 40 → weight_adjustment ≤ 0.85
-- Usa los tickers exactos como keys JSON."""
+Weight_adjustment rules for profile {profile}:
+- If momentum is bullish AND aggressive profile → bigger boost (up to 1.4)
+- If quality is low AND conservative profile → strong penalty (down to 0.6)
+- If overvalued AND conservative profile → moderate penalty (0.75-0.85)
+- If score > 75 → weight_adjustment ≥ 1.1
+- If score < 40 → weight_adjustment ≤ 0.85
+- Use exact ticker names as JSON keys."""
 
     raw = _call_groq(prompt, max_tokens=1000)
     if not raw:
@@ -522,24 +522,24 @@ def run_macro_agent(
         for t, w in sorted(portfolio_weights.items(), key=lambda x: x[1], reverse=True)
     )
 
-    prompt = f"""Eres el Macro Analyst de un hedge fund cuantitativo. Analiza el entorno macroeconómico actual y sugiere ajustes de overlay para el portafolio.
+    prompt = f"""You are the Macro Analyst of a quantitative hedge fund. Analyze the current macroeconomic environment and suggest overlay adjustments for the portfolio.
 
-INDICADORES MACRO ACTUALES:
+CURRENT MACRO INDICATORS:
 {macro_lines}
 
-PORTAFOLIO ({base_currency}):
+PORTFOLIO ({base_currency}):
 {portfolio_lines}
 
-INSTRUCCIÓN: Responde EXACTAMENTE en este formato JSON (sin markdown, sin texto adicional):
+INSTRUCTION: Respond EXACTLY in this JSON format (no markdown, no additional text):
 {{
   "macro_regime": "<risk_on | risk_off | stagflation | goldilocks | crisis>",
-  "narrative": "<50-70 palabras en español: estado macro actual y su implicación para este portafolio específico>",
+  "narrative": "<50-70 words in English: current macro state and its implication for this specific portfolio>",
   "suggested_overlay": {{
-    "TICKER": <número entre 0.5 y 2.0 donde 1.0=neutral>
+    "TICKER": <number between 0.5 and 2.0 where 1.0=neutral>
   }}
 }}
 
-El overlay multiplica retornos esperados en el optimizador. Solo incluye tickers con convicción clara (diferente de 1.0). Máximo 3 tickers. Si el entorno es neutro, devuelve suggested_overlay vacío {{}}."""
+The overlay multiplies expected returns in the optimizer. Only include tickers with clear conviction (different from 1.0). Maximum 3 tickers. If the environment is neutral, return empty suggested_overlay {{}}."""
 
     raw = _call_groq(prompt, max_tokens=350)
     if not raw:
@@ -575,33 +575,33 @@ def run_portfolio_doctor_agent(
         f"  • {k}: {v:.1f}/25 pts" for k, v in health_components.items()
     )
 
-    prompt = f"""Eres el Portfolio Doctor de un hedge fund. Tu rol es dar un diagnóstico claro y accionable del estado del portafolio esta semana.
+    prompt = f"""You are the Portfolio Doctor of a hedge fund. Your role is to give a clear and actionable diagnosis of the portfolio's health this week.
 
-MÉTRICAS ACTUALES:
-- Health Score total: {health_score:.1f}/100
-- Componentes:
+CURRENT METRICS:
+- Total Health Score: {health_score:.1f}/100
+- Components:
 {components_lines}
-- VaR 1-día 95%: {base_currency} {var_1d:,.0f}
-- CVaR 1-día 95%: {base_currency} {cvar_1d:,.0f}
-- Peor escenario stress test: -{max_stress_loss_pct:.1f}%
-- Drift promedio vs óptimo: {avg_drift_pct:.1f}%
-- Nivel de riesgo (Risk Manager): {risk_level}
+- 1-day VaR 95%: {base_currency} {var_1d:,.0f}
+- 1-day CVaR 95%: {base_currency} {cvar_1d:,.0f}
+- Worst stress test scenario: -{max_stress_loss_pct:.1f}%
+- Average drift vs optimal: {avg_drift_pct:.1f}%
+- Risk level (Risk Manager): {risk_level}
 
-INSTRUCCIÓN: Responde EXACTAMENTE en este formato JSON (sin markdown, sin texto adicional):
+INSTRUCTION: Respond EXACTLY in this JSON format (no markdown, no additional text):
 {{
   "urgency": "<low | medium | high>",
-  "diagnosis": "<2 oraciones en español resumiendo el estado actual del portafolio>",
+  "diagnosis": "<2 sentences in English summarizing the current state of the portfolio>",
   "actions": [
-    "<acción concreta y específica 1>",
-    "<acción concreta y específica 2>",
-    "<acción concreta y específica 3>"
+    "<concrete and specific action 1>",
+    "<concrete and specific action 2>",
+    "<concrete and specific action 3>"
   ]
 }}
 
-- low: portafolio saludable, monitoreo rutinario
-- medium: hay puntos de atención que requieren acción en los próximos días
-- high: acción inmediata recomendada esta semana
-Las acciones deben ser específicas (ej: "Reducir concentración en X porque el drift es Y%"), no genéricas."""
+- low: healthy portfolio, routine monitoring
+- medium: attention points requiring action in the coming days
+- high: immediate action recommended this week
+Actions must be specific (e.g. "Reduce concentration in X because drift is Y%"), not generic."""
 
     raw = _call_groq(prompt, max_tokens=350)
     if not raw:

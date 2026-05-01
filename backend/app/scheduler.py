@@ -476,13 +476,13 @@ def _run_weekly_agents() -> None:
                 var_1d = total_value * cvar_95 * 0.8
                 cvar_1d = total_value * cvar_95
 
-                risk_level = "amarillo"
+                risk_level = "yellow"
                 if macro_result and isinstance(macro_result, dict):
                     macro_regime = macro_result.get("macro_regime", "")
                     if macro_regime == "crisis":
-                        risk_level = "rojo"
+                        risk_level = "red"
                     elif macro_regime in ("risk_on", "goldilocks"):
-                        risk_level = "verde"
+                        risk_level = "green"
 
                 doctor_result = run_portfolio_doctor_agent(
                     health_score=health_score,

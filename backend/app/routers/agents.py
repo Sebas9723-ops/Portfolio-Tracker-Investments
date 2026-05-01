@@ -118,13 +118,13 @@ def run_now(user_id: str = Depends(get_user_id)) -> dict[str, Any]:
         if not any("Macro" in e for e in errors):
             errors.append("Macro agent returned None — check GROQ_API_KEY and yfinance connectivity")
 
-    risk_level = "amarillo"
+    risk_level = "yellow"
     if macro_result:
         regime = macro_result.get("macro_regime", "")
         if regime == "crisis":
-            risk_level = "rojo"
+            risk_level = "red"
         elif regime in ("risk_on", "goldilocks"):
-            risk_level = "verde"
+            risk_level = "green"
 
     try:
         doctor_result = run_portfolio_doctor_agent(

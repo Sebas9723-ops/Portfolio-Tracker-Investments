@@ -1,6 +1,6 @@
 """
 AI portfolio analysis via Groq (Llama 3.3 70B).
-Generates a CFA-level daily brief in Spanish sent via Telegram.
+Generates a CFA-level daily brief in English sent via Telegram.
 """
 from __future__ import annotations
 
@@ -81,10 +81,10 @@ def build_analysis_prompt(summary, metrics: dict, base_currency: str = "USD") ->
         pnl_pct_r = r.unrealized_pnl_pct or 0.0
         day_r = r.change_pct_1d or 0.0
         pos_lines.append(
-            f"  • {r.ticker} ({r.name}): Valor={base_currency} {r.value_base:,.2f} | "
-            f"Peso={r.weight:.1f}% | Hoy={day_r:+.2f}% | "
-            f"P&L no realizado={base_currency} {pnl_r:+,.2f} ({pnl_pct_r:+.1f}%) | "
-            f"Costo promedio={r.avg_cost_native:.2f} {r.cost_currency}"
+            f"  • {r.ticker} ({r.name}): Value={base_currency} {r.value_base:,.2f} | "
+            f"Weight={r.weight:.1f}% | Today={day_r:+.2f}% | "
+            f"Unrealized P&L={base_currency} {pnl_r:+,.2f} ({pnl_pct_r:+.1f}%) | "
+            f"Avg cost={r.avg_cost_native:.2f} {r.cost_currency}"
         )
 
     # Market indices
@@ -94,62 +94,62 @@ def build_analysis_prompt(summary, metrics: dict, base_currency: str = "USD") ->
         if ticker in ("EURUSD=X", "GBPUSD=X"):
             continue
         if ticker in indices:
-            idx_lines.append(f"  • {name}: {indices[ticker]['price']:.2f} ({indices[ticker]['change_pct']:+.2f}% hoy)")
+            idx_lines.append(f"  • {name}: {indices[ticker]['price']:.2f} ({indices[ticker]['change_pct']:+.2f}% today)")
 
     fx_lines = []
     for ticker, label in [("EURUSD=X", "EUR/USD"), ("GBPUSD=X", "GBP/USD")]:
         if ticker in indices:
-            fx_lines.append(f"  • {label}: {indices[ticker]['price']:.4f} ({indices[ticker]['change_pct']:+.2f}% hoy)")
+            fx_lines.append(f"  • {label}: {indices[ticker]['price']:.4f} ({indices[ticker]['change_pct']:+.2f}% today)")
 
-    return f"""Eres un CFA charterholder con 15 años de experiencia en gestión de portafolios multi-activo institucionales.
-Fecha de análisis: {today.strftime('%d de %B de %Y')} ({today.strftime('%A')}).
+    return f"""You are a CFA charterholder with 15 years of experience in institutional multi-asset portfolio management.
+Analysis date: {today.strftime('%B %d, %Y')} ({today.strftime('%A')}).
 
 ════════════════════════════════════════════
-DATOS DEL PORTAFOLIO — Valor Total: {base_currency} {total:,.2f}
+PORTFOLIO DATA — Total Value: {base_currency} {total:,.2f}
 ════════════════════════════════════════════
-Capital invertido: {base_currency} {invested:,.2f}
-P&L no realizado total: {base_currency} {pnl:+,.2f}
-Cambio del día: {base_currency} {day_change:+,.2f} ({day_pct:+.2f}%)
+Invested capital: {base_currency} {invested:,.2f}
+Total unrealized P&L: {base_currency} {pnl:+,.2f}
+Day change: {base_currency} {day_change:+,.2f} ({day_pct:+.2f}%)
 
-Métricas de rendimiento:
+Performance metrics:
   • TWR (total): {twr:+.2f}%
-  • Retorno anualizado: {ann_return:+.2f}%
-  • Volatilidad anualizada: {ann_vol:.2f}%
+  • Annualized return: {ann_return:+.2f}%
+  • Annualized volatility: {ann_vol:.2f}%
   • Sharpe ratio: {sharpe:.3f}
   • Max drawdown: {max_dd:.2f}%
   • Alpha vs VOO: {alpha:+.2f}% | Beta: {beta:.3f}
 
-Posiciones abiertas:
-{chr(10).join(pos_lines) if pos_lines else "  (Sin posiciones)"}
+Open positions:
+{chr(10).join(pos_lines) if pos_lines else "  (No positions)"}
 
 ════════════════════════════════════════════
-MERCADOS HOY
+MARKETS TODAY
 ════════════════════════════════════════════
-{chr(10).join(idx_lines) if idx_lines else "  (No disponible)"}
+{chr(10).join(idx_lines) if idx_lines else "  (Not available)"}
 
-  Divisas:
-{chr(10).join(fx_lines) if fx_lines else "  (No disponible)"}
+  FX:
+{chr(10).join(fx_lines) if fx_lines else "  (Not available)"}
 
 ════════════════════════════════════════════
 
-INSTRUCCIONES: Genera un análisis institucional profundo y accionable. Sé específico — menciona tickers, precios, porcentajes. Escribe en español profesional estilo Bloomberg Intelligence. Máximo 500 palabras para que quepa en Telegram.
+INSTRUCTIONS: Generate a deep and actionable institutional analysis. Be specific — mention tickers, prices, percentages. Write in professional Bloomberg Intelligence style English. Maximum 500 words to fit in Telegram.
 
-## 📊 RESUMEN EJECUTIVO
-Estado del portafolio hoy: valor total, P&L del día, posición ganadora y perdedora. ¿Superó o quedó por debajo del S&P 500?
+## 📊 EXECUTIVE SUMMARY
+Portfolio state today: total value, day P&L, top winner and loser. Did it outperform or underperform the S&P 500?
 
-## 🌍 CONTEXTO MACRO
-VIX, yield 10Y y EUR/USD: qué implican para las posiciones europeas y de growth.
+## 🌍 MACRO CONTEXT
+VIX, 10Y yield and EUR/USD: what they imply for European and growth positions.
 
-## 🔍 POSICIONES DESTACADAS
-Las 2-3 posiciones más relevantes hoy (mejor y peor desempeño) con explicación concreta.
+## 🔍 KEY POSITIONS
+The 2-3 most relevant positions today (best and worst performance) with concrete explanation.
 
-## 🎯 ACCIÓN RECOMENDADA
-1 acción concreta para las próximas 48h: ticker, dirección, justificación cuantitativa.
+## 🎯 RECOMMENDED ACTION
+1 concrete action for the next 48h: ticker, direction, quantitative justification.
 
-## ⚠️ RIESGO PRINCIPAL
-El riesgo más urgente del portafolio hoy con nivel de alerta.
+## ⚠️ MAIN RISK
+The most urgent portfolio risk today with alert level.
 
-Reglas: máximo 500 palabras. Cero generalidades — cada afirmación anclada en un dato real."""
+Rules: maximum 500 words. Zero generalities — every statement anchored to a real data point."""
 
 
 def run_groq_analysis(prompt: str, api_key: str = "") -> Optional[str]:

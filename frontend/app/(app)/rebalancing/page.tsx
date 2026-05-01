@@ -998,24 +998,24 @@ export default function RebalancingPage() {
               {/* Risk Manager Agent */}
               {agentData.risk && (
                 <div className={`border-l-2 pl-3 ${
-                  agentData.risk.risk_level === "verde" ? "border-green-500" :
-                  agentData.risk.risk_level === "rojo"  ? "border-red-500"   : "border-yellow-500"
+                  agentData.risk.risk_level === "green" ? "border-green-500" :
+                  agentData.risk.risk_level === "red"   ? "border-red-500"   : "border-yellow-500"
                 }`}>
                   <div className="flex items-center gap-2 mb-1">
                     <p className="text-bloomberg-muted text-[10px] font-bold uppercase tracking-widest">
                       Risk Manager Agent
                     </p>
                     <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase ${
-                      agentData.risk.risk_level === "verde"   ? "bg-green-500/20 text-green-400" :
-                      agentData.risk.risk_level === "rojo"    ? "bg-red-500/20 text-red-400"     :
-                                                                "bg-yellow-500/20 text-yellow-400"
+                      agentData.risk.risk_level === "green" ? "bg-green-500/20 text-green-400" :
+                      agentData.risk.risk_level === "red"   ? "bg-red-500/20 text-red-400"     :
+                                                              "bg-yellow-500/20 text-yellow-400"
                     }`}>
-                      {agentData.risk.risk_level === "verde" ? "✓ Riesgo Controlado" :
-                       agentData.risk.risk_level === "rojo"  ? "⚠ Riesgo Alto"       : "⚡ Riesgo Moderado"}
+                      {agentData.risk.risk_level === "green" ? "✓ Risk Controlled" :
+                       agentData.risk.risk_level === "red"   ? "⚠ High Risk"        : "⚡ Moderate Risk"}
                     </span>
                   </div>
                   <p className="text-bloomberg-gold text-[10px] font-semibold mb-1">
-                    Riesgo principal: {agentData.risk.top_risk}
+                    Top risk: {agentData.risk.top_risk}
                   </p>
                   <p className="text-bloomberg-muted text-[11px] leading-relaxed">{agentData.risk.narrative}</p>
                 </div>
@@ -1051,18 +1051,18 @@ export default function RebalancingPage() {
 
           {researchData && !researchLoading && (() => {
             const SIGNAL_COLORS: Record<string, string> = {
-              alcista:       "text-green-400",
-              neutral:       "text-bloomberg-muted",
-              bajista:       "text-red-400",
-              fuerte:        "text-green-400",
-              moderado:      "text-bloomberg-gold",
-              "débil":       "text-red-400",
-              alta:          "text-green-400",
-              media:         "text-bloomberg-gold",
-              baja:          "text-red-400",
-              subvalorado:   "text-green-400",
-              justo:         "text-bloomberg-muted",
-              sobrevalorado: "text-red-400",
+              bullish:     "text-green-400",
+              neutral:     "text-bloomberg-muted",
+              bearish:     "text-red-400",
+              strong:      "text-green-400",
+              moderate:    "text-bloomberg-gold",
+              weak:        "text-red-400",
+              high:        "text-green-400",
+              medium:      "text-bloomberg-gold",
+              low:         "text-red-400",
+              undervalued: "text-green-400",
+              fair:        "text-bloomberg-muted",
+              overvalued:  "text-red-400",
             };
 
             const allocs = quantData?.contribution_plan?.allocations ?? [];

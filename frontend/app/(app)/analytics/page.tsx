@@ -274,29 +274,29 @@ export default function AnalyticsPage() {
         const doctor: DoctorAgentResult | null = liveAgentResult?.doctor ?? lastAgentResults?.doctor?.result ?? null;
         const runAt = lastAgentResults?.doctor?.run_at;
         const REGIME_COLORS: Record<string, string> = {
-          risk_on: "text-green-400 border-green-400/40 bg-green-400/10",
-          goldilocks: "text-green-400 border-green-400/40 bg-green-400/10",
-          risk_off: "text-red-400 border-red-400/40 bg-red-400/10",
-          crisis: "text-red-400 border-red-400/40 bg-red-400/10",
+          risk_on:     "text-green-400 border-green-400/40 bg-green-400/10",
+          goldilocks:  "text-green-400 border-green-400/40 bg-green-400/10",
+          risk_off:    "text-red-400 border-red-400/40 bg-red-400/10",
+          crisis:      "text-red-400 border-red-400/40 bg-red-400/10",
           stagflation: "text-yellow-500 border-yellow-500/40 bg-yellow-500/10",
         };
         const URGENCY_COLORS: Record<string, string> = {
-          low: "text-green-400 bg-green-400/10",
+          low:    "text-green-400 bg-green-400/10",
           medium: "text-bloomberg-gold bg-bloomberg-gold/10",
-          high: "text-red-400 bg-red-400/10",
+          high:   "text-red-400 bg-red-400/10",
         };
         return (
           <div className="bbg-card">
             <div className="flex items-center justify-between mb-3">
               <p className="bbg-header mb-0">AI Agents — Macro + Portfolio Doctor</p>
               <div className="flex items-center gap-2">
-                {runAt && <span className="text-[9px] text-bloomberg-muted">Último: {new Date(runAt).toLocaleDateString()}</span>}
+                {runAt && <span className="text-[9px] text-bloomberg-muted">Last run: {new Date(runAt).toLocaleDateString()}</span>}
                 <button
                   onClick={runAgents}
                   disabled={agentsRunning}
                   className="text-[10px] text-bloomberg-gold border border-bloomberg-gold/40 px-2.5 py-1 rounded-lg hover:bg-bloomberg-gold/10 transition-colors disabled:opacity-50"
                 >
-                  {agentsRunning ? "Analizando…" : "🤖 Ejecutar ahora"}
+                  {agentsRunning ? "Analyzing…" : "🤖 Run now"}
                 </button>
               </div>
             </div>
@@ -310,7 +310,7 @@ export default function AnalyticsPage() {
             )}
 
             {!macro && !doctor && !agentsRunning && agentErrors.length === 0 && (
-              <p className="text-bloomberg-muted text-[10px]">Sin resultados aún. Los agentes corren automáticamente cada domingo a las 18:00. Puedes ejecutarlos manualmente ahora.</p>
+              <p className="text-bloomberg-muted text-[10px]">No results yet. Agents run automatically every Sunday at 18:00. You can run them manually now.</p>
             )}
 
             {agentsRunning && (
@@ -326,6 +326,7 @@ export default function AnalyticsPage() {
                   <div className="space-y-2">
                     <div className="flex items-center gap-2">
                       <span className="text-[9px] text-bloomberg-muted uppercase tracking-widest">Macro Regime</span>
+
                       <span className={`text-[9px] px-2 py-0.5 rounded border font-bold uppercase ${REGIME_COLORS[macro.macro_regime] ?? "text-bloomberg-muted border-bloomberg-border"}`}>
                         {macro.macro_regime.replace("_", " ")}
                       </span>
@@ -333,7 +334,7 @@ export default function AnalyticsPage() {
                     <p className="text-bloomberg-text text-[11px] leading-relaxed">{macro.narrative}</p>
                     {Object.keys(macro.suggested_overlay).length > 0 && (
                       <div className="border border-bloomberg-border p-2 mt-1">
-                        <p className="text-[9px] text-bloomberg-muted uppercase tracking-widest mb-1">Overlay sugerido</p>
+                        <p className="text-[9px] text-bloomberg-muted uppercase tracking-widest mb-1">Suggested Overlay</p>
                         <div className="flex flex-wrap gap-2">
                           {Object.entries(macro.suggested_overlay).map(([t, v]) => (
                             <span key={t} className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${v > 1 ? "text-green-400 bg-green-400/10" : "text-red-400 bg-red-400/10"}`}>
@@ -350,7 +351,7 @@ export default function AnalyticsPage() {
                 {doctor && (
                   <div className="space-y-2">
                     <div className="flex items-center gap-2">
-                      <span className="text-[9px] text-bloomberg-muted uppercase tracking-widest">Urgencia</span>
+                      <span className="text-[9px] text-bloomberg-muted uppercase tracking-widest">Urgency</span>
                       <span className={`text-[9px] px-2 py-0.5 rounded font-bold uppercase ${URGENCY_COLORS[doctor.urgency] ?? ""}`}>
                         {doctor.urgency}
                       </span>
