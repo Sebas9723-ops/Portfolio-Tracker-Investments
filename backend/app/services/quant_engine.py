@@ -472,11 +472,8 @@ class QuantEngine:
             rule = constraints_motor1.get(t, {})
             f = float(rule.get("floor", 0.0))
             c = float(rule.get("cap", 1.0))
-            # No-sell floor: raise floor to current weight so existing positions are
-            # not sold.  Aggressive profile skips this — it is allowed to rotate
-            # fully into the highest-return positions (subject only to Motor 1 floor).
-            if profile != "aggressive":
-                f = max(f, cur_w[i])
+            # No-sell: raise floor to current weight so existing positions are never sold
+            f = max(f, cur_w[i])
             floors[i] = f
             caps[i] = c
 
