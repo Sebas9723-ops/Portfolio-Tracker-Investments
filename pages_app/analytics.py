@@ -522,17 +522,22 @@ def _render_correlation_heatmap(ctx):
     if asset_returns is None or asset_returns.empty or asset_returns.shape[1] < 2:
         return
 
-    corr = asset_returns.corr()
+    info_section(
+        "Correlation Matrix",
+        "Pairwise return correlation between holdings. Window selector slices the most recent N trading days. "
+        "1 = move in lockstep · 0 = uncorrelated · −1 = opposite directions. "
+        "High correlation between positions means less real diversification.",
+    )
+
+    window_map = {"1M": 21, "3M": 63, "6M": 126, "1Y": 252, "Max": len(asset_returns)}
+    win_label = st.selectbox("Correlation Window", list(window_map.keys()), index=4, key="corr_win_sel")
+    n = window_map[win_label]
+    ar = asset_returns.iloc[-n:] if n < len(asset_returns) else asset_returns
+
+    corr = ar.corr()
     tickers = corr.columns.tolist()
     z = corr.values.tolist()
     text = [[f"{v:.2f}" for v in row] for row in corr.values]
-
-    info_section(
-        "Correlation Matrix",
-        "Pairwise return correlation between holdings over the available history. "
-        "1 = move in lockstep · 0 = uncorrelated · −1 = move in opposite directions. "
-        "High correlation between positions means less real diversification.",
-    )
 
     fig = go.Figure(go.Heatmap(
         z=z,
@@ -681,6 +686,250 @@ def _render_rolling_correlation(ctx):
     st.plotly_chart(fig, use_container_width=True, key="analytics_rolling_corr_chart")
 
 
+def _render_drawdown_analysis(ctx):
+    portfolio_returns = ctx.get("portfolio_returns", pd.Series(dtype=float))
+    asset_returns = ctx.get("asset_returns")
+
+    if portfolio_returns.empty:
+        return
+
+    info_section(
+        "Drawdown Analysis",
+        "Underwater chart shows how far the portfolio is below its previous peak at each point in time. "
+        "Per-asset bars compare the worst historical drawdown for each holding. "
+        "The episodes table lists every drawdown with peak→trough→recovery dates.",
+    )
+
+    # Underwater chart
+    cum = (1 + portfolio_returns).cumprod()
+    drawdown_series = (cum / cum.cummax() - 1).dropna()
+
+    fig_uw = go.Figure()
+    fig_uw.add_scatter(
+        x=drawdown_series.index,
+        y=drawdown_series,
+        mode="lines",
+        fill="tozeroy",
+        fillcolor="rgba(239, 83, 80, 0.15)",
+        line=dict(color="#ef5350", width=1.5),
+        name="Portfolio Drawdown",
+        hovertemplate="%{x|%Y-%m-%d}<br>Drawdown: %{y:.2%}<extra></extra>",
+    )
+    fig_uw.update_layout(
+        paper_bgcolor="#0b0f14", plot_bgcolor="#0b0f14",
+        font=dict(color="#e6e6e6"), height=300,
+        margin=dict(t=20, b=20, l=20, r=20),
+        yaxis=dict(tickformat=".0%", title="Drawdown from Peak"),
+        xaxis_title="Date",
+        legend=dict(orientation="h", y=1.08),
+    )
+    st.plotly_chart(fig_uw, use_container_width=True, key="analytics_underwater_chart")
+
+    # Per-asset max drawdown comparison
+    if asset_returns is not None and not asset_returns.empty:
+        max_dds = {}
+        for ticker in asset_returns.columns:
+            s = asset_returns[ticker].dropna()
+            if len(s) > 1:
+                c = (1 + s).cumprod()
+                dd = float((c / c.cummax() - 1).min())
+                max_dds[ticker] = dd
+        if max_dds:
+            dd_df = pd.DataFrame.from_dict(max_dds, orient="index", columns=["Max Drawdown"])
+            dd_df = dd_df.sort_values("Max Drawdown")
+            fig_bar = go.Figure(go.Bar(
+                x=dd_df.index,
+                y=dd_df["Max Drawdown"],
+                marker_color="#ef5350",
+                text=[f"{v:.1%}" for v in dd_df["Max Drawdown"]],
+                textposition="outside",
+            ))
+            fig_bar.update_layout(
+                paper_bgcolor="#0b0f14", plot_bgcolor="#0b0f14",
+                font=dict(color="#e6e6e6"), height=320,
+                margin=dict(t=40, b=20, l=20, r=20),
+                yaxis=dict(
+                    tickformat=".0%",
+                    title="Max Drawdown",
+                    range=[min(dd_df["Max Drawdown"]) * 1.2, 0.05],
+                ),
+                xaxis_title="Ticker",
+                showlegend=False,
+                title=dict(text="Max Drawdown per Asset", font=dict(color="#f3a712", size=13)),
+            )
+            st.plotly_chart(fig_bar, use_container_width=True, key="analytics_asset_maxdd_chart")
+
+    # Drawdown episodes table
+    try:
+        from app_core import compute_drawdown_episodes
+        episodes_df = compute_drawdown_episodes(portfolio_returns)
+        if episodes_df is not None and not episodes_df.empty:
+            st.caption("Drawdown episodes — worst first (open drawdown has no Recovery Date)")
+            show_aggrid(episodes_df.head(10), height=280, key="aggrid_drawdown_episodes")
+    except Exception:
+        pass
+
+
+def _render_factor_exposure(ctx):
+    frd = ctx.get("factor_risk_decomposition", {})
+    if not frd:
+        return
+
+    info_section(
+        "Factor Exposure & Risk Decomposition",
+        "Decomposes portfolio risk into systematic (market factors: Mkt-RF, SMB, HML) and idiosyncratic components. "
+        "Per-asset bars show each holding's marginal contribution to total portfolio volatility. "
+        "Based on Fama-French 3-factor model proxied by IVV / IWM / IVE / IVW.",
+    )
+
+    factor_decomp = frd.get("factor_decomposition", {})
+    per_asset = frd.get("per_asset", {})
+
+    # Summary metrics row
+    if factor_decomp:
+        c1, c2, c3, c4, c5 = st.columns(5)
+        info_metric(c1, "Portfolio Vol", f"{frd.get('portfolio_vol', 0):.2%}", "Annualized portfolio volatility (from covariance).")
+        info_metric(c2, "Systematic Vol", f"{factor_decomp.get('systematic_vol', 0):.2%}", "Volatility explained by market factors.")
+        info_metric(c3, "Idiosyncratic Vol", f"{factor_decomp.get('idiosyncratic_vol', 0):.2%}", "Residual stock-specific volatility.")
+        info_metric(c4, "Market β", f"{factor_decomp.get('mkt_beta', 0):.2f}", "Portfolio sensitivity to the broad market.")
+        info_metric(c5, "Factor R²", f"{factor_decomp.get('systematic_pct', 0):.0%}", "Fraction of variance explained by FF3 factors.")
+
+        col_pie, col_betas = st.columns(2)
+
+        with col_pie:
+            sys_pct = factor_decomp.get("systematic_pct", 0)
+            idio_pct = factor_decomp.get("idiosyncratic_pct", 0)
+            fig_donut = go.Figure(go.Pie(
+                labels=["Systematic", "Idiosyncratic"],
+                values=[sys_pct, idio_pct],
+                hole=0.5,
+                marker_colors=["#f3a712", "#26a69a"],
+                textinfo="label+percent",
+            ))
+            fig_donut.update_layout(
+                paper_bgcolor="#0b0f14", plot_bgcolor="#0b0f14",
+                font=dict(color="#e6e6e6"), height=280,
+                margin=dict(t=10, b=30, l=10, r=10),
+                legend=dict(orientation="h", y=-0.15),
+                title=dict(text="Risk Sources", font=dict(color="#e6e6e6", size=12)),
+            )
+            st.plotly_chart(fig_donut, use_container_width=True, key="analytics_factor_donut")
+
+        with col_betas:
+            betas = [
+                factor_decomp.get("mkt_beta", 0),
+                factor_decomp.get("smb_beta", 0),
+                factor_decomp.get("hml_beta", 0),
+            ]
+            labels = ["Market (Mkt-RF)", "Size (SMB)", "Value (HML)"]
+            colors = ["#26a69a" if b >= 0 else "#ef5350" for b in betas]
+            fig_betas = go.Figure(go.Bar(
+                x=labels,
+                y=betas,
+                marker_color=colors,
+                text=[f"{b:.2f}" for b in betas],
+                textposition="outside",
+            ))
+            fig_betas.add_hline(y=0, line_dash="dot", line_color="#555")
+            fig_betas.update_layout(
+                paper_bgcolor="#0b0f14", plot_bgcolor="#0b0f14",
+                font=dict(color="#e6e6e6"), height=280,
+                margin=dict(t=10, b=10, l=10, r=10),
+                yaxis_title="Beta",
+                showlegend=False,
+                title=dict(text="Factor Betas (FF3)", font=dict(color="#e6e6e6", size=12)),
+            )
+            st.plotly_chart(fig_betas, use_container_width=True, key="analytics_factor_betas_chart")
+
+    # Per-asset vol contribution
+    if per_asset:
+        tickers_list = list(per_asset.keys())
+        contrib_pct = [per_asset[t]["vol_contribution_pct"] for t in tickers_list]
+        weights_pct = [per_asset[t]["weight"] * 100 for t in tickers_list]
+
+        fig_contrib = go.Figure()
+        fig_contrib.add_bar(
+            x=tickers_list, y=contrib_pct, name="Vol Contribution %",
+            marker_color="#f3a712",
+            text=[f"{v:.1f}%" for v in contrib_pct],
+            textposition="outside",
+        )
+        fig_contrib.add_scatter(
+            x=tickers_list, y=weights_pct,
+            mode="markers+lines", name="Portfolio Weight %",
+            yaxis="y2",
+            marker=dict(color="#00c8ff", size=8),
+            line=dict(color="#00c8ff", dash="dot"),
+        )
+        fig_contrib.update_layout(
+            paper_bgcolor="#0b0f14", plot_bgcolor="#0b0f14",
+            font=dict(color="#e6e6e6"), height=360,
+            margin=dict(t=40, b=20, l=20, r=60),
+            yaxis=dict(title="Vol Contribution %", ticksuffix="%"),
+            yaxis2=dict(title="Weight %", overlaying="y", side="right", ticksuffix="%"),
+            legend=dict(orientation="h", y=1.08),
+            title=dict(text="Per-Asset Volatility Contribution vs Portfolio Weight", font=dict(color="#f3a712", size=13)),
+        )
+        st.plotly_chart(fig_contrib, use_container_width=True, key="analytics_vol_contrib_chart")
+
+
+def _render_rolling_risk_ratios(portfolio_returns, rfr, window):
+    if portfolio_returns is None or portfolio_returns.empty:
+        return
+
+    info_section(
+        "Rolling Risk-Adjusted Returns",
+        "Rolling Sharpe and Sortino ratios over the selected window. "
+        "Sortino uses only downside deviation in the denominator — it does not penalize upside volatility, "
+        "making it more relevant for asymmetric return distributions.",
+    )
+
+    rfr_daily = rfr / 252
+    excess = portfolio_returns - rfr_daily
+    rolling_ann_ret = excess.rolling(window).mean() * 252
+    rolling_vol = portfolio_returns.rolling(window).std() * np.sqrt(252)
+    rolling_sharpe = (rolling_ann_ret / rolling_vol.replace(0, np.nan)).dropna()
+
+    def _downside_vol(x):
+        neg = x[x < 0]
+        if len(neg) == 0:
+            return np.nan
+        return float(np.sqrt(np.mean(neg ** 2)) * np.sqrt(252))
+
+    rolling_sortino = (rolling_ann_ret / portfolio_returns.rolling(window).apply(
+        _downside_vol, raw=True
+    ).replace(0, np.nan)).dropna()
+
+    fig = go.Figure()
+    if not rolling_sharpe.empty:
+        fig.add_scatter(
+            x=rolling_sharpe.index, y=rolling_sharpe,
+            mode="lines", name=f"Sharpe ({window}d)",
+            line=dict(color="#f3a712", width=2),
+            hovertemplate="%{x|%Y-%m-%d}<br>Sharpe: %{y:.2f}<extra></extra>",
+        )
+    if not rolling_sortino.empty:
+        fig.add_scatter(
+            x=rolling_sortino.index, y=rolling_sortino,
+            mode="lines", name=f"Sortino ({window}d)",
+            line=dict(color="#26a69a", width=2),
+            hovertemplate="%{x|%Y-%m-%d}<br>Sortino: %{y:.2f}<extra></extra>",
+        )
+    fig.add_hline(y=0, line_dash="dot", line_color="#555")
+    fig.add_hline(y=1, line_dash="dash", line_color="#444",
+                  annotation_text="Ratio = 1", annotation_position="right",
+                  annotation=dict(font=dict(color="#888", size=10)))
+    fig.update_layout(
+        paper_bgcolor="#0b0f14", plot_bgcolor="#0b0f14",
+        font=dict(color="#e6e6e6"), height=380,
+        margin=dict(t=20, b=20, l=20, r=80),
+        xaxis_title="Date",
+        yaxis_title="Ratio",
+        legend=dict(orientation="h", y=1.08, x=0.0),
+    )
+    st.plotly_chart(fig, use_container_width=True, key="analytics_rolling_risk_ratios_chart")
+
+
 def render_analytics_page(ctx):
     render_page_title("Analytics")
 
@@ -765,4 +1014,18 @@ def render_analytics_page(ctx):
         _render_correlation_heatmap(ctx)
         _render_rolling_correlation(ctx)
         _render_return_attribution(ctx)
+
+        # ── Advanced Analytics ────────────────────────────────────────────────
+        try:
+            _render_drawdown_analysis(ctx)
+        except Exception:
+            pass
+        try:
+            _render_factor_exposure(ctx)
+        except Exception:
+            pass
+        try:
+            _render_rolling_risk_ratios(portfolio_returns, rfr, rolling_window)
+        except Exception:
+            pass
     _live()
