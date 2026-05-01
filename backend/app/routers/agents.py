@@ -101,9 +101,22 @@ def run_now(user_id: str = Depends(get_user_id)) -> dict[str, Any]:
     summary = build_portfolio(positions, quotes, fx_rates, base_currency, transactions)
     total_value = float(summary.total_value_base)
 
-    macro_result = run_macro_agent(tickers, weights, base_currency)
+    errors: list[str] = []
+
+    try:
+        macro_result = run_macro_agent(tickers, weights, base_currency)
+    except Exception as exc:
+        macro_result = None
+        errors.append(f"Macro agent error: {exc}")
+
     if macro_result:
-        save_agent_result(user_id, "macro", macro_result, triggered_by="manual")
+        try:
+            save_agent_result(user_id, "macro", macro_result, triggered_by="manual")
+        except Exception as exc:
+            errors.append(f"Save macro failed: {exc}")
+    else:
+        if not any("Macro" in e for e in errors):
+            errors.append("Macro agent returned None — check GROQ_API_KEY and yfinance connectivity")
 
     risk_level = "amarillo"
     if macro_result:
@@ -113,20 +126,31 @@ def run_now(user_id: str = Depends(get_user_id)) -> dict[str, Any]:
         elif regime in ("risk_on", "goldilocks"):
             risk_level = "verde"
 
-    doctor_result = run_portfolio_doctor_agent(
-        health_score=health_score,
-        health_components=health_components,
-        var_1d=total_value * cvar_95 * 0.8,
-        cvar_1d=total_value * cvar_95,
-        max_stress_loss_pct=cvar_95 * 300,
-        avg_drift_pct=avg_drift,
-        risk_level=risk_level,
-        base_currency=base_currency,
-    )
-    if doctor_result:
-        save_agent_result(user_id, "doctor", doctor_result, triggered_by="manual")
+    try:
+        doctor_result = run_portfolio_doctor_agent(
+            health_score=health_score,
+            health_components=health_components,
+            var_1d=total_value * cvar_95 * 0.8,
+            cvar_1d=total_value * cvar_95,
+            max_stress_loss_pct=cvar_95 * 300,
+            avg_drift_pct=avg_drift,
+            risk_level=risk_level,
+            base_currency=base_currency,
+        )
+    except Exception as exc:
+        doctor_result = None
+        errors.append(f"Doctor agent error: {exc}")
 
-    return {"macro": macro_result, "doctor": doctor_result}
+    if doctor_result:
+        try:
+            save_agent_result(user_id, "doctor", doctor_result, triggered_by="manual")
+        except Exception as exc:
+            errors.append(f"Save doctor failed: {exc}")
+    else:
+        if not any("Doctor" in e for e in errors):
+            errors.append("Doctor agent returned None — check GROQ_API_KEY")
+
+    return {"macro": macro_result, "doctor": doctor_result, "errors": errors}
 
 
 class ContributionResearchRequest(BaseModel):

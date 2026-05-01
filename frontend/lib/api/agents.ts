@@ -72,7 +72,7 @@ export const fetchLastAgentResults = () =>
 
 export const runAgentsNow = () =>
   apiClient
-    .post<{ macro: MacroAgentResult | null; doctor: DoctorAgentResult | null }>("/api/agents/run-now", {}, { timeout: 90_000 })
+    .post<{ macro: MacroAgentResult | null; doctor: DoctorAgentResult | null; errors?: string[] }>("/api/agents/run-now", {}, { timeout: 90_000 })
     .then((r) => r.data);
 
 export interface TickerResearchSignal {

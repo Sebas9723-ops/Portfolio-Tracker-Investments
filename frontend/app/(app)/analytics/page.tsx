@@ -144,6 +144,7 @@ export default function AnalyticsPage() {
   // Agent results state
   const [agentsRunning, setAgentsRunning] = useState(false);
   const [liveAgentResult, setLiveAgentResult] = useState<{ macro: MacroAgentResult | null; doctor: DoctorAgentResult | null } | null>(null);
+  const [agentErrors, setAgentErrors] = useState<string[]>([]);
 
   const { data: lastAgentResults, refetch: refetchAgents } = useQuery({
     queryKey: ["last-agent-results"],
@@ -153,11 +154,17 @@ export default function AnalyticsPage() {
 
   const runAgents = useCallback(async () => {
     setAgentsRunning(true);
+    setAgentErrors([]);
     try {
       const r = await runAgentsNow();
       setLiveAgentResult(r);
+      const errs = r.errors ?? [];
+      if (errs.length > 0) setAgentErrors(errs);
       refetchAgents();
-    } catch (e) { console.error(e); }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setAgentErrors([`Request failed: ${msg}`]);
+    }
     setAgentsRunning(false);
   }, [refetchAgents]);
 
@@ -294,7 +301,15 @@ export default function AnalyticsPage() {
               </div>
             </div>
 
-            {!macro && !doctor && !agentsRunning && (
+            {agentErrors.length > 0 && (
+              <div className="mb-3 border border-red-500/40 bg-red-500/5 rounded p-2 space-y-1">
+                {agentErrors.map((err, i) => (
+                  <p key={i} className="text-red-400 text-[10px] font-mono">{err}</p>
+                ))}
+              </div>
+            )}
+
+            {!macro && !doctor && !agentsRunning && agentErrors.length === 0 && (
               <p className="text-bloomberg-muted text-[10px]">Sin resultados aún. Los agentes corren automáticamente cada domingo a las 18:00. Puedes ejecutarlos manualmente ahora.</p>
             )}
 
