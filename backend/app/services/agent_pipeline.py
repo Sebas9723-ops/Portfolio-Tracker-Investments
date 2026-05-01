@@ -617,6 +617,67 @@ Actions must be specific (e.g. "Reduce concentration in X because drift is Y%"),
     return None
 
 
+# ── Target Research Agent ─────────────────────────────────────────────────────
+
+def run_target_research_agent(
+    user_id: str,
+    profile: str,
+    portfolio: dict,
+    constraints_motor1: dict,
+    constraints_motor2: list[dict],
+    bl_views: dict,
+    rfr: float = 0.045,
+    time_horizon: str = "long",
+) -> dict | None:
+    """
+    Quantitative Research Agent: runs the full ML pipeline (GJR-GARCH + HMM +
+    XGBoost-BL + CVXPY) for a given profile and persists the result to
+    agent_results as type `target_research_{profile}`.
+
+    Called by:
+      - Scheduler every 6 hours (for all 3 profiles)
+      - POST /api/agents/refresh-targets (manual trigger)
+
+    Returns structured dict with optimal_weights, mu_vector, regime, etc.
+    or None on failure.
+    """
+    from app.services.quant_engine import QuantEngine
+
+    try:
+        engine = QuantEngine(risk_free_rate=rfr)
+        result = engine.run_full_optimization(
+            portfolio=portfolio,
+            profile=profile,
+            bl_views=bl_views,
+            constraints_motor1=constraints_motor1,
+            constraints_motor2=constraints_motor2,
+            time_horizon=time_horizon,
+        )
+        output = {
+            "optimal_weights": result.optimal_weights,
+            "mu_vector": result.mu_vector,
+            "regime": result.regime,
+            "regime_confidence": result.regime_confidence,
+            "regime_probs": result.regime_probs,
+            "expected_sharpe": result.expected_sharpe,
+            "expected_return": result.expected_return,
+            "expected_volatility": result.expected_volatility,
+            "cvar_95": result.cvar_95,
+            "profile": profile,
+            "time_horizon": time_horizon,
+            "correlation_alerts": result.correlation_alerts,
+        }
+        try:
+            from app.db.agent_results import save_agent_result
+            save_agent_result(user_id, f"target_research_{profile}", output, triggered_by="research_agent")
+        except Exception as save_exc:
+            log.warning("Target research agent: save failed for %s: %s", user_id[:8], save_exc)
+        return output
+    except Exception as exc:
+        log.error("Target research agent failed for %s (%s): %s", user_id[:8], profile, exc, exc_info=True)
+        return None
+
+
 # ── Full Pipeline ──────────────────────────────────────────────────────────────
 
 def run_full_agent_pipeline(

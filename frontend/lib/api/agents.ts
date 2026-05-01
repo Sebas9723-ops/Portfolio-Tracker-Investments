@@ -75,6 +75,20 @@ export const runAgentsNow = () =>
     .post<{ macro: MacroAgentResult | null; doctor: DoctorAgentResult | null; errors?: string[] }>("/api/agents/run-now", {}, { timeout: 90_000 })
     .then((r) => r.data);
 
+export interface ResearchTargetSummary {
+  regime: string;
+  expected_sharpe: number;
+  n_targets: number;
+}
+
+export const refreshResearchTargets = () =>
+  apiClient
+    .post<{
+      results: Record<string, ResearchTargetSummary>;
+      errors: string[];
+    }>("/api/agents/refresh-targets", {}, { timeout: 120_000 })
+    .then((r) => r.data);
+
 export interface TickerResearchSignal {
   score: number;
   momentum_signal: "bullish" | "neutral" | "bearish";

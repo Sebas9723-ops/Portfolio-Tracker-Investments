@@ -2,7 +2,7 @@
 import { useState, useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAnalytics, fetchRollingMetrics, fetchExtendedAnalytics, fetchVolRegime, fetchQuantAdvanced, fetchEquityCurve, fetchVsBenchmark, fetchRecommendations, fetchTaxLoss, fetchHealthScore, fetchAttribution, fetchPortfolioNews, runKellySizing, runMonteCarlo } from "@/lib/api/analytics";
-import { fetchLastAgentResults, runAgentsNow } from "@/lib/api/agents";
+import { fetchLastAgentResults, runAgentsNow, refreshResearchTargets } from "@/lib/api/agents";
 import type { MacroAgentResult, DoctorAgentResult } from "@/lib/api/agents";
 import type {
   FactorRisk, TrackingErrorBudget, QuantRegime, NaiveBenchmarkRow, WalkForward,
@@ -143,14 +143,32 @@ export default function AnalyticsPage() {
 
   // Agent results state
   const [agentsRunning, setAgentsRunning] = useState(false);
+  const [targetsRunning, setTargetsRunning] = useState(false);
   const [liveAgentResult, setLiveAgentResult] = useState<{ macro: MacroAgentResult | null; doctor: DoctorAgentResult | null } | null>(null);
   const [agentErrors, setAgentErrors] = useState<string[]>([]);
+  const [targetRefreshStatus, setTargetRefreshStatus] = useState<string | null>(null);
 
   const { data: lastAgentResults, refetch: refetchAgents } = useQuery({
     queryKey: ["last-agent-results"],
     queryFn: fetchLastAgentResults,
     staleTime: 10 * 60 * 1000,
   });
+
+  const runRefreshTargets = useCallback(async () => {
+    setTargetsRunning(true);
+    setTargetRefreshStatus(null);
+    try {
+      const r = await refreshResearchTargets();
+      const profiles = Object.keys(r.results || {});
+      const errs = r.errors ?? [];
+      if (errs.length > 0) setTargetRefreshStatus(`Errors: ${errs.join("; ")}`);
+      else setTargetRefreshStatus(`Targets refreshed for: ${profiles.join(", ")}`);
+    } catch (e: unknown) {
+      setTargetRefreshStatus(`Failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setTargetsRunning(false);
+    }
+  }, []);
 
   const runAgents = useCallback(async () => {
     setAgentsRunning(true);
@@ -289,17 +307,30 @@ export default function AnalyticsPage() {
           <div className="bbg-card">
             <div className="flex items-center justify-between mb-3">
               <p className="bbg-header mb-0">AI Agents — Macro + Portfolio Doctor</p>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap justify-end">
                 {runAt && <span className="text-[9px] text-bloomberg-muted">Last run: {new Date(runAt).toLocaleDateString()}</span>}
                 <button
+                  onClick={runRefreshTargets}
+                  disabled={targetsRunning || agentsRunning}
+                  className="text-[10px] text-bloomberg-accent border border-bloomberg-accent/40 px-2.5 py-1 rounded-lg hover:bg-bloomberg-accent/10 transition-colors disabled:opacity-50"
+                  title="Re-run ML pipeline for all profiles and update contribution plan targets"
+                >
+                  {targetsRunning ? "Recalculating…" : "🎯 Refresh Targets"}
+                </button>
+                <button
                   onClick={runAgents}
-                  disabled={agentsRunning}
+                  disabled={agentsRunning || targetsRunning}
                   className="text-[10px] text-bloomberg-gold border border-bloomberg-gold/40 px-2.5 py-1 rounded-lg hover:bg-bloomberg-gold/10 transition-colors disabled:opacity-50"
                 >
                   {agentsRunning ? "Analyzing…" : "🤖 Run now"}
                 </button>
               </div>
             </div>
+            {targetRefreshStatus && (
+              <div className={`mb-2 text-[10px] px-2 py-1 rounded border ${targetRefreshStatus.startsWith("Error") || targetRefreshStatus.startsWith("Failed") ? "border-red-500/40 text-red-400 bg-red-500/5" : "border-green-500/40 text-green-400 bg-green-500/5"}`}>
+                {targetRefreshStatus}
+              </div>
+            )}
 
             {agentErrors.length > 0 && (
               <div className="mb-3 border border-red-500/40 bg-red-500/5 rounded p-2 space-y-1">

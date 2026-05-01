@@ -378,6 +378,86 @@ def _run_dca_for_all_users() -> None:
             log.error("  ✗ %s… — DCA run failed: %s", user_id[:8], exc)
 
 
+def _refresh_research_targets_all_users() -> None:
+    """
+    Research Target Agent — runs every 6 hours.
+    Executes the full ML+CVXPY pipeline for all 3 profiles per user and
+    persists the target weights + mu vector to agent_results so the
+    contribution planner can use them as a tracking anchor.
+    """
+    from app.db.supabase_client import get_admin_client
+    from app.db.quant_results import load_user_bl_views
+    from app.services.agent_pipeline import run_target_research_agent
+    from app.services.portfolio_service import load_portfolio_data
+
+    db = get_admin_client()
+    pos_res = db.table("positions").select("user_id").execute()
+    user_ids = list({row["user_id"] for row in (pos_res.data or [])})
+
+    if not user_ids:
+        log.info("Research targets: no users with positions, skipping.")
+        return
+
+    log.info("Research targets: refreshing for %d user(s) × 3 profiles", len(user_ids))
+
+    for user_id in user_ids:
+        try:
+            settings_res = (
+                db.table("user_settings")
+                .select("*")
+                .eq("user_id", user_id)
+                .maybe_single()
+                .execute()
+            )
+            settings = settings_res.data or {}
+            rfr = float(settings.get("risk_free_rate", 0.045))
+            horizon = settings.get("default_time_horizon", "long")
+            if horizon not in ("short", "medium", "long"):
+                horizon = "long"
+            ticker_weight_rules = settings.get("ticker_weight_rules") or {}
+            combination_ranges = settings.get("combination_ranges") or {}
+
+            try:
+                summary, tickers, _ = load_portfolio_data(user_id)
+            except Exception:
+                continue
+
+            if not tickers:
+                continue
+
+            rows_by_ticker = {r.ticker: r for r in summary.rows}
+            portfolio: dict = {
+                t: {"value_base": float(rows_by_ticker[t].value_base) if t in rows_by_ticker else 0.0}
+                for t in tickers
+            }
+            bl_views = load_user_bl_views(user_id)
+
+            for profile in ("conservative", "base", "aggressive"):
+                try:
+                    profile_rules = ticker_weight_rules.get(profile, {})
+                    c1: dict = {
+                        t: {"floor": float(r.get("floor", 0.0)), "cap": float(r.get("cap", 1.0))}
+                        for t, r in profile_rules.items() if isinstance(r, dict)
+                    }
+                    c2: list = combination_ranges.get(profile, []) or []
+                    run_target_research_agent(
+                        user_id=user_id,
+                        profile=profile,
+                        portfolio=portfolio,
+                        constraints_motor1=c1,
+                        constraints_motor2=c2,
+                        bl_views=bl_views,
+                        rfr=rfr,
+                        time_horizon=horizon,
+                    )
+                    log.info("  ✓ %s… — research targets saved (%s)", user_id[:8], profile)
+                except Exception as exc:
+                    log.error("  ✗ %s… — research target failed (%s): %s", user_id[:8], profile, exc)
+
+        except Exception as exc:
+            log.error("  ✗ %s… — research targets outer error: %s", user_id[:8], exc)
+
+
 def _run_weekly_agents() -> None:
     """
     Weekly AI agent run (Sundays 18:00 Bogota):
@@ -635,8 +715,17 @@ def start_scheduler() -> BackgroundScheduler:
         replace_existing=True,
         misfire_grace_time=3600,
     )
+    scheduler.add_job(
+        _refresh_research_targets_all_users,
+        trigger=CronTrigger(hour="0,6,12,18", minute=30, timezone="America/Bogota"),
+        id="research_targets_refresh",
+        replace_existing=True,
+        misfire_grace_time=1800,
+    )
     scheduler.start()
     log.info(
-        "Schedulers started — snapshot: 17:30 Bogota | quant: 16:05 New York | telegram: 17:35 Bogota | drift-alerts: 17:00 Bogota | dca: 09:05 Bogota | prediction-backfill: 17:45 Bogota | weekly-agents: Sun 18:00 Bogota"
+        "Schedulers started — snapshot: 17:30 Bogota | quant: 16:05 New York | telegram: 17:35 Bogota | "
+        "drift-alerts: 17:00 Bogota | dca: 09:05 Bogota | prediction-backfill: 17:45 Bogota | "
+        "weekly-agents: Sun 18:00 Bogota | research-targets: 00:30/06:30/12:30/18:30 Bogota"
     )
     return scheduler
