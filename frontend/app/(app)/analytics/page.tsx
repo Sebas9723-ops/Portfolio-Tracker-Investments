@@ -1125,7 +1125,7 @@ export default function AnalyticsPage() {
       {/* ── Kelly Position Sizing ── */}
       <div className="bbg-card">
         <p className="bbg-header">Kelly Position Sizing Calculator</p>
-        <p className="text-bloomberg-muted text-[10px] mb-3">Tamaño óptimo de posición según el criterio de Kelly. Se recomienda ½ Kelly para gestión del riesgo de ruina.</p>
+        <p className="text-bloomberg-muted text-[10px] mb-3">Optimal position size per Kelly criterion. ½ Kelly is recommended for ruin risk management.</p>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
           <div>
             <label className="block text-bloomberg-muted text-[10px] uppercase tracking-widest mb-1">Ticker</label>
@@ -1133,19 +1133,19 @@ export default function AnalyticsPage() {
               placeholder="NVDA" className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1.5 text-xs focus:outline-none focus:border-bloomberg-gold uppercase" />
           </div>
           <div>
-            <label className="block text-bloomberg-muted text-[10px] uppercase tracking-widest mb-1">Convicción (%)</label>
+            <label className="block text-bloomberg-muted text-[10px] uppercase tracking-widest mb-1">Conviction (%)</label>
             <input type="number" min={10} max={100} value={kellyConviction} onChange={(e) => setKellyConviction(Number(e.target.value))}
               className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1.5 text-xs focus:outline-none focus:border-bloomberg-gold" />
           </div>
           <div>
-            <label className="block text-bloomberg-muted text-[10px] uppercase tracking-widest mb-1">Retorno esperado (%)</label>
+            <label className="block text-bloomberg-muted text-[10px] uppercase tracking-widest mb-1">Expected Return (%)</label>
             <input type="number" min={1} max={100} value={kellyExpRet} onChange={(e) => setKellyExpRet(Number(e.target.value))}
               className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1.5 text-xs focus:outline-none focus:border-bloomberg-gold" />
           </div>
           <div className="flex items-end">
             <button onClick={runKelly} disabled={kellyLoading || !kellyTicker}
               className="w-full bg-bloomberg-gold text-bloomberg-bg text-[10px] font-bold px-3 py-1.5 hover:opacity-90 disabled:opacity-50 uppercase tracking-wider">
-              {kellyLoading ? "…" : "Calcular"}
+              {kellyLoading ? "…" : "Calculate"}
             </button>
           </div>
         </div>
@@ -1153,10 +1153,10 @@ export default function AnalyticsPage() {
           <div className="border-t border-bloomberg-border pt-3 space-y-3">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {[
-                { label: "Kelly Completo", value: `${kellyResult.kelly_pct.toFixed(1)}%`, sub: "Alto riesgo" },
-                { label: "½ Kelly (recomendado)", value: `${kellyResult.half_kelly_pct.toFixed(1)}%`, sub: "Estándar" },
-                { label: "¼ Kelly (conservador)", value: `${kellyResult.quarter_kelly_pct.toFixed(1)}%`, sub: "Máxima protección" },
-                { label: "Monto ½ Kelly", value: `$${kellyResult.recommended_amount.toLocaleString(undefined, {maximumFractionDigits: 0})}`, sub: "Estimado" },
+                { label: "Full Kelly", value: `${kellyResult.kelly_pct.toFixed(1)}%`, sub: "High risk" },
+                { label: "½ Kelly (recommended)", value: `${kellyResult.half_kelly_pct.toFixed(1)}%`, sub: "Standard" },
+                { label: "¼ Kelly (conservative)", value: `${kellyResult.quarter_kelly_pct.toFixed(1)}%`, sub: "Max protection" },
+                { label: "½ Kelly Amount", value: `$${kellyResult.recommended_amount.toLocaleString(undefined, {maximumFractionDigits: 0})}`, sub: "Estimated" },
               ].map(({ label, value, sub }) => (
                 <div key={label} className="border border-bloomberg-border p-2">
                   <p className="text-bloomberg-muted text-[9px] uppercase tracking-widest">{label}</p>
@@ -1166,7 +1166,7 @@ export default function AnalyticsPage() {
               ))}
             </div>
             <p className="text-bloomberg-muted text-[10px]">
-              <span className="text-bloomberg-text">Análisis:</span> {kellyResult.rationale} &middot; Vol estimada: {kellyResult.inputs.estimated_ann_vol_pct.toFixed(1)}%
+              <span className="text-bloomberg-text">Analysis:</span> {kellyResult.rationale} &middot; Est. vol: {kellyResult.inputs.estimated_ann_vol_pct.toFixed(1)}%
             </p>
           </div>
         )}
@@ -1174,37 +1174,37 @@ export default function AnalyticsPage() {
 
       {/* ── Monte Carlo Goal Simulator ── */}
       <div className="bbg-card">
-        <p className="bbg-header">Monte Carlo — Simulador de Meta Financiera</p>
-        <p className="text-bloomberg-muted text-[10px] mb-3">Proyección con DCA mensual usando 5,000 simulaciones basadas en el retorno/volatilidad histórica del portafolio.</p>
+        <p className="bbg-header">Monte Carlo — Financial Goal Simulator</p>
+        <p className="text-bloomberg-muted text-[10px] mb-3">Monthly DCA projection using 5,000 simulations based on portfolio historical return/volatility.</p>
         <div className="grid grid-cols-3 gap-3 mb-3">
           <div>
-            <label className="block text-bloomberg-muted text-[10px] uppercase tracking-widest mb-1">Aporte mensual ($)</label>
+            <label className="block text-bloomberg-muted text-[10px] uppercase tracking-widest mb-1">Monthly Contribution ($)</label>
             <input type="number" min={0} value={mcMonthly} onChange={(e) => setMcMonthly(Number(e.target.value))}
               className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1.5 text-xs focus:outline-none focus:border-bloomberg-gold" />
           </div>
           <div>
-            <label className="block text-bloomberg-muted text-[10px] uppercase tracking-widest mb-1">Años</label>
+            <label className="block text-bloomberg-muted text-[10px] uppercase tracking-widest mb-1">Years</label>
             <input type="number" min={1} max={40} value={mcYears} onChange={(e) => setMcYears(Number(e.target.value))}
               className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1.5 text-xs focus:outline-none focus:border-bloomberg-gold" />
           </div>
           <div>
-            <label className="block text-bloomberg-muted text-[10px] uppercase tracking-widest mb-1">Meta ($)</label>
+            <label className="block text-bloomberg-muted text-[10px] uppercase tracking-widest mb-1">Goal ($)</label>
             <input type="number" min={1000} value={mcTarget} onChange={(e) => setMcTarget(Number(e.target.value))}
               className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1.5 text-xs focus:outline-none focus:border-bloomberg-gold" />
           </div>
         </div>
         <button onClick={runMC} disabled={mcLoading}
           className="bg-bloomberg-gold text-bloomberg-bg text-[10px] font-bold px-4 py-1.5 hover:opacity-90 disabled:opacity-50 uppercase tracking-wider mb-4">
-          {mcLoading ? "Simulando…" : "Ejecutar Simulación"}
+          {mcLoading ? "Running…" : "Run Simulation"}
         </button>
         {mcResult && (
           <div className="space-y-4">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {[
-                { label: "Prob. de meta", value: `${mcResult.probability_of_goal.toFixed(1)}%`, color: mcResult.probability_of_goal >= 70 ? "text-green-400" : mcResult.probability_of_goal >= 40 ? "text-bloomberg-gold" : "text-red-400" },
-                { label: `Mediana (año ${mcResult.years})`, value: `$${mcResult.median_outcome.toLocaleString(undefined, {maximumFractionDigits: 0})}`, color: "text-bloomberg-text" },
-                { label: "Retorno anual", value: `${mcResult.ann_return_pct.toFixed(1)}%`, color: "text-bloomberg-muted" },
-                { label: "Volatilidad", value: `${mcResult.ann_vol_pct.toFixed(1)}%`, color: "text-bloomberg-muted" },
+                { label: "Goal Probability", value: `${mcResult.probability_of_goal.toFixed(1)}%`, color: mcResult.probability_of_goal >= 70 ? "text-green-400" : mcResult.probability_of_goal >= 40 ? "text-bloomberg-gold" : "text-red-400" },
+                { label: `Median (year ${mcResult.years})`, value: `$${mcResult.median_outcome.toLocaleString(undefined, {maximumFractionDigits: 0})}`, color: "text-bloomberg-text" },
+                { label: "Annual Return", value: `${mcResult.ann_return_pct.toFixed(1)}%`, color: "text-bloomberg-muted" },
+                { label: "Volatility", value: `${mcResult.ann_vol_pct.toFixed(1)}%`, color: "text-bloomberg-muted" },
               ].map(({ label, value, color }) => (
                 <div key={label} className="border border-bloomberg-border p-2">
                   <p className="text-bloomberg-muted text-[9px] uppercase tracking-widest">{label}</p>
@@ -1224,7 +1224,7 @@ export default function AnalyticsPage() {
                     <Area type="monotone" dataKey="p95" stroke="none" fill="#f3a71210" />
                     <Area type="monotone" dataKey="p75" stroke="none" fill="#f3a71218" />
                     <Area type="monotone" dataKey="p25" stroke="none" fill="#f3a71208" />
-                    <Line type="monotone" dataKey="median" stroke="#f3a712" strokeWidth={2} dot={false} name="Mediana" />
+                    <Line type="monotone" dataKey="median" stroke="#f3a712" strokeWidth={2} dot={false} name="Median" />
                     <Line type="monotone" dataKey="p95" stroke="#4dff4d" strokeWidth={1} dot={false} strokeDasharray="3 3" name="P95" />
                     <Line type="monotone" dataKey="p5" stroke="#ff4d4d" strokeWidth={1} dot={false} strokeDasharray="3 3" name="P5" />
                     <ReferenceLine y={mcResult.target_goal} stroke="#f3a712" strokeDasharray="5 5" />
@@ -1232,7 +1232,7 @@ export default function AnalyticsPage() {
                 </ResponsiveContainer>
               </div>
             )}
-            <p className="text-bloomberg-muted text-[9px]">Rango P5–P95 sombreado · Línea punteada = meta · {mcResult.n_sims.toLocaleString()} simulaciones Monte Carlo.</p>
+            <p className="text-bloomberg-muted text-[9px]">P5–P95 shaded range · Dashed line = goal · {mcResult.n_sims.toLocaleString()} Monte Carlo simulations.</p>
           </div>
         )}
       </div>
