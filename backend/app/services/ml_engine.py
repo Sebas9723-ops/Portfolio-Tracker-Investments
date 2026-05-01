@@ -606,11 +606,14 @@ class MLEngine:
                 predicted = predicted_sharpe * max(cur_vol, 0.05)
 
                 # ── Confidence from OOS Sharpe-MAE ────────────────────────
+                # Aggressive allows higher confidence ceiling so XGB views have
+                # stronger weight in the BL update (was 0.72, aggressive gets 0.88).
+                _conf_ceil = 0.88 if profile == "aggressive" else 0.72
                 if len(X_val) >= 5:
                     y_val_pred = xgb.predict(X_val)
                     mae = float(np.mean(np.abs(y_val_pred - y_val)))
                     # MAE in Sharpe units: 0.5 is good, 2.0 is noisy
-                    confidence = float(np.clip(1.0 / (1.0 + mae * 1.5), 0.10, 0.72))
+                    confidence = float(np.clip(1.0 / (1.0 + mae * 1.5), 0.10, _conf_ceil))
                 else:
                     confidence = 0.30
 

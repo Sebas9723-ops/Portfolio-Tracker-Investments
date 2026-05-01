@@ -33,6 +33,7 @@ def generate_contribution_plan(
     current_portfolio: dict,
     available_cash: float,
     slippage_estimates: dict,
+    profile: str = "base",
 ) -> ContributionPlan:
     """
     Build a buy-only contribution plan from QuantResult optimal weights.
@@ -85,15 +86,41 @@ def generate_contribution_plan(
     if not gaps:
         return ContributionPlan(total_cash=available_cash)
 
-    # Sort by gap descending (largest underweight = highest priority)
-    sorted_tickers = sorted(gaps.keys(), key=lambda t: gaps[t], reverse=True)
-    total_gap = sum(gaps.values())
+    # ── Profile-aware allocation priority ────────────────────────────────────
+    # aggressive: weight cash toward highest expected-return tickers that also
+    #             have a gap — maximises return per dollar deployed.
+    # conservative/base: pure gap-proportional (risk already embedded in CVXPY
+    #                    target weights, so largest gap = most underweight asset).
+    mu_vec: dict[str, float] = result.mu_vector  # annualised, per-ticker
 
-    # Allocate cash proportionally to gap sizes
-    raw_allocations: dict[str, float] = {}
-    for t in sorted_tickers:
-        proportion = gaps[t] / total_gap if total_gap > 0 else 1.0 / len(gaps)
-        raw_allocations[t] = proportion * available_cash
+    if profile == "aggressive" and mu_vec:
+        # Score = gap × max(0, mu)  — only reward positive-return tickers;
+        # if all mu ≤ 0 fall back to pure gap.
+        scores: dict[str, float] = {
+            t: gaps[t] * max(0.0, mu_vec.get(t, 0.0)) for t in gaps
+        }
+        total_score = sum(scores.values())
+        if total_score > 1e-8:
+            # Sort by return-weighted gap descending
+            sorted_tickers = sorted(gaps.keys(), key=lambda t: scores[t], reverse=True)
+            raw_allocations: dict[str, float] = {
+                t: (scores[t] / total_score) * available_cash for t in sorted_tickers
+            }
+        else:
+            # All expected returns ≤ 0 — fall back to gap-proportional
+            sorted_tickers = sorted(gaps.keys(), key=lambda t: gaps[t], reverse=True)
+            total_gap = sum(gaps.values())
+            raw_allocations = {
+                t: (gaps[t] / total_gap) * available_cash for t in sorted_tickers
+            }
+    else:
+        # Base / conservative: gap-proportional
+        sorted_tickers = sorted(gaps.keys(), key=lambda t: gaps[t], reverse=True)
+        total_gap = sum(gaps.values())
+        raw_allocations = {
+            t: (gaps[t] / total_gap if total_gap > 0 else 1.0 / len(gaps)) * available_cash
+            for t in sorted_tickers
+        }
 
     # Subtract slippage per ticker
     rows: list[AllocationRow] = []

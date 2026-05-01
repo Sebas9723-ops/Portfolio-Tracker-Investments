@@ -45,9 +45,21 @@ _MAX_TURNOVER = {"aggressive": 0.70, "base": 0.45, "conservative": 0.30}
 _TAU_ROBUST = 0.10          # uncertainty fraction of cov for robust penalty
 
 # Time-horizon parameters
-_LAMBDA_BY_HORIZON   = {"short": 5.0, "medium": 3.0, "long": 1.5}   # risk aversion in base objective
+_LAMBDA_BY_HORIZON   = {"short": 5.0, "medium": 3.0, "long": 1.5}   # risk aversion fallback (base profile)
 _KAPPA_HORIZON_MULT  = {"short": 1.5, "medium": 1.0, "long": 0.7}   # scales regime kappa
 _TURNOVER_HORIZON_MULT = {"short": 0.8, "medium": 1.0, "long": 1.2}  # max turnover multiplier
+
+# Profile + horizon lambda: aggressive uses near-zero risk aversion (maximize return);
+# conservative uses high lambda (strongly penalise variance).
+_LAMBDA_BY_PROFILE_HORIZON: dict[tuple[str, str], float] = {
+    ("aggressive",   "short"):  0.5,  ("aggressive",   "medium"): 0.3,  ("aggressive",   "long"): 0.2,
+    ("base",         "short"):  5.0,  ("base",         "medium"): 3.0,  ("base",         "long"): 1.5,
+    ("conservative", "short"):  8.0,  ("conservative", "medium"): 6.0,  ("conservative", "long"): 4.0,
+}
+
+# TC penalty rate by profile: aggressive trades more aggressively to rotate into
+# high-return positions; conservative minimises unnecessary turnover cost.
+_TC_RATE_BY_PROFILE = {"aggressive": 0.001, "base": 0.005, "conservative": 0.008}
 _CVAR_LIMITS = {                                                        # daily CVaR by (profile, horizon)
     ("conservative", "short"): 0.08,  ("conservative", "medium"): 0.10,  ("conservative", "long"): 0.13,
     ("base",         "short"): 0.12,  ("base",         "medium"): 0.15,  ("base",         "long"): 0.20,
@@ -440,7 +452,7 @@ class QuantEngine:
           - Regime bear: reduce cap by 20% for top-2 expected-return tickers
           - Correlation shifts: reduce cap by 15% for affected tickers
           - CVaR limit: table by (profile, horizon)
-          - Lambda (risk aversion): by horizon — short=5.0, medium=3.0, long=1.5
+          - Lambda (risk aversion): by profile+horizon — aggressive long=0.2, conservative long=4.0
         """
         n = len(tickers)
         mu = np.array([expected_returns.get(t, 0.0) for t in tickers])
@@ -460,8 +472,11 @@ class QuantEngine:
             rule = constraints_motor1.get(t, {})
             f = float(rule.get("floor", 0.0))
             c = float(rule.get("cap", 1.0))
-            # No-sell: raise floor to current weight if higher
-            f = max(f, cur_w[i])
+            # No-sell floor: raise floor to current weight so existing positions are
+            # not sold.  Aggressive profile skips this — it is allowed to rotate
+            # fully into the highest-return positions (subject only to Motor 1 floor).
+            if profile != "aggressive":
+                f = max(f, cur_w[i])
             floors[i] = f
             caps[i] = c
 
@@ -490,16 +505,19 @@ class QuantEngine:
         # Robust optimization parameters (regime + horizon dependent)
         kappa = _KAPPA_BY_REGIME.get(regime, 0.6) * _KAPPA_HORIZON_MULT.get(time_horizon, 1.0)
         if profile == "aggressive":
-            # Aggressive: reduce uncertainty penalty — accept model risk,
-            # bet more on high-conviction mu estimates
-            kappa *= 0.50
+            # Aggressive: sharply reduce uncertainty penalty — accept model risk,
+            # bet strongly on high-conviction mu estimates (was 0.50, now 0.25)
+            kappa *= 0.25
         elif profile == "conservative":
             # Conservative: increase uncertainty penalty — stay close to
             # market portfolio when signal is weak
             kappa *= 1.30
         max_turnover = (_MAX_TURNOVER.get(profile, 0.45)
                         * _TURNOVER_HORIZON_MULT.get(time_horizon, 1.0))
-        lambda_mv = _LAMBDA_BY_HORIZON.get(time_horizon, 3.0)
+        lambda_mv = _LAMBDA_BY_PROFILE_HORIZON.get(
+            (profile, time_horizon),
+            _LAMBDA_BY_HORIZON.get(time_horizon, 3.0),
+        )
 
         t0 = time.monotonic()
         w_sol = _solve_robust_cvxpy(
@@ -857,8 +875,9 @@ def _solve_robust_cvxpy_inner(
 
     robust_penalty = kappa * cp.norm(L_mu.T @ w, 2)
 
-    # TC penalty
-    tc_penalty = 0.005 * cp.sum(cp.pos(w - cur_w))
+    # TC penalty — profile-aware: aggressive uses lower rate to allow more rotation
+    _tc_rate = _TC_RATE_BY_PROFILE.get(profile, 0.005)
+    tc_penalty = _tc_rate * cp.sum(cp.pos(w - cur_w))
 
     # ── Objective ────────────────────────────────────────────────────────────
     if profile == "aggressive":
