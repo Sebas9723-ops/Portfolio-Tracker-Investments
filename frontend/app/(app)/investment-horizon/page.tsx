@@ -160,22 +160,30 @@ export default function InvestmentHorizonPage() {
           {[
             { label: "Monthly Contribution", value: monthly, setter: setMonthly, step: 100 },
             { label: "Horizon (years)", value: years, setter: setYears, step: 1, min: 1, max: 30 },
-            { label: "Avg Annual Return", value: ret, setter: setRet, step: 0.01, isRate: true },
-            { label: "Annual Volatility", value: vol, setter: setVol, step: 0.01, isRate: true },
+            { label: "Avg Annual Return", value: ret, setter: setRet, step: 0.1, isRate: true },
+            { label: "Annual Volatility", value: vol, setter: setVol, step: 0.1, isRate: true },
             { label: "Target Goal", value: goal, setter: setGoal, step: 1000 },
-          ].map(({ label, value, setter, step, min, max, isRate }) => (
-            <div key={label}>
-              <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">
-                {label}{isRate ? `: ${fmtPct(value * 100)}` : ""}
-              </label>
-              <input
-                type="number" value={value}
-                onChange={(e) => setter(parseFloat(e.target.value) || 0)}
-                step={step} min={min} max={max}
-                className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
-              />
-            </div>
-          ))}
+          ].map(({ label, value, setter, step, min, max, isRate }) => {
+            // Rate fields: store as decimal (0.41) but display/edit as % (41.0)
+            const displayValue = isRate ? parseFloat((value * 100).toFixed(4)) : value;
+            const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+              const v = parseFloat(e.target.value) || 0;
+              setter(isRate ? v / 100 : v);
+            };
+            return (
+              <div key={label}>
+                <label className="block text-bloomberg-muted text-[10px] uppercase mb-1">
+                  {label}{isRate ? `: ${fmtPct(value * 100)}` : ""}
+                </label>
+                <input
+                  type="number" value={displayValue}
+                  onChange={handleChange}
+                  step={step} min={min} max={max}
+                  className="w-full bg-bloomberg-bg border border-bloomberg-border text-bloomberg-text px-2 py-1 text-xs focus:outline-none focus:border-bloomberg-gold"
+                />
+              </div>
+            );
+          })}
         </div>
       </div>
 

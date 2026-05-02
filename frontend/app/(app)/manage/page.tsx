@@ -288,9 +288,9 @@ export default function ManagePage() {
           <span className="text-[9px] text-bloomberg-gold border border-bloomberg-gold/30 px-1.5 py-0.5">AI</span>
         </div>
         <p className="text-bloomberg-muted text-[10px] mb-3">
-          Sube tu reporte XTB (Cash Operations .xlsx). El agente reemplaza todas las transacciones con el archivo,
-          reconcilia posiciones por FIFO (shares + avg cost exacto) y valida con IA. <span className="text-bloomberg-gold">Un solo upload = estado correcto.</span><br />
-          <span className="text-bloomberg-gold">XTB: Mi Cuenta → Historial → Cash Operations → Exportar Excel</span>
+          Upload your XTB report (Cash Operations .xlsx). The agent replaces all transactions with the file,
+          reconciles positions via FIFO (exact shares + avg cost) and validates with AI. <span className="text-bloomberg-gold">One upload = correct state.</span><br />
+          <span className="text-bloomberg-gold">XTB: My Account → History → Cash Operations → Export Excel</span>
         </p>
         <div className="flex items-center gap-3 flex-wrap">
           <input
@@ -323,42 +323,42 @@ export default function ManagePage() {
             disabled={!xtbFile || xtbLoading}
             className="bg-bloomberg-gold text-bloomberg-bg text-[10px] font-bold px-3 py-1.5 hover:opacity-90 disabled:opacity-50 uppercase tracking-wider"
           >
-            {xtbLoading ? "Reconciliando…" : "RECONCILE"}
+            {xtbLoading ? "Reconciling…" : "RECONCILE"}
           </button>
-          {xtbLoading && <span className="text-bloomberg-muted text-[10px]">Importando + reconciliando posiciones + validando con IA… ~20s</span>}
+          {xtbLoading && <span className="text-bloomberg-muted text-[10px]">Importing + reconciling positions + validating with AI… ~20s</span>}
         </div>
         {xtbResult && (
           <div className={`mt-3 p-3 text-[10px] border space-y-2 ${xtbResult.imported > 0 || xtbResult.positions_updated > 0 ? "border-green-500/30 bg-green-500/5" : "border-bloomberg-border"}`}>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
               <div>
-                <p className="text-bloomberg-muted uppercase tracking-widest text-[9px]">Transacciones</p>
+                <p className="text-bloomberg-muted uppercase tracking-widest text-[9px]">Transactions</p>
                 <p className="font-bold text-bloomberg-text text-sm">{xtbResult.imported}</p>
               </div>
               <div>
-                <p className="text-bloomberg-muted uppercase tracking-widest text-[9px]">Actualizadas</p>
+                <p className="text-bloomberg-muted uppercase tracking-widest text-[9px]">Updated</p>
                 <p className="font-bold text-bloomberg-gold text-sm">{xtbResult.positions_updated}</p>
               </div>
               <div>
-                <p className="text-bloomberg-muted uppercase tracking-widest text-[9px]">Creadas</p>
+                <p className="text-bloomberg-muted uppercase tracking-widest text-[9px]">Created</p>
                 <p className="font-bold text-green-400 text-sm">{xtbResult.positions_created}</p>
               </div>
               <div>
-                <p className="text-bloomberg-muted uppercase tracking-widest text-[9px]">Cerradas (vendidas)</p>
+                <p className="text-bloomberg-muted uppercase tracking-widest text-[9px]">Closed (sold)</p>
                 <p className="font-bold text-bloomberg-muted text-sm">{xtbResult.positions_zeroed}</p>
               </div>
             </div>
             {xtbResult.deposits_usd > 0 && (
               <p className="text-bloomberg-muted">
-                Depósitos detectados: <span className="text-bloomberg-gold font-bold">${xtbResult.deposits_usd.toFixed(2)}</span>
-                <span className="text-bloomberg-muted ml-2">→ actualiza el saldo en <span className="text-bloomberg-text">Broker Cash</span> abajo si hay cash sin invertir</span>
+                Deposits detected: <span className="text-bloomberg-gold font-bold">${xtbResult.deposits_usd.toFixed(2)}</span>
+                <span className="text-bloomberg-muted ml-2">→ update the balance in <span className="text-bloomberg-text">Broker Cash</span> below if there is uninvested cash</span>
               </p>
             )}
             {xtbResult.reconciled_tickers.length > 0 && (
-              <p className="text-bloomberg-muted">Tickers reconciliados: <span className="text-bloomberg-text">{xtbResult.reconciled_tickers.join(", ")}</span></p>
+              <p className="text-bloomberg-muted">Tickers reconciled: <span className="text-bloomberg-text">{xtbResult.reconciled_tickers.join(", ")}</span></p>
             )}
             {xtbResult.agent_summary && (
               <div className="border-l-2 border-bloomberg-gold pl-2 mt-2">
-                <p className="text-[9px] text-bloomberg-gold uppercase tracking-widest mb-0.5">Validación IA</p>
+                <p className="text-[9px] text-bloomberg-gold uppercase tracking-widest mb-0.5">AI Validation</p>
                 <p className="text-bloomberg-text leading-relaxed">{xtbResult.agent_summary}</p>
               </div>
             )}

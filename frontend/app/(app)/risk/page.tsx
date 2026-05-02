@@ -125,44 +125,61 @@ export default function RiskPage() {
 
       {/* Correlation heatmap */}
       {corr && corr.tickers?.length > 0 && (
-        <div className="bbg-card overflow-x-auto">
+        <div className="bbg-card">
           <p className="bbg-header">Correlation Heatmap</p>
           <p className="text-bloomberg-muted text-[10px] mb-3">
-            Retornos diarios. <span className="text-red-400">Rojo</span> = alta correlación (riesgo concentración). <span className="text-blue-400">Azul</span> = negativa (diversificación). <span className="text-bloomberg-gold">Dorado</span> = diagonal.
+            Daily returns. <span className="text-red-400">Red</span> = high correlation (concentration risk). <span className="text-blue-400">Blue</span> = negative (diversification benefit). <span className="text-bloomberg-gold">Gold</span> = diagonal.
           </p>
-          <div className="inline-block min-w-full">
-            <div className="flex">
-              <div className="w-20 shrink-0" />
-              {corr.tickers.map((t: string) => (
-                <div key={t} className="w-14 shrink-0 text-[8px] text-bloomberg-muted text-center truncate px-0.5 pb-1 font-bold" title={t}>
-                  {t.length > 7 ? t.slice(0, 7) : t}
+          <div className="overflow-x-auto">
+            <div style={{ minWidth: `${corr.tickers.length * 60 + 100}px` }}>
+              <div className="flex">
+                <div className="w-24 shrink-0" />
+                {corr.tickers.map((t: string) => (
+                  <div key={t} className="w-14 shrink-0 text-[8px] text-bloomberg-muted text-center truncate px-0.5 pb-1 font-bold" title={t}>
+                    {t.length > 8 ? t.slice(0, 8) : t}
+                  </div>
+                ))}
+              </div>
+              {corr.tickers.map((rowTicker: string, i: number) => (
+                <div key={rowTicker} className="flex items-center">
+                  <div className="w-24 shrink-0 text-[9px] text-bloomberg-gold font-bold truncate pr-2">{rowTicker}</div>
+                  {corr.matrix[i].map((val: number, j: number) => {
+                    const isDiag = i === j;
+                    const abs = Math.abs(val);
+                    let bg = "";
+                    let textColor = "#cbd5e1";
+                    if (isDiag) {
+                      bg = "rgba(243,167,18,0.35)";
+                      textColor = "#f3a712";
+                    } else if (val > 0.7) {
+                      bg = `rgba(220,38,38,${0.3 + abs * 0.5})`;
+                      textColor = "#fca5a5";
+                    } else if (val > 0.4) {
+                      bg = `rgba(251,146,60,${0.2 + abs * 0.5})`;
+                      textColor = "#fed7aa";
+                    } else if (val > 0.15) {
+                      bg = `rgba(251,191,36,${0.15 + abs * 0.4})`;
+                      textColor = "#fde68a";
+                    } else if (val < -0.3) {
+                      bg = `rgba(59,130,246,${0.2 + abs * 0.5})`;
+                      textColor = "#bfdbfe";
+                    } else {
+                      bg = "rgba(30,41,59,0.6)";
+                      textColor = "#94a3b8";
+                    }
+                    return (
+                      <div key={j}
+                        className="w-14 h-10 shrink-0 flex items-center justify-center text-[9px] font-bold border border-bloomberg-bg/10 cursor-default"
+                        style={{ background: bg, color: textColor }}
+                        title={`${rowTicker} ↔ ${corr.tickers[j]}: ${val.toFixed(3)}`}
+                      >
+                        {val.toFixed(2)}
+                      </div>
+                    );
+                  })}
                 </div>
               ))}
             </div>
-            {corr.tickers.map((rowTicker: string, i: number) => (
-              <div key={rowTicker} className="flex items-center">
-                <div className="w-20 shrink-0 text-[9px] text-bloomberg-gold font-bold truncate pr-2">{rowTicker}</div>
-                {corr.matrix[i].map((val: number, j: number) => {
-                  const isDiag = i === j;
-                  const abs = Math.abs(val);
-                  let bg = "";
-                  if (isDiag) bg = "rgba(243,167,18,0.3)";
-                  else if (val > 0.7) bg = `rgba(255,77,77,${0.25 + abs * 0.55})`;
-                  else if (val > 0.3) bg = `rgba(255,140,0,${abs * 0.45})`;
-                  else if (val < -0.3) bg = `rgba(77,130,255,${abs * 0.45})`;
-                  else bg = "rgba(30,37,48,0.7)";
-                  return (
-                    <div key={j}
-                      className="w-14 h-10 shrink-0 flex items-center justify-center text-[8px] font-bold border border-bloomberg-bg/20 cursor-default"
-                      style={{ background: bg, color: isDiag ? "#f3a712" : "#e2e8f0" }}
-                      title={`${rowTicker} ↔ ${corr.tickers[j]}: ${val.toFixed(3)}`}
-                    >
-                      {val.toFixed(2)}
-                    </div>
-                  );
-                })}
-              </div>
-            ))}
           </div>
         </div>
       )}

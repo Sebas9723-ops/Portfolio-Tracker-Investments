@@ -109,7 +109,12 @@ def compute_extended_ratios(
         return {}
     p = portfolio_returns.dropna()
     b = benchmark_returns.dropna().reindex(p.index).dropna()
-    p = p.reindex(b.index)
+    # Only align p to benchmark when benchmark is non-empty; otherwise keep all p data
+    # (empty benchmark → health score Sharpe was zeroed because p became empty)
+    if not b.empty:
+        p = p.reindex(b.index).dropna()
+    if p.empty:
+        return {}
 
     mu_p = p.mean() * 252
     mu_b = b.mean() * 252

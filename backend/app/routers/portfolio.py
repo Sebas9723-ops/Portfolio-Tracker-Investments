@@ -335,33 +335,37 @@ def get_portfolio_history(
             total += shares * float(price) * fx
 
         if total > 0:
-            result.append({"date": day_str, "value": round(total, 2)})
+            point: dict = {"date": day_str, "value": round(total, 2)}
+            # Primary: use cumulative cash-deployed from BUY transactions (historical FX).
+            # This is a true step-function of money put in and never drops due to FX moves.
+            if has_buy_txs and cumulative_invested > 0:
+                point["invested"] = round(cumulative_invested, 2)
+            result.append(point)
 
-    # ── Load capital snapshots and interpolate invested per day ───────────────
-    snap_res = (
-        db.table("portfolio_snapshots")
-        .select("snapshot_date,invested_base")
-        .eq("user_id", user_id)
-        .not_.is_("invested_base", "null")
-        .order("snapshot_date")
-        .execute()
-    )
-    capital_snaps = {s["snapshot_date"]: s["invested_base"] for s in (snap_res.data or []) if s.get("invested_base")}
-
-    if capital_snaps:
-        # Forward-fill: for each day, use the most recent snapshot on or before that date
-        snap_dates = sorted(capital_snaps.keys())
-        for point in result:
-            d = point["date"]
-            # Find last snapshot <= d
-            invested_val = None
-            for sd in snap_dates:
-                if sd <= d:
-                    invested_val = capital_snaps[sd]
-                else:
-                    break
-            if invested_val is not None:
-                point["invested"] = round(invested_val, 2)
+    # ── Load capital snapshots — only used when there are no BUY transactions ──
+    # (Snapshot-based invested_base recalculates avg_cost×FX and can drop on FX swings)
+    if not has_buy_txs:
+        snap_res = (
+            db.table("portfolio_snapshots")
+            .select("snapshot_date,invested_base")
+            .eq("user_id", user_id)
+            .not_.is_("invested_base", "null")
+            .order("snapshot_date")
+            .execute()
+        )
+        capital_snaps = {s["snapshot_date"]: s["invested_base"] for s in (snap_res.data or []) if s.get("invested_base")}
+        if capital_snaps:
+            snap_dates = sorted(capital_snaps.keys())
+            for point in result:
+                d = point["date"]
+                invested_val = None
+                for sd in snap_dates:
+                    if sd <= d:
+                        invested_val = capital_snaps[sd]
+                    else:
+                        break
+                if invested_val is not None:
+                    point["invested"] = round(invested_val, 2)
 
     # Guarantee strict ascending order and no duplicate dates so the chart
     # never throws an assertion error regardless of yfinance quirks.

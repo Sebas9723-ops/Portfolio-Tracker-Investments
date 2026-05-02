@@ -981,7 +981,7 @@ def _compute_mwr(
     cash_flows: list[tuple] = []
 
     for tx in sorted(transactions, key=lambda x: (x.get("date") or "")[:10]):
-        action = tx.get("action", "")
+        action = (tx.get("action") or "").upper().strip()
         if action not in ("BUY", "SELL", "DIVIDEND"):
             continue
         date_str = (tx.get("date") or "")[:10]
@@ -1029,7 +1029,9 @@ def _compute_mwr(
 
     try:
         from scipy.optimize import brentq
-        rate = brentq(_npv, -0.999, 100.0, maxiter=1000, xtol=1e-8)
+        # Upper bound 10 000 (1 000 000 %) handles very short holding periods
+        # where annualised XIRR can be extremely high
+        rate = brentq(_npv, -0.999, 10_000.0, maxiter=2000, xtol=1e-8)
         return round(rate * 100, 2)
     except Exception:
         return None
