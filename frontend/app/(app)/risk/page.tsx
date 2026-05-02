@@ -33,7 +33,7 @@ export default function RiskPage() {
             {[0.90, 0.95, 0.99].map((c) => (
               <button key={c} onClick={() => setConfidence(c)}
                 className={`text-[10px] px-2 py-0.5 border ${confidence === c ? "border-bloomberg-gold text-bloomberg-gold" : "border-bloomberg-border text-bloomberg-muted"}`}>
-                {fmtPct((1 - c) * 100)} tail
+                {((1 - c) * 100).toFixed(0)}% tail
               </button>
             ))}
           </div>
@@ -147,25 +147,28 @@ export default function RiskPage() {
                     const isDiag = i === j;
                     const abs = Math.abs(val);
                     let bg = "";
-                    let textColor = "#cbd5e1";
+                    let textColor = "#ffffff";
                     if (isDiag) {
-                      bg = "rgba(243,167,18,0.35)";
-                      textColor = "#f3a712";
+                      bg = "#f3a712";
+                      textColor = "#0b0f14";
                     } else if (val > 0.7) {
-                      bg = `rgba(220,38,38,${0.3 + abs * 0.5})`;
-                      textColor = "#fca5a5";
+                      bg = `rgba(200,20,20,${0.6 + abs * 0.4})`;
+                      textColor = "#ffffff";
                     } else if (val > 0.4) {
-                      bg = `rgba(251,146,60,${0.2 + abs * 0.5})`;
-                      textColor = "#fed7aa";
+                      bg = `rgba(234,88,12,${0.55 + abs * 0.35})`;
+                      textColor = "#ffffff";
                     } else if (val > 0.15) {
-                      bg = `rgba(251,191,36,${0.15 + abs * 0.4})`;
-                      textColor = "#fde68a";
+                      bg = `rgba(202,138,4,${0.45 + abs * 0.4})`;
+                      textColor = "#ffffff";
                     } else if (val < -0.3) {
-                      bg = `rgba(59,130,246,${0.2 + abs * 0.5})`;
-                      textColor = "#bfdbfe";
+                      bg = `rgba(37,99,235,${0.55 + abs * 0.4})`;
+                      textColor = "#ffffff";
+                    } else if (val < 0) {
+                      bg = `rgba(37,99,235,${0.15 + abs * 0.3})`;
+                      textColor = "#93c5fd";
                     } else {
-                      bg = "rgba(30,41,59,0.6)";
-                      textColor = "#94a3b8";
+                      bg = "rgba(30,41,59,0.5)";
+                      textColor = "#64748b";
                     }
                     return (
                       <div key={j}

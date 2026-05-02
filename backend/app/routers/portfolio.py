@@ -376,6 +376,35 @@ def get_portfolio_history(
         if item["date"] not in seen:
             seen.add(item["date"])
             deduped.append(item)
+
+    # ── Append today's live value ──────────────────────────────────────────────
+    # yfinance end=today (exclusive) means the last bar is yesterday's close.
+    # Append a live-quote point for today so the chart tail matches the header.
+    try:
+        today_str = str(date.today())
+        if not deduped or deduped[-1]["date"] < today_str:
+            live_quotes = get_quotes([t for t, s in current_shares.items() if s > 0])
+            live_ccys = list(set(get_native_currency(t) for t, s in current_shares.items() if s > 0))
+            live_fx = get_fx_rates(live_ccys, base=base_currency)
+            live_total = 0.0
+            for ticker, shares in current_shares.items():
+                if shares <= 0:
+                    continue
+                q = live_quotes.get(ticker)
+                price = float((q or {}).get("price") or 0)
+                if price <= 0:
+                    continue
+                ccy = get_native_currency(ticker)
+                fx = live_fx.get(ccy, 1.0)
+                live_total += shares * price * fx
+            if live_total > 0:
+                live_point: dict = {"date": today_str, "value": round(live_total, 2)}
+                if has_buy_txs and cumulative_invested > 0:
+                    live_point["invested"] = round(cumulative_invested, 2)
+                deduped.append(live_point)
+    except Exception:
+        pass
+
     return deduped
 
 
