@@ -1,7 +1,8 @@
 "use client";
 import { useState, useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchAnalytics, fetchRollingMetrics, fetchExtendedAnalytics, fetchVolRegime, fetchQuantAdvanced, fetchEquityCurve, fetchVsBenchmark, fetchRecommendations, fetchTaxLoss, fetchHealthScore, fetchAttribution, fetchPortfolioNews, runKellySizing, runMonteCarlo } from "@/lib/api/analytics";
+import { fetchAnalytics, fetchRollingMetrics, fetchExtendedAnalytics, fetchVolRegime, fetchQuantAdvanced, fetchEquityCurve, fetchVsBenchmark, fetchRecommendations, fetchTaxLoss, fetchHealthScore, fetchAttribution, fetchPortfolioNews, runKellySizing, runMonteCarlo, fetchMwr, fetchBenchmarkOverlay, fetchFixedIncome } from "@/lib/api/analytics";
+import { fetchGeographicExposure, fetchEtfOverlap } from "@/lib/api/portfolio";
 import { fetchLastAgentResults, runAgentsNow, refreshResearchTargets } from "@/lib/api/agents";
 import type { MacroAgentResult, DoctorAgentResult } from "@/lib/api/agents";
 import type {
@@ -12,7 +13,7 @@ import { Card, Metric, Text, BadgeDelta } from "@tremor/react";
 import { fmtPct, fmtDate, MONTHS_SHORT } from "@/lib/formatters";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
-  ComposedChart, Area, ReferenceLine, ReferenceArea,
+  ComposedChart, Area, ReferenceLine, ReferenceArea, BarChart, Bar, Cell,
 } from "recharts";
 
 const PERIODS = ["6m", "1y", "2y", "5y"];
@@ -151,6 +152,41 @@ export default function AnalyticsPage() {
   const { data: lastAgentResults, refetch: refetchAgents } = useQuery({
     queryKey: ["last-agent-results"],
     queryFn: fetchLastAgentResults,
+    staleTime: 10 * 60 * 1000,
+  });
+
+  // ── New Vumi-inspired features ──
+  const { data: mwrData } = useQuery({
+    queryKey: ["mwr"],
+    queryFn: fetchMwr,
+    staleTime: 10 * 60 * 1000,
+  });
+
+  const [overlayBenchmarks, setOverlayBenchmarks] = useState("VOO,QQQ,GLD,AGG");
+  const [activeOverlayTickers, setActiveOverlayTickers] = useState<Set<string>>(
+    new Set(["Portfolio", "VOO", "QQQ", "GLD", "AGG"])
+  );
+  const { data: benchmarkOverlay } = useQuery({
+    queryKey: ["benchmark-overlay", period, overlayBenchmarks],
+    queryFn: () => fetchBenchmarkOverlay(period, overlayBenchmarks),
+    staleTime: 10 * 60 * 1000,
+  });
+
+  const { data: geoExposure } = useQuery({
+    queryKey: ["geographic-exposure"],
+    queryFn: fetchGeographicExposure,
+    staleTime: 10 * 60 * 1000,
+  });
+
+  const { data: etfOverlap } = useQuery({
+    queryKey: ["etf-overlap"],
+    queryFn: fetchEtfOverlap,
+    staleTime: 15 * 60 * 1000,
+  });
+
+  const { data: fixedIncome } = useQuery({
+    queryKey: ["fixed-income"],
+    queryFn: fetchFixedIncome,
     staleTime: 10 * 60 * 1000,
   });
 
@@ -541,6 +577,7 @@ export default function AnalyticsPage() {
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 sm:gap-3">
         {[
           { label: "TWR",         value: metrics.twr != null ? fmtPct(metrics.twr) : "—",                                  delta: metrics.twr != null ? ((metrics.twr ?? 0) >= 0 ? "increase" : "decrease") : undefined },
+          { label: "MWR",         value: mwrData?.mwr != null ? fmtPct(mwrData.mwr) : "—",                                 delta: mwrData?.mwr != null ? ((mwrData.mwr ?? 0) >= 0 ? "increase" : "decrease") : undefined, sub: "XIRR" },
           { label: "Ann. Return", value: metrics.annualized_return != null ? fmtPct(metrics.annualized_return) : "—",       delta: metrics.annualized_return != null ? ((metrics.annualized_return ?? 0) >= 0 ? "increase" : "decrease") : undefined },
           { label: "Sharpe",      value: metrics.sharpe?.toFixed(3) ?? "—",                                                 delta: undefined },
           { label: "Sortino",     value: metrics.sortino?.toFixed(3) ?? "—",                                                delta: undefined },
@@ -1277,6 +1314,253 @@ export default function AnalyticsPage() {
               </tr>
             </tfoot>
           </table>
+        </div>
+      )}
+
+      {/* ── Benchmark Overlay ── */}
+      {benchmarkOverlay && benchmarkOverlay.series.length > 0 && (() => {
+        const OVERLAY_COLORS: Record<string, string> = {
+          Portfolio: "#f3a712",
+          VOO: "#4dff4d",
+          QQQ: "#38b2ff",
+          GLD: "#fb923c",
+          AGG: "#c084fc",
+          VWCE: "#34d399",
+          SPY: "#f87171",
+          BND: "#a78bfa",
+        };
+        const tickers = benchmarkOverlay.tickers;
+        const allTickersSet = new Set(tickers);
+        return (
+          <div className="bbg-card">
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <p className="bbg-header mb-0">Benchmark Overlay — Normalized to 100</p>
+              <div className="flex flex-wrap gap-1">
+                {tickers.map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => setActiveOverlayTickers((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(t) && next.size > 1) next.delete(t);
+                      else next.add(t);
+                      return next;
+                    })}
+                    className={`text-[9px] px-2 py-0.5 border font-bold uppercase tracking-wider transition-opacity ${activeOverlayTickers.has(t) ? "opacity-100" : "opacity-30"}`}
+                    style={{ borderColor: OVERLAY_COLORS[t] ?? "#666", color: OVERLAY_COLORS[t] ?? "#aaa" }}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {benchmarkOverlay.inception_date && (
+              <p className="text-bloomberg-muted text-[9px] mb-2">
+                Inception: {benchmarkOverlay.inception_date} · Portfolio based on daily snapshots
+              </p>
+            )}
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={benchmarkOverlay.series} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e2535" />
+                <XAxis dataKey="date" tick={{ fontSize: 8, fill: "#8a9bb5" }} tickFormatter={(d) => d?.slice(0, 7)} interval="preserveStartEnd" />
+                <YAxis tick={{ fontSize: 8, fill: "#8a9bb5" }} width={38} tickFormatter={(v) => `${v.toFixed(0)}`} />
+                <Tooltip
+                  contentStyle={{ background: "#0b0f14", border: "1px solid #1e2535", fontSize: 10 }}
+                  formatter={(v: number, name: string) => [`${v?.toFixed(1)}`, name]}
+                />
+                {tickers.filter((t) => activeOverlayTickers.has(t) && allTickersSet.has(t)).map((t) => (
+                  <Line
+                    key={t}
+                    type="monotone"
+                    dataKey={t}
+                    stroke={OVERLAY_COLORS[t] ?? "#888"}
+                    strokeWidth={t === "Portfolio" ? 2.5 : 1.5}
+                    dot={false}
+                    connectNulls
+                  />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        );
+      })()}
+
+      {/* ── Geographic Exposure ── */}
+      {geoExposure && Object.keys(geoExposure.regions).length > 0 && (() => {
+        const REGION_COLORS: Record<string, string> = {
+          "North America":    "#f3a712",
+          "Europe":           "#38b2ff",
+          "Emerging Markets": "#4dff4d",
+          "Pacific":          "#fb923c",
+          "Gold":             "#ffd700",
+          "Commodities":      "#c084fc",
+        };
+        const regionEntries = Object.entries(geoExposure.regions);
+        const barData = regionEntries.map(([name, value]) => ({ name, value }));
+        return (
+          <div className="bbg-card">
+            <p className="bbg-header">Geographic Exposure</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Bar chart */}
+              <div>
+                <ResponsiveContainer width="100%" height={160}>
+                  <BarChart data={barData} layout="vertical" margin={{ top: 0, right: 10, bottom: 0, left: 10 }}>
+                    <XAxis type="number" tick={{ fontSize: 8, fill: "#8a9bb5" }} tickFormatter={(v) => `${v.toFixed(0)}%`} />
+                    <YAxis type="category" dataKey="name" tick={{ fontSize: 9, fill: "#8a9bb5" }} width={110} />
+                    <Tooltip
+                      contentStyle={{ background: "#0b0f14", border: "1px solid #1e2535", fontSize: 10 }}
+                      formatter={(v: number) => [`${v.toFixed(1)}%`, "Weight"]}
+                    />
+                    <Bar dataKey="value" radius={[0, 2, 2, 0]}>
+                      {barData.map((entry) => (
+                        <Cell key={entry.name} fill={REGION_COLORS[entry.name] ?? "#6b7280"} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              {/* Per-ticker table */}
+              <div className="overflow-x-auto">
+                <table className="bbg-table text-[9px] w-full">
+                  <thead>
+                    <tr>
+                      <th>Ticker</th>
+                      {regionEntries.slice(0, 4).map(([r]) => (
+                        <th key={r} className="text-right" title={r}>{r.split(" ")[0]}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {geoExposure.by_ticker.map((row) => (
+                      <tr key={row.ticker}>
+                        <td className="text-bloomberg-gold font-bold">{row.ticker}</td>
+                        {regionEntries.slice(0, 4).map(([r]) => (
+                          <td key={r} className="text-right text-bloomberg-muted">
+                            {row.regions[r] ? `${row.regions[r].toFixed(0)}%` : "—"}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── ETF Look-Through / Overlap ── */}
+      {etfOverlap && (etfOverlap.top_holdings.length > 0 || etfOverlap.by_etf.some(e => e.has_data)) && (
+        <div className="bbg-card">
+          <div className="flex items-center justify-between mb-3">
+            <p className="bbg-header mb-0">ETF Look-Through — Underlying Holdings</p>
+            {etfOverlap.overlap_pct > 0 && (
+              <span className={`text-[10px] font-bold px-2 py-0.5 border ${etfOverlap.overlap_pct > 20 ? "border-red-500/40 text-red-400 bg-red-500/5" : "border-bloomberg-gold/40 text-bloomberg-gold bg-bloomberg-gold/5"}`}>
+                Overlap: {etfOverlap.overlap_pct.toFixed(1)}%
+              </span>
+            )}
+          </div>
+          <p className="text-bloomberg-muted text-[9px] mb-3">
+            {etfOverlap.n_etfs_with_data} of {etfOverlap.by_etf.length} ETFs with holdings data · Weights = ETF weight × holding % in ETF
+          </p>
+          {etfOverlap.top_holdings.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="bbg-table text-[10px]">
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Name</th>
+                    <th className="text-right">Portfolio Weight</th>
+                    <th className="text-right">In ETFs</th>
+                    <th>Sources</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {etfOverlap.top_holdings.slice(0, 15).map((h) => (
+                    <tr key={h.symbol}>
+                      <td className="text-bloomberg-gold font-bold">{h.symbol}</td>
+                      <td className="text-bloomberg-muted max-w-[120px] truncate" title={h.name}>{h.name}</td>
+                      <td className="text-right font-medium">{h.total_weight_pct.toFixed(2)}%</td>
+                      <td className={`text-right font-bold ${h.n_etfs >= 3 ? "text-red-400" : h.n_etfs >= 2 ? "text-bloomberg-gold" : "text-bloomberg-muted"}`}>
+                        {h.n_etfs}
+                      </td>
+                      <td className="text-bloomberg-muted text-[9px]">
+                        {h.sources.map((s) => s.etf).join(", ")}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {etfOverlap.top_holdings.length === 0 && etfOverlap.n_etfs_with_data === 0 && (
+            <p className="text-bloomberg-muted text-[10px]">Holdings data not available for these ETFs (common for non-US ETFs). Try again later.</p>
+          )}
+        </div>
+      )}
+
+      {/* ── Fixed Income Analytics ── */}
+      {fixedIncome && (
+        <div className="bbg-card">
+          <p className="bbg-header">Fixed Income Analytics</p>
+          {fixedIncome.has_fixed_income ? (
+            <>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
+                <div className="border border-bloomberg-border p-2">
+                  <p className="text-bloomberg-muted text-[9px] uppercase">FI Weight</p>
+                  <p className="text-bloomberg-gold text-sm font-bold mt-0.5">{fixedIncome.fixed_income_weight_pct.toFixed(1)}%</p>
+                </div>
+                <div className="border border-bloomberg-border p-2">
+                  <p className="text-bloomberg-muted text-[9px] uppercase">Eff. Duration</p>
+                  <p className="text-bloomberg-text text-sm font-bold mt-0.5">
+                    {fixedIncome.effective_duration != null ? `${fixedIncome.effective_duration.toFixed(1)}y` : "—"}
+                  </p>
+                </div>
+                <div className="border border-bloomberg-border p-2">
+                  <p className="text-bloomberg-muted text-[9px] uppercase">Portfolio YTM</p>
+                  <p className="text-bloomberg-text text-sm font-bold mt-0.5">
+                    {fixedIncome.portfolio_ytm_pct != null ? `${fixedIncome.portfolio_ytm_pct.toFixed(2)}%` : "—"}
+                  </p>
+                </div>
+                <div className="border border-bloomberg-border p-2">
+                  <p className="text-bloomberg-muted text-[9px] uppercase">Rate +1% Impact</p>
+                  <p className={`text-sm font-bold mt-0.5 ${(fixedIncome.rate_sensitivity_1pct ?? 0) < 0 ? "text-red-400" : "text-green-400"}`}>
+                    {fixedIncome.rate_sensitivity_1pct != null ? `${fixedIncome.rate_sensitivity_1pct.toFixed(1)}%` : "—"}
+                  </p>
+                </div>
+              </div>
+              {fixedIncome.positions.length > 0 && (
+                <table className="bbg-table text-[10px]">
+                  <thead>
+                    <tr>
+                      <th>Ticker</th>
+                      <th>Name</th>
+                      <th className="text-right">Weight</th>
+                      <th className="text-right">Duration</th>
+                      <th className="text-right">YTM</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fixedIncome.positions.map((p) => (
+                      <tr key={p.ticker}>
+                        <td className="text-bloomberg-gold font-bold">{p.ticker}</td>
+                        <td className="text-bloomberg-muted max-w-[140px] truncate" title={p.name}>{p.name}</td>
+                        <td className="text-right">{p.weight_pct.toFixed(1)}%</td>
+                        <td className="text-right text-bloomberg-muted">{p.duration != null ? `${p.duration.toFixed(1)}y` : "—"}</td>
+                        <td className="text-right text-bloomberg-muted">{p.ytm_pct != null ? `${p.ytm_pct.toFixed(2)}%` : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </>
+          ) : (
+            <div className="flex items-center gap-3 py-2">
+              <span className="text-bloomberg-muted text-[10px]">No fixed income positions detected in portfolio.</span>
+              <span className="text-[9px] text-bloomberg-muted border border-bloomberg-border/40 px-2 py-0.5">
+                Consider adding bond ETFs (AGG, BND, TLT) for diversification.
+              </span>
+            </div>
+          )}
         </div>
       )}
 

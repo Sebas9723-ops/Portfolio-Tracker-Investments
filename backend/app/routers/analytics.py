@@ -965,3 +965,357 @@ def portfolio_news(
     items.sort(key=lambda x: x.get("published", ""), reverse=True)
 
     return {"items": items[:50]}  # cap at 50 total
+
+
+# ── MWR (Money-Weighted Return / XIRR) ───────────────────────────────────────
+
+def _compute_mwr(
+    transactions: list[dict],
+    current_value_base: float,
+    fx_rates: dict,
+    base_currency: str,
+) -> float | None:
+    """XIRR-based Money-Weighted Return from transaction history."""
+    from datetime import date as _date
+
+    cash_flows: list[tuple] = []
+
+    for tx in sorted(transactions, key=lambda x: (x.get("date") or "")[:10]):
+        action = tx.get("action", "")
+        if action not in ("BUY", "SELL", "DIVIDEND"):
+            continue
+        date_str = (tx.get("date") or "")[:10]
+        if not date_str:
+            continue
+        try:
+            tx_date = _date.fromisoformat(date_str)
+        except Exception:
+            continue
+
+        qty = float(tx.get("quantity") or 0)
+        price = float(tx.get("price_native") or 0)
+        fee = float(tx.get("fee_native") or 0)
+        ccy = tx.get("currency") or base_currency
+        fx = fx_rates.get(ccy, 1.0)
+
+        if action == "BUY":
+            amount = -(qty * price + fee) * fx   # money out
+        elif action == "SELL":
+            amount = (qty * price - fee) * fx    # money in
+        else:  # DIVIDEND
+            amount = qty * price * fx            # income received
+
+        cash_flows.append((tx_date, amount))
+
+    if not cash_flows:
+        return None
+
+    # Terminal cash flow = current portfolio value (what you'd receive if sold today)
+    from datetime import date as _date2
+    cash_flows.append((_date2.today(), current_value_base))
+    cash_flows.sort(key=lambda x: x[0])
+
+    if not any(a < 0 for a in [cf[1] for cf in cash_flows]):
+        return None  # no investments recorded
+
+    t0 = cash_flows[0][0]
+    days = [(cf[0] - t0).days for cf in cash_flows]
+    amounts = [cf[1] for cf in cash_flows]
+
+    def _npv(r: float) -> float:
+        if r <= -1.0:
+            return float("inf")
+        return sum(a / (1.0 + r) ** (d / 365.0) for a, d in zip(amounts, days))
+
+    try:
+        from scipy.optimize import brentq
+        rate = brentq(_npv, -0.999, 100.0, maxiter=1000, xtol=1e-8)
+        return round(rate * 100, 2)
+    except Exception:
+        return None
+
+
+@router.get("/mwr")
+def mwr_return(user_id: str = Depends(get_user_id)):
+    """Money-Weighted Return (XIRR) computed from all transactions."""
+    from app.services.fx_service import get_fx_rates
+    from app.services.exchange_classifier import get_native_currency
+
+    db = get_admin_client()
+    settings_res = (
+        db.table("user_settings").select("base_currency").eq("user_id", user_id).maybe_single().execute()
+    )
+    base_currency = (settings_res.data or {}).get("base_currency", "USD")
+
+    tx_res = (
+        db.table("transactions").select("*").eq("user_id", user_id).order("date").execute()
+    )
+    transactions = tx_res.data or []
+
+    pos_res = db.table("positions").select("ticker,shares").eq("user_id", user_id).execute()
+    positions = [p for p in (pos_res.data or []) if float(p.get("shares", 0)) > 0]
+    if not positions:
+        return {"mwr": None, "n_transactions": 0}
+
+    tickers = [p["ticker"] for p in positions]
+    shares_map = {p["ticker"]: float(p["shares"]) for p in positions}
+
+    quotes = get_quotes(tickers)
+    exchange_currencies = [get_native_currency(t) for t in tickers]
+    tx_ccys = list({tx.get("currency", base_currency) for tx in transactions if tx.get("currency")})
+    all_ccys = list(set(exchange_currencies + tx_ccys))
+    fx_rates = get_fx_rates(all_ccys, base=base_currency)
+
+    current_value = 0.0
+    for t in tickers:
+        price = float((quotes.get(t) or {}).get("price") or 0)
+        shares = shares_map.get(t, 0.0)
+        ccy = get_native_currency(t)
+        fx = fx_rates.get(ccy, 1.0)
+        current_value += price * shares * fx
+
+    if current_value <= 0:
+        return {"mwr": None, "n_transactions": len(transactions)}
+
+    mwr = _compute_mwr(transactions, current_value, fx_rates, base_currency)
+    n_buy_sell = sum(1 for tx in transactions if tx.get("action") in ("BUY", "SELL"))
+
+    return {"mwr": mwr, "n_transactions": n_buy_sell}
+
+
+# ── Benchmark Overlay ─────────────────────────────────────────────────────────
+
+@router.get("/benchmark-overlay")
+def benchmark_overlay(
+    period: str = Query(default="1y"),
+    benchmarks: str = Query(default="VOO,QQQ,GLD,AGG"),
+    user_id: str = Depends(get_user_id),
+):
+    """
+    Portfolio vs multiple benchmarks, all normalized to 100 at inception.
+    Uses portfolio_snapshots for portfolio; yfinance for benchmarks.
+    Returns: {series: [{date, Portfolio, VOO, ...}], tickers, inception_date}
+    """
+    import pandas as pd
+    from datetime import date, timedelta
+
+    period_days = {"6m": 180, "1y": 365, "2y": 730, "3y": 1095, "all": 9999}
+    days = period_days.get(period, 365)
+    since = str(date.today() - timedelta(days=days))
+
+    db = get_admin_client()
+    res = (
+        db.table("portfolio_snapshots")
+        .select("snapshot_date,total_value_base")
+        .eq("user_id", user_id)
+        .gte("snapshot_date", since)
+        .order("snapshot_date", desc=False)
+        .execute()
+    )
+    rows = res.data or []
+    if len(rows) < 2:
+        return {"series": [], "tickers": [], "inception_date": None}
+
+    inception_date = rows[0]["snapshot_date"]
+    port_base = float(rows[0]["total_value_base"])
+    if port_base <= 0:
+        return {"series": [], "tickers": [], "inception_date": inception_date}
+
+    port_vals = {
+        r["snapshot_date"]: float(r["total_value_base"]) / port_base * 100.0
+        for r in rows
+    }
+
+    bm_tickers = [t.strip().upper() for t in benchmarks.split(",") if t.strip()][:6]
+
+    bm_series: dict[str, dict[str, float]] = {}
+    if bm_tickers:
+        bm_hist = get_historical_multi(bm_tickers, period=period)
+        for bm in bm_tickers:
+            df = bm_hist.get(bm)
+            if df is None or df.empty:
+                continue
+            col = "Close" if "Close" in df.columns else df.columns[0]
+            filtered = df[col].dropna()
+            filtered = filtered[filtered.index >= pd.Timestamp(inception_date)]
+            if filtered.empty:
+                continue
+            base_price = float(filtered.iloc[0])
+            if base_price <= 0:
+                continue
+            bm_series[bm] = {
+                str(ts.date()): round(float(v) / base_price * 100.0, 4)
+                for ts, v in filtered.items()
+            }
+
+    all_dates = sorted(
+        set(list(port_vals.keys())) | {d for s in bm_series.values() for d in s.keys()}
+    )
+    active_tickers = ["Portfolio"] + list(bm_series.keys())
+    last_vals: dict[str, float | None] = {t: None for t in active_tickers}
+
+    series = []
+    for d in all_dates:
+        if d < inception_date:
+            continue
+        if d in port_vals:
+            last_vals["Portfolio"] = port_vals[d]
+        for bm in bm_series:
+            if d in bm_series[bm]:
+                last_vals[bm] = bm_series[bm][d]
+
+        if last_vals["Portfolio"] is None:
+            continue
+
+        row: dict = {"date": d, "Portfolio": round(last_vals["Portfolio"], 4)}
+        for bm in bm_series:
+            row[bm] = last_vals[bm]
+        series.append(row)
+
+    return {
+        "series": series,
+        "tickers": active_tickers,
+        "inception_date": inception_date,
+    }
+
+
+# ── Fixed Income Analytics ────────────────────────────────────────────────────
+
+_BOND_KEYWORDS = [
+    "bond", "fixed income", "treasury", "gilt", "sovereign",
+    "credit", "bund", "aggregate", "investment grade", "high yield",
+    "btp", "oat", "coupon", "duration", "maturity",
+]
+
+_BOND_CATEGORIES = {
+    "intermediate-term bond", "short-term bond", "long-term bond",
+    "corporate bond", "government bond", "high yield bond",
+    "multisector bond", "inflation-protected bond", "bond",
+    "world bond", "emerging markets bond", "ultrashort bond",
+}
+
+
+def _is_fixed_income(ticker: str, info: dict) -> bool:
+    qt = (info.get("quoteType") or "").lower()
+    if qt in ("fixed_income", "bond"):
+        return True
+    cat = (info.get("category") or "").lower()
+    if any(c in cat for c in _BOND_CATEGORIES) or "bond" in cat:
+        return True
+    name = (info.get("longName") or info.get("shortName") or "").lower()
+    return any(kw in name for kw in _BOND_KEYWORDS)
+
+
+@router.get("/fixed-income")
+def fixed_income_analytics(user_id: str = Depends(get_user_id)):
+    """
+    Fixed income analytics: identify bond positions and compute duration,
+    YTM, credit quality, and rate sensitivity.
+    """
+    import yfinance as yf
+    from concurrent.futures import ThreadPoolExecutor
+    from app.services.fx_service import get_fx_rates
+    from app.services.exchange_classifier import get_native_currency, yf_ticker
+
+    _empty = {
+        "has_fixed_income": False,
+        "fixed_income_weight_pct": 0.0,
+        "effective_duration": None,
+        "portfolio_ytm_pct": None,
+        "rate_sensitivity_1pct": None,
+        "positions": [],
+        "total_value_base": 0.0,
+        "base_currency": "USD",
+        "total_portfolio_value": 0.0,
+    }
+
+    db = get_admin_client()
+    settings_res = (
+        db.table("user_settings").select("base_currency").eq("user_id", user_id).maybe_single().execute()
+    )
+    base_currency = (settings_res.data or {}).get("base_currency", "USD")
+    _empty["base_currency"] = base_currency
+
+    pos_res = db.table("positions").select("*").eq("user_id", user_id).execute()
+    positions = [p for p in (pos_res.data or []) if float(p.get("shares", 0)) > 0]
+    if not positions:
+        return _empty
+
+    tickers = [p["ticker"] for p in positions]
+    quotes = get_quotes(tickers)
+    exchange_currencies = [get_native_currency(t) for t in tickers]
+    pos_currencies = [p.get("currency") or get_native_currency(p["ticker"]) for p in positions]
+    fx_rates = get_fx_rates(list(set(exchange_currencies + pos_currencies)), base=base_currency)
+
+    value_map: dict[str, float] = {}
+    for p in positions:
+        ticker = p["ticker"]
+        shares = float(p.get("shares") or 0)
+        price = float((quotes.get(ticker) or {}).get("price") or 0)
+        ccy = get_native_currency(ticker)
+        fx = fx_rates.get(ccy, 1.0)
+        value_map[ticker] = price * shares * fx
+
+    total_value = sum(value_map.values())
+    if total_value <= 0:
+        return _empty
+
+    def _fetch_info(ticker: str) -> tuple[str, dict]:
+        try:
+            info = yf.Ticker(yf_ticker(ticker)).info or {}
+            return ticker, info
+        except Exception:
+            return ticker, {}
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        infos = dict(pool.map(_fetch_info, tickers))
+
+    fi_positions = []
+    fi_total_value = 0.0
+    weighted_duration = 0.0
+    weighted_ytm = 0.0
+
+    for ticker in tickers:
+        info = infos.get(ticker, {})
+        if not _is_fixed_income(ticker, info):
+            continue
+
+        val = value_map.get(ticker, 0.0)
+        w = val / total_value
+
+        duration = float(info.get("duration") or info.get("effectiveDuration") or 0)
+        ytm_raw = float(
+            info.get("yield") or info.get("trailingAnnualDividendYield") or 0
+        )
+
+        fi_positions.append({
+            "ticker": ticker,
+            "name": info.get("longName") or info.get("shortName") or ticker,
+            "weight_pct": round(w * 100, 2),
+            "value_base": round(val, 2),
+            "duration": round(duration, 2) if duration > 0 else None,
+            "ytm_pct": round(ytm_raw * 100, 3) if ytm_raw > 0 else None,
+        })
+
+        fi_total_value += val
+        if duration > 0:
+            weighted_duration += duration * w
+        if ytm_raw > 0:
+            weighted_ytm += ytm_raw * w
+
+    fi_weight_pct = round(fi_total_value / total_value * 100, 2)
+    eff_duration = round(weighted_duration, 2) if weighted_duration > 0 else None
+    port_ytm = round(weighted_ytm * 100, 3) if weighted_ytm > 0 else None
+    rate_sensitivity = round(-eff_duration, 2) if eff_duration else None
+
+    return {
+        "has_fixed_income": len(fi_positions) > 0,
+        "fixed_income_weight_pct": fi_weight_pct,
+        "effective_duration": eff_duration,
+        "portfolio_ytm_pct": port_ytm,
+        "rate_sensitivity_1pct": rate_sensitivity,
+        "positions": fi_positions,
+        "total_value_base": round(fi_total_value, 2),
+        "total_portfolio_value": round(total_value, 2),
+        "base_currency": base_currency,
+    }

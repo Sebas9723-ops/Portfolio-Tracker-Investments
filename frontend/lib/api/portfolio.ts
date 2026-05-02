@@ -63,3 +63,53 @@ export const saveCapitalSnapshot = () =>
 
 export const backfillCapitalSnapshots = () =>
   apiClient.post<{ created: number; dates: string[] }>("/api/portfolio/capital-snapshot/backfill").then((r) => r.data);
+
+export const fetchGeographicExposure = () =>
+  apiClient
+    .get<{
+      regions: Record<string, number>;
+      by_ticker: {
+        ticker: string; name: string; weight_pct: number;
+        regions: Record<string, number>;
+      }[];
+      base_currency: string;
+    }>("/api/portfolio/geographic-exposure")
+    .then((r) => r.data);
+
+export const fetchEtfOverlap = () =>
+  apiClient
+    .get<{
+      top_holdings: {
+        symbol: string; name: string; total_weight_pct: number;
+        sources: { etf: string; etf_weight_pct: number; holding_pct: number }[];
+        n_etfs: number;
+      }[];
+      by_etf: {
+        ticker: string; name: string; portfolio_weight_pct: number;
+        top_holdings: { symbol: string; name: string; pct: number }[];
+        has_data: boolean;
+      }[];
+      overlap_pct: number;
+      n_etfs_with_data: number;
+      base_currency: string;
+    }>("/api/portfolio/etf-overlap")
+    .then((r) => r.data);
+
+export const fetchPerformanceTimeframes = () =>
+  apiClient
+    .get<{
+      rows: { ticker: string; current_price?: number; "1W"?: number | null; "1M"?: number | null; "3M"?: number | null; "6M"?: number | null; "YTD"?: number | null; "1Y"?: number | null }[];
+      as_of: string;
+      periods: string[];
+    }>("/api/portfolio/performance-timeframes")
+    .then((r) => r.data);
+
+export const fetchEtfExposureForTicker = (ticker: string) =>
+  apiClient
+    .get<{
+      target: string;
+      exposures: { etf: string; etf_name: string; etf_portfolio_weight_pct: number; holding_pct_in_etf: number; effective_portfolio_pct: number }[];
+      total_effective_pct: number;
+      base_currency: string;
+    }>(`/api/portfolio/etf-exposure/${ticker}`)
+    .then((r) => r.data);

@@ -1,7 +1,7 @@
 "use client";
 import { useState, useCallback, memo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { fetchPositions, upsertPosition, deletePosition } from "@/lib/api/portfolio";
+import { fetchPositions, upsertPosition, deletePosition, fetchPerformanceTimeframes } from "@/lib/api/portfolio";
 import { fetchCash } from "@/lib/api/transactions";
 import { fetchAnalytics, fetchRebalancing, fetchFxExposure } from "@/lib/api/analytics";
 import { usePortfolio } from "@/lib/hooks/usePortfolio";
@@ -66,6 +66,7 @@ export default function PortfolioPage() {
   const { data: rebalancing } = useQuery({ queryKey: ["rebalancing", 0, "broker"], queryFn: () => fetchRebalancing({}), staleTime: 5 * 60 * 1000 });
   const { data: analytics } = useQuery({ queryKey: ["analytics", "1y"], queryFn: () => fetchAnalytics("1y"), staleTime: 5 * 60 * 1000 });
   const { data: fx } = useQuery({ queryKey: ["fxexposure"], queryFn: fetchFxExposure, staleTime: 5 * 60 * 1000 });
+  const { data: perfTimeframes } = useQuery({ queryKey: ["perf-timeframes"], queryFn: fetchPerformanceTimeframes, staleTime: 15 * 60 * 1000 });
 
   const qc = useQueryClient();
   const base_currency = useSettingsStore((s) => s.base_currency);
@@ -320,6 +321,45 @@ export default function PortfolioPage() {
                 </div>
               ))}
           </div>
+        </div>
+      )}
+
+      {/* Performance Multi-Timeframe */}
+      {perfTimeframes && perfTimeframes.rows.length > 0 && (
+        <div className="bbg-card">
+          <p className="bbg-header">Performance by Timeframe</p>
+          <div className="overflow-x-auto">
+            <table className="bbg-table text-[10px]">
+              <thead>
+                <tr>
+                  <th>Ticker</th>
+                  <th className="text-right">Price</th>
+                  {perfTimeframes.periods.map((p) => (
+                    <th key={p} className="text-right">{p}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {perfTimeframes.rows.map((row) => (
+                  <tr key={row.ticker}>
+                    <td className="text-bloomberg-gold font-bold">{row.ticker}</td>
+                    <td className="text-right text-bloomberg-text">
+                      {row.current_price != null ? fmtCurrency(row.current_price, "USD", true) : "—"}
+                    </td>
+                    {perfTimeframes.periods.map((p) => {
+                      const v = row[p as keyof typeof row] as number | null | undefined;
+                      return (
+                        <td key={p} className={`text-right font-medium ${colorClass(v ?? null)}`}>
+                          {v != null ? `${v >= 0 ? "+" : ""}${v.toFixed(2)}%` : "—"}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-bloomberg-muted text-[9px] mt-1">As of {perfTimeframes.as_of}</p>
         </div>
       )}
 

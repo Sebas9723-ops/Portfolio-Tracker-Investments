@@ -56,6 +56,7 @@ export interface PortfolioRow {
   weight: number;
   change_pct_1d: number | null;
   data_source: string;
+  sector?: string | null;
 }
 
 export interface PortfolioSummary {

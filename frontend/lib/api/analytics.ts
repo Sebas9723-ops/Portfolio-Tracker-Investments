@@ -235,3 +235,35 @@ export const runMonteCarlo = (body: { monthly_contribution: number; years: numbe
       sample_paths: number[][]; checkpoint_months: number[];
     }>("/api/analytics/monte-carlo", body, { timeout: 60_000 })
     .then((r) => r.data);
+
+export const fetchMwr = () =>
+  apiClient
+    .get<{ mwr: number | null; n_transactions: number }>("/api/analytics/mwr")
+    .then((r) => r.data);
+
+export const fetchBenchmarkOverlay = (period = "1y", benchmarks = "VOO,QQQ,GLD,AGG") =>
+  apiClient
+    .get<{
+      series: Record<string, string | number | null>[];
+      tickers: string[];
+      inception_date: string | null;
+    }>("/api/analytics/benchmark-overlay", { params: { period, benchmarks } })
+    .then((r) => r.data);
+
+export const fetchFixedIncome = () =>
+  apiClient
+    .get<{
+      has_fixed_income: boolean;
+      fixed_income_weight_pct: number;
+      effective_duration: number | null;
+      portfolio_ytm_pct: number | null;
+      rate_sensitivity_1pct: number | null;
+      positions: {
+        ticker: string; name: string; weight_pct: number;
+        value_base: number; duration: number | null; ytm_pct: number | null;
+      }[];
+      total_value_base: number;
+      total_portfolio_value: number;
+      base_currency: string;
+    }>("/api/analytics/fixed-income")
+    .then((r) => r.data);

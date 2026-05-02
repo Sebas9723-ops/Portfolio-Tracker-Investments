@@ -7,6 +7,7 @@ from app.services.market_data import get_quotes
 from app.services.fx_service import get_fx_rates, _FX_PAIR_MAP, _FALLBACK_RATES
 from app.compute.portfolio_builder import build_portfolio, compute_realized_pnl
 from app.services.exchange_classifier import get_native_currency, yf_ticker
+from app.services import cache
 from datetime import date, timedelta
 
 router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
@@ -996,3 +997,347 @@ def get_portfolio_breakdown(user_id: str = Depends(get_user_id)):
     regions = {k: round(v, 2) for k, v in sorted(regions.items(), key=lambda x: -x[1]) if v > 0.1}
 
     return {"sectors": sectors, "regions": regions}
+
+
+# ── Geographic Exposure ───────────────────────────────────────────────────────
+
+@router.get("/geographic-exposure")
+def geographic_exposure(user_id: str = Depends(get_user_id)):
+    """
+    Detailed geographic exposure: aggregated regions + per-ticker breakdown.
+    Uses same inference logic as /breakdown.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    db = get_admin_client()
+    settings = _get_settings_for_user(user_id)
+    base_currency = settings.get("base_currency", "USD")
+
+    pos_res = db.table("positions").select("*").eq("user_id", user_id).execute()
+    positions = pos_res.data or []
+    if not positions:
+        return {"regions": {}, "by_ticker": [], "base_currency": base_currency}
+
+    tx_res = db.table("transactions").select("*").eq("user_id", user_id).execute()
+    transactions = tx_res.data or []
+    tickers = [p["ticker"] for p in positions]
+    quotes = get_quotes(tickers)
+    exchange_currencies = [get_native_currency(t) for t in tickers]
+    pos_currencies = [p.get("currency") or get_native_currency(p["ticker"]) for p in positions]
+    fx_rates = get_fx_rates(list(set(exchange_currencies + pos_currencies)), base=base_currency)
+    summary = build_portfolio(positions, quotes, fx_rates, base_currency, transactions)
+
+    total = summary.total_value_base
+    if total == 0:
+        return {"regions": {}, "by_ticker": [], "base_currency": base_currency}
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(_fetch_etf_breakdown, [r.ticker for r in summary.rows]))
+    etf_data = {ticker: (sw, info) for ticker, sw, info in results}
+
+    regions: dict[str, float] = {}
+    by_ticker = []
+
+    for row in summary.rows:
+        w = row.value_base / total
+        ticker = row.ticker
+        _, info = etf_data.get(ticker, ({}, {}))
+        region_alloc = _infer_regions(ticker, info)
+
+        by_ticker.append({
+            "ticker": ticker,
+            "name": row.name or ticker,
+            "weight_pct": round(w * 100, 2),
+            "regions": {r: round(p * 100, 1) for r, p in region_alloc.items()},
+        })
+
+        for region, pct in region_alloc.items():
+            regions[region] = regions.get(region, 0) + pct * w * 100
+
+    regions = {k: round(v, 2) for k, v in sorted(regions.items(), key=lambda x: -x[1]) if v > 0.1}
+
+    return {
+        "regions": regions,
+        "by_ticker": sorted(by_ticker, key=lambda x: -x["weight_pct"]),
+        "base_currency": base_currency,
+    }
+
+
+# ── ETF Look-Through / Overlap ────────────────────────────────────────────────
+
+@router.get("/etf-overlap")
+def etf_overlap(user_id: str = Depends(get_user_id)):
+    """
+    ETF look-through: fetches top holdings per ETF, weighted by portfolio weight,
+    and identifies overlapping positions across multiple ETFs.
+    """
+    import yfinance as yf
+    from concurrent.futures import ThreadPoolExecutor
+
+    db = get_admin_client()
+    settings = _get_settings_for_user(user_id)
+    base_currency = settings.get("base_currency", "USD")
+
+    pos_res = db.table("positions").select("*").eq("user_id", user_id).execute()
+    positions = pos_res.data or []
+    if not positions:
+        return {"top_holdings": [], "by_etf": [], "overlap_pct": 0.0, "n_etfs_with_data": 0}
+
+    tx_res = db.table("transactions").select("*").eq("user_id", user_id).execute()
+    transactions = tx_res.data or []
+    tickers = [p["ticker"] for p in positions]
+    quotes = get_quotes(tickers)
+    exchange_currencies = [get_native_currency(t) for t in tickers]
+    pos_currencies = [p.get("currency") or get_native_currency(p["ticker"]) for p in positions]
+    fx_rates = get_fx_rates(list(set(exchange_currencies + pos_currencies)), base=base_currency)
+    summary = build_portfolio(positions, quotes, fx_rates, base_currency, transactions)
+
+    total = summary.total_value_base
+    if total == 0:
+        return {"top_holdings": [], "by_etf": [], "overlap_pct": 0.0, "n_etfs_with_data": 0}
+
+    weights = {row.ticker: row.value_base / total for row in summary.rows}
+
+    def _fetch_holdings(ticker: str) -> tuple[str, list[dict]]:
+        cache_key = f"etf_holdings:{ticker}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return ticker, cached
+
+        try:
+            obj = yf.Ticker(yf_ticker(ticker))
+            fd = obj.funds_data
+            holdings_df = fd.top_holdings
+
+            if holdings_df is None or (hasattr(holdings_df, "__len__") and len(holdings_df) == 0):
+                cache.set(cache_key, [], ttl=3600)
+                return ticker, []
+
+            holdings = []
+            if hasattr(holdings_df, "iterrows"):
+                for sym, row_data in holdings_df.iterrows():
+                    pct_raw = float(row_data.get("holdingPercent", 0) or 0)
+                    # yfinance returns as decimal (0.07 = 7%) or already percent
+                    pct = pct_raw * 100 if pct_raw < 1.5 else pct_raw
+                    name = str(row_data.get("holdingName", sym) or sym)
+                    if pct > 0:
+                        holdings.append({"symbol": str(sym), "name": name, "pct": round(pct, 3)})
+
+            holdings.sort(key=lambda x: -x["pct"])
+            holdings = holdings[:20]
+            cache.set(cache_key, holdings, ttl=3600)
+            return ticker, holdings
+        except Exception:
+            cache.set(cache_key, [], ttl=3600)
+            return ticker, []
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(_fetch_holdings, [row.ticker for row in summary.rows]))
+    holdings_by_etf = {ticker: holdings for ticker, holdings in results}
+
+    # Aggregate weighted holdings across ETFs
+    agg: dict[str, dict] = {}
+    for row in summary.rows:
+        etf_ticker = row.ticker
+        etf_w = weights.get(etf_ticker, 0.0)
+        for h in holdings_by_etf.get(etf_ticker, []):
+            sym = h["symbol"]
+            contribution = (h["pct"] / 100.0) * etf_w * 100.0
+            if sym not in agg:
+                agg[sym] = {
+                    "symbol": sym,
+                    "name": h["name"],
+                    "total_weight_pct": 0.0,
+                    "sources": [],
+                    "n_etfs": 0,
+                }
+            agg[sym]["total_weight_pct"] += contribution
+            agg[sym]["sources"].append({
+                "etf": etf_ticker,
+                "etf_weight_pct": round(etf_w * 100, 1),
+                "holding_pct": h["pct"],
+            })
+            agg[sym]["n_etfs"] += 1
+
+    for sym in agg:
+        agg[sym]["total_weight_pct"] = round(agg[sym]["total_weight_pct"], 3)
+
+    top_holdings = sorted(agg.values(), key=lambda x: -x["total_weight_pct"])[:30]
+
+    by_etf = [
+        {
+            "ticker": row.ticker,
+            "name": row.name or row.ticker,
+            "portfolio_weight_pct": round(weights.get(row.ticker, 0) * 100, 2),
+            "top_holdings": holdings_by_etf.get(row.ticker, [])[:10],
+            "has_data": len(holdings_by_etf.get(row.ticker, [])) > 0,
+        }
+        for row in sorted(summary.rows, key=lambda r: -weights.get(r.ticker, 0))
+    ]
+
+    multi_etf = [h for h in top_holdings if h["n_etfs"] >= 2]
+    overlap_pct = round(sum(h["total_weight_pct"] for h in multi_etf), 2)
+    n_with_data = sum(1 for b in by_etf if b["has_data"])
+
+    return {
+        "top_holdings": top_holdings,
+        "by_etf": by_etf,
+        "overlap_pct": overlap_pct,
+        "n_etfs_with_data": n_with_data,
+        "base_currency": base_currency,
+    }
+
+
+# ── Performance Multi-Timeframe per Ticker ────────────────────────────────────
+
+@router.get("/performance-timeframes")
+def performance_timeframes(user_id: str = Depends(get_user_id)):
+    """
+    Per-ticker returns across 1W, 1M, 3M, 6M, YTD, 1Y timeframes.
+    Uses historical price data from yfinance.
+    """
+    import yfinance as yf
+    import pandas as pd
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import date as _date
+
+    db = get_admin_client()
+    pos_res = db.table("positions").select("ticker,shares").eq("user_id", user_id).execute()
+    positions = [p for p in (pos_res.data or []) if float(p.get("shares", 0)) > 0]
+    if not positions:
+        return {"rows": [], "as_of": str(_date.today())}
+
+    tickers = [p["ticker"] for p in positions]
+
+    today = _date.today()
+    ytd_start = _date(today.year, 1, 1)
+
+    PERIODS = {
+        "1W":  today - timedelta(days=7),
+        "1M":  today - timedelta(days=30),
+        "3M":  today - timedelta(days=91),
+        "6M":  today - timedelta(days=182),
+        "YTD": ytd_start,
+        "1Y":  today - timedelta(days=365),
+    }
+
+    def _fetch_returns(ticker: str) -> dict:
+        row: dict = {"ticker": ticker}
+        try:
+            yft = yf_ticker(ticker)
+            df = yf.download(yft, period="1y", interval="1d", auto_adjust=True, progress=False)
+            if isinstance(df.columns, pd.MultiIndex):
+                df = df["Close"]
+                if isinstance(df, pd.DataFrame):
+                    df = df.iloc[:, 0]
+            elif "Close" in df.columns:
+                df = df["Close"]
+            else:
+                return row
+
+            df = df.dropna()
+            if df.empty:
+                return row
+
+            current_price = float(df.iloc[-1])
+            row["current_price"] = round(current_price, 4)
+
+            for period_name, start_date in PERIODS.items():
+                try:
+                    subset = df[df.index >= pd.Timestamp(start_date)]
+                    if len(subset) < 2:
+                        row[period_name] = None
+                        continue
+                    start_price = float(subset.iloc[0])
+                    ret = (current_price / start_price - 1) * 100
+                    row[period_name] = round(ret, 2)
+                except Exception:
+                    row[period_name] = None
+        except Exception:
+            pass
+        return row
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        rows = list(pool.map(_fetch_returns, tickers))
+
+    return {"rows": rows, "as_of": str(today), "periods": list(PERIODS.keys())}
+
+
+# ── ETF Inverse Lookup — which portfolio ETFs hold a given ticker ──────────────
+
+@router.get("/etf-exposure/{target_ticker}")
+def etf_exposure_for_ticker(
+    target_ticker: str,
+    user_id: str = Depends(get_user_id),
+):
+    """
+    Given a ticker, find which ETFs in the user's portfolio hold it
+    and the effective exposure (ETF weight × holding %).
+    """
+    import yfinance as yf
+
+    target = target_ticker.upper().strip()
+    db = get_admin_client()
+    settings = _get_settings_for_user(user_id)
+    base_currency = settings.get("base_currency", "USD")
+
+    pos_res = db.table("positions").select("*").eq("user_id", user_id).execute()
+    positions = [p for p in (pos_res.data or []) if float(p.get("shares", 0)) > 0]
+    if not positions:
+        return {"target": target, "exposures": [], "total_effective_pct": 0.0}
+
+    tx_res = db.table("transactions").select("*").eq("user_id", user_id).execute()
+    transactions = tx_res.data or []
+    tickers = [p["ticker"] for p in positions]
+    quotes = get_quotes(tickers)
+    exchange_currencies = [get_native_currency(t) for t in tickers]
+    pos_currencies = [p.get("currency") or get_native_currency(p["ticker"]) for p in positions]
+    fx_rates = get_fx_rates(list(set(exchange_currencies + pos_currencies)), base=base_currency)
+    summary = build_portfolio(positions, quotes, fx_rates, base_currency, transactions)
+
+    total = summary.total_value_base
+    if total == 0:
+        return {"target": target, "exposures": [], "total_effective_pct": 0.0}
+
+    exposures = []
+    for row in summary.rows:
+        etf_weight = row.value_base / total
+        cache_key = f"etf_holdings:{row.ticker}"
+        holdings = cache.get(cache_key)
+        if holdings is None:
+            try:
+                obj = yf.Ticker(yf_ticker(row.ticker))
+                fd = obj.funds_data
+                hdf = fd.top_holdings
+                holdings = []
+                if hdf is not None and hasattr(hdf, "iterrows"):
+                    for sym, hrow in hdf.iterrows():
+                        pct_raw = float(hrow.get("holdingPercent", 0) or 0)
+                        pct = pct_raw * 100 if pct_raw < 1.5 else pct_raw
+                        if pct > 0:
+                            holdings.append({"symbol": str(sym), "pct": round(pct, 3)})
+                cache.set(cache_key, holdings, ttl=3600)
+            except Exception:
+                holdings = []
+                cache.set(cache_key, holdings, ttl=3600)
+
+        match = next((h for h in holdings if h["symbol"].upper() == target), None)
+        if match:
+            effective_pct = round(etf_weight * match["pct"], 3)
+            exposures.append({
+                "etf": row.ticker,
+                "etf_name": row.name or row.ticker,
+                "etf_portfolio_weight_pct": round(etf_weight * 100, 2),
+                "holding_pct_in_etf": match["pct"],
+                "effective_portfolio_pct": effective_pct,
+            })
+
+    total_effective = round(sum(e["effective_portfolio_pct"] for e in exposures), 3)
+    exposures.sort(key=lambda x: -x["effective_portfolio_pct"])
+
+    return {
+        "target": target,
+        "exposures": exposures,
+        "total_effective_pct": total_effective,
+        "base_currency": base_currency,
+    }

@@ -36,6 +36,30 @@ export const fetchNews = (tickers: string[]) =>
 export const fetchFundamentals = (ticker: string) =>
   apiClient.get(`/api/fundamentals/${ticker}`).then((r) => r.data);
 
+export const fetchInsiderTransactions = (ticker: string) =>
+  apiClient
+    .get<{
+      ticker: string;
+      transactions: { date: string; insider: string; title: string; transaction: string; shares: number; value: number; is_buy: boolean }[];
+    }>(`/api/fundamentals/${ticker}/insiders`)
+    .then((r) => r.data);
+
+export const fetchAnalystRatings = (ticker: string) =>
+  apiClient
+    .get<{
+      ticker: string;
+      recommendation_key: string | null;
+      recommendation_mean: number | null;
+      target_mean: number | null;
+      target_high: number | null;
+      target_low: number | null;
+      n_analysts: number | null;
+      current_price: number | null;
+      upgrades: { date: string; firm: string; to_grade: string; from_grade: string; action: string; is_upgrade: boolean }[];
+      rec_history: { date: string; period: string; strong_buy: number; buy: number; hold: number; sell: number; strong_sell: number }[];
+    }>(`/api/fundamentals/${ticker}/analyst-ratings`)
+    .then((r) => r.data);
+
 export const fetchTechnicals = (ticker: string, period = "1y") =>
   apiClient.get(`/api/technicals/${ticker}`, { params: { period } }).then((r) => r.data);
 

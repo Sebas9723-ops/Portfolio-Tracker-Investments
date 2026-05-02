@@ -5,7 +5,7 @@ import {
   LayoutDashboard, PieChart, TrendingUp, RefreshCw,
   Shield, Calendar, DollarSign, ArrowLeftRight, BarChart2,
   Activity, Eye, Newspaper, Globe, Grid, LineChart, Settings, LogOut,
-  Search, SlidersHorizontal, UserCircle, X, FlaskConical,
+  Search, SlidersHorizontal, UserCircle, X, FlaskConical, Filter,
 } from "lucide-react";
 import { useAuthStore } from "@/lib/store/authStore";
 import { useProfileStore, type InvestorProfile } from "@/lib/store/profileStore";
@@ -42,6 +42,7 @@ const NAV_GROUPS = [
       { label: "News",            href: "/news",            icon: Newspaper },
       { label: "Watchlist",       href: "/watchlist",       icon: Eye },
       { label: "Lookup",          href: "/lookup",          icon: Search },
+      { label: "Screener",        href: "/screener",        icon: Filter },
       { label: "Market Overview", href: "/market-overview", icon: Globe },
       { label: "Sector Heatmap",  href: "/sector-heatmap",  icon: Grid },
       { label: "Yield Curve",     href: "/yield-curve",     icon: LineChart },

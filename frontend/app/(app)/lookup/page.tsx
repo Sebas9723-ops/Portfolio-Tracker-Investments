@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchHistorical, fetchQuote } from "@/lib/api/market";
 import { fetchFundamentals, fetchNews } from "@/lib/api/settings";
+import { fetchEtfExposureForTicker } from "@/lib/api/portfolio";
 import { MetricCard } from "@/components/shared/MetricCard";
 import { fmtCurrency, fmtPct, fmtNumber, fmtDateTime } from "@/lib/formatters";
 import { colorClass } from "@/lib/formatters";
@@ -61,6 +62,12 @@ export default function LookupPage() {
     queryKey: ["lookup-news", ticker],
     queryFn: () => fetchNews([ticker]),
     enabled: !!ticker,
+  });
+  const { data: etfExposure } = useQuery({
+    queryKey: ["etf-exposure", ticker],
+    queryFn: () => fetchEtfExposureForTicker(ticker),
+    enabled: !!ticker,
+    staleTime: 15 * 60 * 1000,
   });
 
   const chartData = (hist?.bars ?? []).map((b: { date: string; close: number }) => ({
@@ -214,6 +221,46 @@ export default function LookupPage() {
           </div>
         )}
       </div>
+
+      {/* ETF Inverse Lookup */}
+      {etfExposure && (
+        <div className="bbg-card">
+          <p className="bbg-header">ETF Exposure — {etfExposure.target} in Your Portfolio</p>
+          {etfExposure.exposures.length > 0 ? (
+            <>
+              <table className="bbg-table text-[10px]">
+                <thead>
+                  <tr>
+                    <th>ETF</th>
+                    <th>ETF Name</th>
+                    <th className="text-right">ETF Weight%</th>
+                    <th className="text-right">Holding% in ETF</th>
+                    <th className="text-right">Effective Portfolio%</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {etfExposure.exposures.map((e) => (
+                    <tr key={e.etf}>
+                      <td className="text-bloomberg-gold font-bold">{e.etf}</td>
+                      <td className="text-bloomberg-muted max-w-[140px] truncate">{e.etf_name}</td>
+                      <td className="text-right">{e.etf_portfolio_weight_pct.toFixed(2)}%</td>
+                      <td className="text-right">{e.holding_pct_in_etf.toFixed(2)}%</td>
+                      <td className="text-right text-bloomberg-gold font-bold">{e.effective_portfolio_pct.toFixed(3)}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="text-bloomberg-muted text-[10px] mt-2">
+                Total effective exposure: <span className="text-bloomberg-gold font-bold">{etfExposure.total_effective_pct.toFixed(3)}%</span> of portfolio
+              </p>
+            </>
+          ) : (
+            <p className="text-bloomberg-muted text-[10px] mt-1">
+              No portfolio ETFs hold {etfExposure.target}, or holdings data unavailable.
+            </p>
+          )}
+        </div>
+      )}
 
       {/* News */}
       {news && news.length > 0 && (
