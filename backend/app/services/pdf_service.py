@@ -167,13 +167,15 @@ def generate_portfolio_report(
     info_r   = metrics.get("information_ratio")
     calmar   = metrics.get("calmar")
 
+    # annualized_return, annualized_vol, max_drawdown, alpha are already in % form
+    # (e.g. 27.73 means 27.73%) — use mult=1 to avoid double-multiplying by 100
     pdata = [
         ["Metric", "Value", "Metric", "Value"],
-        ["TWR (cumulative)",     f"{twr:+.2f}%",       "Ann. Return",        _pct(ann_ret)],
-        ["Sharpe Ratio",         _num(sharpe),          "Sortino Ratio",      _num(sortino)],
-        ["Max Drawdown",         _pct(max_dd),          "Ann. Volatility",    _pct(ann_vol)],
-        [f"Alpha vs {benchmark_ticker}", _pct(alpha),   "Beta",               _num(beta)],
-        ["Information Ratio",    _num(info_r),          "Calmar Ratio",       _num(calmar)],
+        ["TWR (cumulative)",     f"{twr:+.2f}%",              "Ann. Return",     _pct(ann_ret, mult=1)],
+        ["Sharpe Ratio",         _num(sharpe),                "Sortino Ratio",   _num(sortino)],
+        ["Max Drawdown",         _pct(max_dd, mult=1),        "Ann. Volatility", _pct(ann_vol, mult=1)],
+        [f"Alpha vs {benchmark_ticker}", _pct(alpha, mult=1), "Beta",            _num(beta)],
+        ["Information Ratio",    _num(info_r),                "Calmar Ratio",    _num(calmar)],
     ]
 
     ptable = Table(pdata, colWidths=[5.5 * cm, 3 * cm, 5.5 * cm, 3 * cm])
