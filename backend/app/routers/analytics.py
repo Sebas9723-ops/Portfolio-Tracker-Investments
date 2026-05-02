@@ -1080,7 +1080,38 @@ def mwr_return(user_id: str = Depends(get_user_id)):
         return {"mwr": None, "n_transactions": len(transactions)}
 
     mwr = _compute_mwr(transactions, current_value, fx_rates, base_currency)
-    n_buy_sell = sum(1 for tx in transactions if tx.get("action") in ("BUY", "SELL"))
+    n_buy_sell = sum(1 for tx in transactions if (tx.get("action") or "").upper() in ("BUY", "SELL"))
+
+    # Fallback: if XIRR fails (e.g. duplicate transactions inflate BUY sum > terminal value,
+    # making NPV always negative), use total_invested_base (avg_cost × shares × FX) for a
+    # simple annualised return. This is geometrically correct for a lump-sum approximation.
+    if mwr is None:
+        try:
+            pos_full = db.table("positions").select("ticker,shares,avg_cost_native,currency").eq("user_id", user_id).execute()
+            total_invested = 0.0
+            for p in (pos_full.data or []):
+                shares = float(p.get("shares") or 0)
+                avg_cost = float(p.get("avg_cost_native") or 0)
+                ccy = p.get("currency") or get_native_currency(p["ticker"])
+                fx = fx_rates.get(ccy, 1.0)
+                total_invested += shares * avg_cost * fx
+            if total_invested > 0:
+                # Find earliest BUY date for holding period
+                from datetime import date as _d
+                buy_dates = [
+                    _d.fromisoformat((tx.get("date") or "")[:10])
+                    for tx in transactions
+                    if (tx.get("action") or "").upper() == "BUY" and (tx.get("date") or "")[:10]
+                ]
+                if buy_dates:
+                    days_held = (_d.today() - min(buy_dates)).days
+                    if days_held > 0:
+                        # Annualised: (current/invested)^(365/days) - 1
+                        mwr = round(((current_value / total_invested) ** (365.0 / days_held) - 1) * 100, 2)
+                    else:
+                        mwr = round((current_value / total_invested - 1) * 100, 2)
+        except Exception:
+            pass
 
     return {"mwr": mwr, "n_transactions": n_buy_sell}
 

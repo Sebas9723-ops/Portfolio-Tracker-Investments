@@ -38,6 +38,7 @@ export function PortfolioLWChart({ data, benchmark, benchmarkLabel = "Benchmark"
         horzLines: { color: grid },
       },
       crosshair: { mode: 1 },
+      localization: { locale: "en-US" },
       rightPriceScale: { borderColor: grid },
       timeScale: { borderColor: grid, timeVisible: false, fixLeftEdge: true, fixRightEdge: true },
       handleScroll: true,

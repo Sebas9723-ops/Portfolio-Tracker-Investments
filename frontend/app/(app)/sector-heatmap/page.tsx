@@ -78,73 +78,37 @@ export default function SectorHeatmapPage() {
       ) : (
         <>
           {portfolio ? (
+            // P&L heatmap: one tile per portfolio holding (not SPDR sectors,
+            // since holdings are diversified ETFs that don't map to single sectors)
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              {SECTORS.map(({ label, sector }) => {
-                const data = sectorPnl[sector];
-                const pnl = data?.pnl ?? null;
-                const value = data?.value ?? 0;
-                const pnlPct = data && value > 0 ? (data.pnl / (value - data.pnl)) * 100 : null;
-                const intensity = Math.min(Math.abs(pnlPct ?? 0) / 10, 1);
-                const bg = pnl == null ? "#111820"
-                  : pnl > 0 ? `rgba(77,255,77,${intensity * 0.4})`
-                  : `rgba(255,77,77,${intensity * 0.4})`;
-                return (
-                  <div key={sector} className="bbg-card text-center" style={{ background: bg }}>
-                    <p className="text-bloomberg-muted text-[10px] uppercase">{label}</p>
-                    {pnl != null ? (
-                      <>
-                        <p className={`text-lg font-bold ${colorClass(pnl)}`}>
+              {[...portfolio.rows]
+                .sort((a, b) => (b.value_base ?? 0) - (a.value_base ?? 0))
+                .map((row) => {
+                  const pnl = row.unrealized_pnl ?? null;
+                  const pnlPct = row.unrealized_pnl_pct ?? null;
+                  const intensity = Math.min(Math.abs(pnlPct ?? 0) / 15, 1);
+                  const bg = pnl == null ? "#111820"
+                    : pnl > 0 ? `rgba(77,255,77,${0.08 + intensity * 0.32})`
+                    : `rgba(255,77,77,${0.08 + intensity * 0.32})`;
+                  return (
+                    <div key={row.ticker} className="bbg-card text-center py-4" style={{ background: bg }}>
+                      <p className="text-bloomberg-gold font-bold text-sm">{row.ticker}</p>
+                      <p className="text-bloomberg-muted text-[10px] truncate">{row.name}</p>
+                      <p className={`text-xl font-black mt-1 ${colorClass(pnlPct)}`}>
+                        {pnlPct != null ? `${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(2)}%` : "—"}
+                      </p>
+                      {pnl != null && (
+                        <p className={`text-xs font-medium ${colorClass(pnl)}`}>
                           {pnl >= 0 ? "+" : ""}{fmtCurrency(pnl, ccy)}
                         </p>
-                        <p className={`text-xs font-medium ${colorClass(pnlPct)}`}>
-                          {pnlPct != null ? fmtPct(pnlPct) : "—"}
-                        </p>
-                        <p className="text-bloomberg-muted text-[10px]">{fmtCurrency(value, ccy)} value</p>
-                      </>
-                    ) : (
-                      <p className="text-bloomberg-muted text-sm mt-2">—</p>
-                    )}
-                  </div>
-                );
-              })}
+                      )}
+                      <p className="text-bloomberg-muted text-[10px] mt-1">{fmtCurrency(row.value_base, ccy)}</p>
+                    </div>
+                  );
+                })}
             </div>
           ) : (
             <p className="text-bloomberg-muted text-xs">Loading portfolio data…</p>
-          )}
-          {portfolio && (
-            <div className="bbg-card">
-              <p className="bbg-header">Sector Breakdown (Holdings)</p>
-              <table className="bbg-table text-[10px]">
-                <thead>
-                  <tr>
-                    <th>Ticker</th>
-                    <th>Sector</th>
-                    <th className="text-right">Value</th>
-                    <th className="text-right">P&L</th>
-                    <th className="text-right">P&L%</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[...portfolio.rows]
-                    .sort((a, b) => (b.unrealized_pnl ?? 0) - (a.unrealized_pnl ?? 0))
-                    .map((row) => (
-                      <tr key={row.ticker}>
-                        <td className="text-bloomberg-gold font-bold">{row.ticker}</td>
-                        <td className="text-bloomberg-muted">{row.sector ?? "—"}</td>
-                        <td className="text-right">{fmtCurrency(row.value_base, ccy)}</td>
-                        <td className={`text-right font-medium ${colorClass(row.unrealized_pnl)}`}>
-                          {row.unrealized_pnl != null
-                            ? `${row.unrealized_pnl >= 0 ? "+" : ""}${fmtCurrency(row.unrealized_pnl, ccy)}`
-                            : "—"}
-                        </td>
-                        <td className={`text-right font-medium ${colorClass(row.unrealized_pnl_pct)}`}>
-                          {fmtPct(row.unrealized_pnl_pct ?? null)}
-                        </td>
-                      </tr>
-                    ))}
-                </tbody>
-              </table>
-            </div>
           )}
         </>
       )}

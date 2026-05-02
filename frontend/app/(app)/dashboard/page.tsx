@@ -300,12 +300,16 @@ export default function DashboardPage() {
     ? portfolio.total_invested_base
     : (cost_basis_usd ?? 0);
 
-  // Capital invested: use backend-persisted snapshot (step function) when available,
-  // fall back to flat autoInvested (shares × avg_cost today).
+  // Capital invested: use backend-provided cumulative value when available.
+  // Cap at autoInvested * 1.05 to guard against duplicate BUY transactions
+  // (XTB partial fills can inflate the sum beyond the true invested amount).
+  const investedCap = autoInvested > 0 ? autoInvested * 1.05 : Infinity;
   const contributionsData = allHistory.map((h) => ({
     date: h.date.slice(5),
     value: Math.round(h.value),
-    invested: Math.round((h as any).invested ?? autoInvested),
+    invested: Math.round(
+      Math.min((h as any).invested ?? autoInvested, investedCap)
+    ),
   }));
 
   // Allocation donut
