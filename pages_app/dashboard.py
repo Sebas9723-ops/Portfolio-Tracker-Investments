@@ -392,6 +392,32 @@ def _build_decision_summary(ctx):
     return pd.DataFrame(rows)
 
 
+def _render_composition_by_position(df):
+    """Render a styled 'Composition by Position' card listing tickers sorted by weight."""
+    if df.empty or "Ticker" not in df.columns or "Weight %" not in df.columns:
+        return
+    rows = df[["Ticker", "Weight %"]].sort_values("Weight %", ascending=False)
+    items_html = "".join(
+        f'<div style="display:flex;justify-content:space-between;align-items:center;'
+        f'padding:9px 0;border-bottom:1px solid rgba(255,255,255,0.05);">'
+        f'<span style="font-family:\'IBM Plex Mono\',monospace;font-size:13px;'
+        f'color:#e6e6e6;font-weight:600;">{row["Ticker"]}</span>'
+        f'<span style="font-family:\'IBM Plex Mono\',monospace;font-size:13px;'
+        f'color:#f3a712;font-weight:500;">{row["Weight %"]:.1f}%</span>'
+        f'</div>'
+        for _, row in rows.iterrows()
+    )
+    st.markdown(
+        f'<div style="background:#111820;border:1px solid #1e2832;border-radius:8px;'
+        f'padding:20px 24px;margin-bottom:4px;">'
+        f'<div style="font-family:\'IBM Plex Mono\',monospace;font-size:10px;'
+        f'color:#888;letter-spacing:0.12em;font-weight:700;margin-bottom:14px;">'
+        f'COMPOSITION BY POSITION</div>'
+        f'{items_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def _build_recent_audit_trail(ctx, limit=8):
     tx_df = ctx.get("transactions_df", pd.DataFrame()).copy()
     if tx_df.empty:
@@ -651,6 +677,8 @@ def render_dashboard(ctx):
                 st.success("No active alerts.")
             else:
                 show_aggrid(alerts_df, height=260, key="aggrid_dashboard_alerts")
+
+        _render_composition_by_position(ctx["df"])
 
         with st.expander("Data Quality Checks", expanded=False):
             st.caption("Validation checks for prices, shares, benchmark, and cash balances.")

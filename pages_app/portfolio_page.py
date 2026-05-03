@@ -204,6 +204,32 @@ def _render_data_source_badges(ctx):
     st.markdown("&nbsp;".join(parts), unsafe_allow_html=True)
 
 
+def _render_composition_by_position(df):
+    """Render a styled 'Composition by Position' card listing tickers sorted by weight."""
+    if df.empty or "Ticker" not in df.columns or "Weight %" not in df.columns:
+        return
+    rows = df[["Ticker", "Weight %"]].sort_values("Weight %", ascending=False)
+    items_html = "".join(
+        f'<div style="display:flex;justify-content:space-between;align-items:center;'
+        f'padding:9px 0;border-bottom:1px solid rgba(255,255,255,0.05);">'
+        f'<span style="font-family:\'IBM Plex Mono\',monospace;font-size:13px;'
+        f'color:#e6e6e6;font-weight:600;">{row["Ticker"]}</span>'
+        f'<span style="font-family:\'IBM Plex Mono\',monospace;font-size:13px;'
+        f'color:#f3a712;font-weight:500;">{row["Weight %"]:.1f}%</span>'
+        f'</div>'
+        for _, row in rows.iterrows()
+    )
+    st.markdown(
+        f'<div style="background:#111820;border:1px solid #1e2832;border-radius:8px;'
+        f'padding:20px 24px;margin-bottom:4px;">'
+        f'<div style="font-family:\'IBM Plex Mono\',monospace;font-size:10px;'
+        f'color:#888;letter-spacing:0.12em;font-weight:700;margin-bottom:14px;">'
+        f'COMPOSITION BY POSITION</div>'
+        f'{items_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def render_portfolio_page(ctx):
     render_page_title("Portfolio")
 
@@ -314,6 +340,7 @@ def render_portfolio_page(ctx):
     with left:
         info_section("Allocation", "Current portfolio allocation by market value.")
         st.plotly_chart(ctx["fig_pie"], use_container_width=True, key="portfolio_allocation_chart_fixed_v2")
+        _render_composition_by_position(ctx["df"])
 
     with right:
         info_section(
