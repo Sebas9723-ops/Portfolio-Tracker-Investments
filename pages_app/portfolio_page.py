@@ -5,7 +5,15 @@ import plotly.graph_objects as go
 import pytz
 import streamlit as st
 
-from app_core import build_portfolio_df, get_fx_rate_current, info_metric, info_section, render_page_title
+from app_core import (
+    build_portfolio_df,
+    get_fx_rate_current,
+    info_metric,
+    info_section,
+    render_page_title,
+    apply_plotly_theme,
+    _PLOTLY_CONFIG,
+)
 from utils_aggrid import show_aggrid
 
 
@@ -172,17 +180,8 @@ def _build_performance_vs_benchmark_chart(ctx):
                 hovertemplate="%{x|%Y-%m-%d}<br>VOO: %{y:.2%}<extra></extra>",
             )
 
-    fig.update_layout(
-        paper_bgcolor="#0b0f14",
-        plot_bgcolor="#0b0f14",
-        font=dict(color="#e6e6e6"),
-        height=420,
-        margin=dict(t=20, b=20, l=20, r=20),
-        xaxis_title="Date",
-        yaxis_title="Return",
-        yaxis=dict(tickformat=".0%"),
-        legend=dict(orientation="h", y=1.08, x=0.0),
-    )
+    apply_plotly_theme(fig, range_selector=True, height=440)
+    fig.update_layout(yaxis=dict(tickformat=".0%"))
     return fig
 
 
@@ -339,7 +338,7 @@ def render_portfolio_page(ctx):
 
     with left:
         info_section("Allocation", "Current portfolio allocation by market value.")
-        st.plotly_chart(ctx["fig_pie"], use_container_width=True, key="portfolio_allocation_chart_fixed_v2")
+        st.plotly_chart(ctx["fig_pie"], use_container_width=True, key="portfolio_allocation_chart_fixed_v2", config=_PLOTLY_CONFIG)
         _render_composition_by_position(ctx["df"])
 
     with right:
@@ -351,6 +350,7 @@ def render_portfolio_page(ctx):
             _build_weights_vs_targets_chart(ctx),
             use_container_width=True,
             key="portfolio_weights_targets_chart_fixed_v2",
+            config=_PLOTLY_CONFIG,
         )
 
     perf_fig = _build_performance_vs_benchmark_chart(ctx)
@@ -363,6 +363,7 @@ def render_portfolio_page(ctx):
             perf_fig,
             use_container_width=True,
             key="portfolio_performance_vs_benchmark_fixed_v2",
+            config=_PLOTLY_CONFIG,
         )
 
     info_section("Cash Balances", "Cash balances by currency converted to the base currency.")
@@ -425,6 +426,6 @@ def render_portfolio_page(ctx):
                 margin=dict(t=20, b=20, l=20, r=20),
                 showlegend=False,
             )
-            st.plotly_chart(pie, use_container_width=True, key="currency_exposure_pie")
+            st.plotly_chart(pie, use_container_width=True, key="currency_exposure_pie", config=_PLOTLY_CONFIG)
         with right:
             show_aggrid(exp_df, height=260, key="aggrid_portfolio_exposure")

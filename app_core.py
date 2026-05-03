@@ -392,6 +392,288 @@ def apply_bloomberg_style():
 
     )
 
+    # ── Extended CSS: skeleton loaders, transitions, health card, export btns, CMD+K ──
+    st.html("""
+    <style>
+    /* ── Smooth transitions for interactive elements ──────────────────────── */
+    .stButton > button,
+    [data-testid="stDownloadButton"] > button,
+    .bb-metric,
+    .bb-section {
+        transition: all 0.18s ease !important;
+    }
+
+    /* ── Export download buttons — small and subdued ──────────────────────── */
+    [data-testid="stDownloadButton"] > button {
+        background: transparent !important;
+        color: #6b7f96 !important;
+        border: 1px solid #2a313c !important;
+        font-size: 0.7rem !important;
+        min-height: 26px !important;
+        padding: 2px 10px !important;
+        font-weight: 500 !important;
+        text-transform: none !important;
+        letter-spacing: 0 !important;
+        border-radius: 4px !important;
+    }
+    [data-testid="stDownloadButton"] > button:hover {
+        background: #111821 !important;
+        color: #f3a712 !important;
+        border-color: #f3a712 !important;
+    }
+
+    /* ── Skeleton loader ──────────────────────────────────────────────────── */
+    @keyframes bb-shimmer {
+        0%   { background-position: -600px 0; }
+        100% { background-position:  600px 0; }
+    }
+    .bb-skeleton {
+        background: linear-gradient(90deg, #111111 25%, #1c2230 50%, #111111 75%);
+        background-size: 1200px 100%;
+        animation: bb-shimmer 1.6s infinite linear;
+        border-radius: 4px;
+        display: block;
+    }
+    .bb-skeleton-line { height: 14px; margin-bottom: 8px; width: 100%; }
+    .bb-skeleton-line.short { width: 60%; }
+    .bb-skeleton-card {
+        border: 1px solid #1e2535;
+        border-radius: 6px;
+        padding: 1rem;
+        margin-bottom: 0.5rem;
+    }
+
+    /* ── Health score card ────────────────────────────────────────────────── */
+    .bb-health-card {
+        background: #111111;
+        border: 1px solid #1e2535;
+        border-radius: 8px;
+        padding: 1.2rem 1.5rem;
+        margin-bottom: 1rem;
+    }
+    .bb-health-title {
+        font-size: 0.68rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        color: #6b7f96;
+        margin-bottom: 1rem;
+    }
+    .bb-health-score {
+        font-size: 2.8rem;
+        font-weight: 800;
+        line-height: 1;
+    }
+    .bb-health-grade {
+        font-size: 1.2rem;
+        font-weight: 800;
+        margin-top: 0.2rem;
+    }
+    .bb-health-bar-wrap {
+        background: #1a1a2e;
+        border-radius: 4px;
+        height: 8px;
+        overflow: hidden;
+        margin-bottom: 0.8rem;
+    }
+    .bb-health-bar-fill {
+        height: 100%;
+        border-radius: 4px;
+        transition: width 0.7s ease;
+    }
+    .bb-health-mini-label {
+        font-size: 0.6rem;
+        color: #555;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    .bb-health-mini-val {
+        font-size: 0.82rem;
+        font-weight: 700;
+        color: #e6e6e6;
+    }
+    .bb-health-mini-pts {
+        font-size: 0.6rem;
+        font-weight: 600;
+    }
+
+    /* ── CMD+K search overlay ─────────────────────────────────────────────── */
+    #bb-cmdk-backdrop {
+        display: none;
+        position: fixed;
+        top: 0; left: 0; width: 100%; height: 100%;
+        z-index: 99999;
+        background: rgba(0,0,0,0.72);
+        backdrop-filter: blur(4px);
+    }
+    #bb-cmdk-box {
+        position: absolute;
+        top: 13%;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 92%;
+        max-width: 540px;
+        background: #111821;
+        border: 1px solid #f3a712;
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 24px 72px rgba(0,0,0,0.9);
+    }
+    #bb-cmdk-input {
+        width: 100%;
+        background: transparent;
+        border: none;
+        outline: none;
+        color: #e6e6e6;
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 1rem;
+        font-weight: 600;
+        box-sizing: border-box;
+    }
+    .bb-cmdk-hint {
+        padding: 0.4rem 1rem;
+        border-top: 1px solid #1e2535;
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 0.65rem;
+        color: #444;
+    }
+    .bb-cmdk-result {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.6rem 1rem;
+        text-decoration: none;
+        transition: background 0.12s;
+    }
+    .bb-cmdk-result:hover, .bb-cmdk-result.selected {
+        background: #1a1f2e;
+    }
+    .bb-cmdk-result-title {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 0.9rem;
+        font-weight: 700;
+        color: #f3a712;
+    }
+    .bb-cmdk-result-desc {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 0.68rem;
+        color: #6b7f96;
+    }
+
+    /* ── Better mobile ────────────────────────────────────────────────────── */
+    @media (max-width: 640px) {
+        .bb-health-card { padding: 0.9rem 1rem; }
+        .bb-health-score { font-size: 2rem; }
+        .block-container {
+            padding-left: 0.5rem !important;
+            padding-right: 0.5rem !important;
+        }
+    }
+    @media (max-width: 900px) {
+        .bb-cmdk-box { width: 96%; top: 8%; }
+    }
+    </style>
+    """)
+
+    # ── CMD+K global search JS ─────────────────────────────────────────────────
+    import streamlit.components.v1 as _cmdk_components
+    _cmdk_components.html(
+        """
+<script>
+(function() {
+    var doc = window.parent.document;
+    if (doc.getElementById('bb-cmdk-backdrop')) return;
+
+    var pages = [
+        {icon:'📊', title:'Dashboard',           url:'/dashboard',           desc:'Portfolio overview, metrics, health score'},
+        {icon:'💼', title:'Portfolio',            url:'/portfolio',           desc:'Holdings, allocation, live prices, PnL'},
+        {icon:'📈', title:'Analytics',            url:'/analytics',           desc:'Rolling metrics, attribution, factor exposure'},
+        {icon:'⚡', title:'Optimization',         url:'/optimization',        desc:'Efficient frontier, Max Sharpe, HRP, Risk Parity'},
+        {icon:'⚖️', title:'Rebalancing',          url:'/rebalancing',         desc:'Drift monitor, trade suggestions, bands'},
+        {icon:'🛡️', title:'Risk',                 url:'/risk',                desc:'VaR, CVaR, drawdown, stress tests, correlations'},
+        {icon:'🎯', title:'Investment Horizon',   url:'/investment-horizon',  desc:'Goal projections, contribution planner, FI target'},
+        {icon:'💰', title:'Income',               url:'/income',              desc:'Dividends, yield, income calendar'},
+        {icon:'📋', title:'Transactions',         url:'/transactions',        desc:'Transaction ledger and history'},
+        {icon:'🔧', title:'Private Manager',      url:'/private-manager',     desc:'Manage private portfolio positions'},
+    ];
+
+    var backdrop = doc.createElement('div');
+    backdrop.id = 'bb-cmdk-backdrop';
+    backdrop.innerHTML =
+        '<div id="bb-cmdk-box">' +
+            '<div style="padding:0.75rem 1rem;border-bottom:1px solid #1e2535;display:flex;align-items:center;gap:0.6rem;">' +
+                '<span style="color:#6b7f96;font-size:0.9rem;">⌘</span>' +
+                '<input id="bb-cmdk-input" type="text" placeholder="Search pages..." autocomplete="off">' +
+            '</div>' +
+            '<div id="bb-cmdk-results" style="max-height:340px;overflow-y:auto;padding:0.3rem 0;"></div>' +
+            '<div class="bb-cmdk-hint">↩ navigate &nbsp;·&nbsp; ↑↓ move &nbsp;·&nbsp; ESC close &nbsp;·&nbsp; ⌘K toggle</div>' +
+        '</div>';
+    doc.body.appendChild(backdrop);
+
+    var input   = doc.getElementById('bb-cmdk-input');
+    var results = doc.getElementById('bb-cmdk-results');
+    var selIdx  = 0;
+
+    function render(q) {
+        var filtered = q
+            ? pages.filter(function(p) {
+                return (p.title + p.desc).toLowerCase().indexOf(q.toLowerCase()) !== -1;
+              })
+            : pages;
+        selIdx = 0;
+        results.innerHTML = filtered.map(function(p, i) {
+            return '<a href="' + p.url + '" class="bb-cmdk-result' + (i === 0 ? ' selected' : '') + '">' +
+                '<span style="font-size:1.15rem;">' + p.icon + '</span>' +
+                '<div>' +
+                    '<div class="bb-cmdk-result-title">' + p.title + '</div>' +
+                    '<div class="bb-cmdk-result-desc">' + p.desc + '</div>' +
+                '</div></a>';
+        }).join('');
+    }
+
+    function moveSelection(dir) {
+        var items = results.querySelectorAll('.bb-cmdk-result');
+        if (!items.length) return;
+        items[selIdx].classList.remove('selected');
+        selIdx = (selIdx + dir + items.length) % items.length;
+        items[selIdx].classList.add('selected');
+        items[selIdx].scrollIntoView({block:'nearest'});
+    }
+
+    function show() {
+        backdrop.style.display = 'block';
+        input.value = '';
+        render('');
+        setTimeout(function() { input.focus(); }, 60);
+    }
+
+    function hide() { backdrop.style.display = 'none'; }
+
+    window.parent.addEventListener('keydown', function(e) {
+        if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+            e.preventDefault();
+            backdrop.style.display === 'none' ? show() : hide();
+            return;
+        }
+        if (backdrop.style.display === 'none') return;
+        if (e.key === 'Escape') { hide(); return; }
+        if (e.key === 'ArrowDown') { e.preventDefault(); moveSelection(1); return; }
+        if (e.key === 'ArrowUp')   { e.preventDefault(); moveSelection(-1); return; }
+        if (e.key === 'Enter') {
+            var sel = results.querySelector('.bb-cmdk-result.selected');
+            if (sel) { window.parent.location.href = sel.href; hide(); }
+        }
+    });
+
+    input.addEventListener('input', function() { render(this.value); });
+    backdrop.addEventListener('click', function(e) { if (e.target === backdrop) hide(); });
+
+    render('');
+})();
+</script>""",
+        height=0,
+    )
+
 
 def render_page_title(title: str):
     st.markdown(
@@ -736,6 +1018,217 @@ def render_market_clocks():
         """,
         height=495,
     )
+
+# =========================
+# UI — HEALTH SCORE + CHART HELPERS
+# =========================
+
+_PLOTLY_CONFIG: dict = {
+    "displaylogo": False,
+    "toImageButtonOptions": {
+        "format": "png",
+        "filename": "chart",
+        "height": 600,
+        "width": 1400,
+        "scale": 2,
+    },
+    "modeBarButtonsToRemove": ["select2d", "lasso2d"],
+}
+
+_RANGE_SELECTOR_BUTTONS = [
+    dict(count=1,  label="1M",  step="month", stepmode="backward"),
+    dict(count=3,  label="3M",  step="month", stepmode="backward"),
+    dict(count=6,  label="6M",  step="month", stepmode="backward"),
+    dict(count=1,  label="YTD", step="year",  stepmode="todate"),
+    dict(count=1,  label="1Y",  step="year",  stepmode="backward"),
+    dict(step="all", label="ALL"),
+]
+
+
+def apply_plotly_theme(
+    fig: go.Figure,
+    range_selector: bool = False,
+    height: int = 420,
+) -> go.Figure:
+    """Apply Bloomberg dark theme to a Plotly figure; optionally add range selectors."""
+    xaxis: dict = {
+        "gridcolor": "rgba(255,255,255,0.06)",
+        "showspikes": True,
+        "spikemode": "across",
+        "spikesnap": "cursor",
+        "spikecolor": "#444",
+        "spikethickness": 1,
+        "axisline": {"linecolor": "#2a313c"},
+        "tickfont": {"family": "IBM Plex Mono", "size": 10, "color": "#666"},
+    }
+    if range_selector:
+        xaxis["rangeselector"] = {
+            "buttons": _RANGE_SELECTOR_BUTTONS,
+            "bgcolor": "#111821",
+            "activecolor": "#f3a712",
+            "bordercolor": "#2a313c",
+            "font": {"family": "IBM Plex Mono", "size": 11, "color": "#e6e6e6"},
+            "x": 0,
+            "y": 1.1,
+        }
+        xaxis["rangeslider"] = {"visible": False}
+
+    fig.update_layout(
+        paper_bgcolor="#0a0a0a",
+        plot_bgcolor="#0a0a0a",
+        font=dict(color="#e6e6e6", family="IBM Plex Mono"),
+        height=height,
+        margin=dict(t=48, b=20, l=20, r=20),
+        xaxis=xaxis,
+        yaxis=dict(
+            gridcolor="rgba(255,255,255,0.06)",
+            tickfont={"family": "IBM Plex Mono", "size": 10, "color": "#666"},
+        ),
+        hovermode="x unified",
+        legend=dict(
+            orientation="h",
+            y=1.14,
+            x=0.0,
+            font=dict(size=11, family="IBM Plex Mono"),
+        ),
+        hoverlabel=dict(
+            bgcolor="#1a1a2e",
+            bordercolor="#2a313c",
+            font=dict(family="IBM Plex Mono", size=12, color="#e6e6e6"),
+        ),
+    )
+    return fig
+
+
+def _mini_score_html(label: str, value: str, score: int, max_score: int) -> str:
+    """Return HTML for a single health-score mini component."""
+    import html as _h
+    pct = score / max_score * 100 if max_score else 0
+    color = (
+        "#00ff88" if pct >= 80
+        else "#f3a712" if pct >= 50
+        else "#ff8c00" if pct >= 25
+        else "#ff4444"
+    )
+    return (
+        f'<div style="min-width:76px;">'
+        f'<div class="bb-health-mini-label">{_h.escape(label)}</div>'
+        f'<div class="bb-health-mini-val">{_h.escape(value)}</div>'
+        f'<div class="bb-health-mini-pts" style="color:{color}">{score}/{max_score}</div>'
+        f'</div>'
+    )
+
+
+def render_health_score_card(ctx: dict) -> None:
+    """
+    Render a Bloomberg-style Portfolio Health Score card.
+    Components: Sharpe (25), Sortino (20), Max Drawdown (20), Beta (15), Alpha (20).
+    Reads from ctx — no business logic is modified.
+    """
+    sharpe   = float(ctx.get("sharpe", 0.0))
+    max_dd   = float(ctx.get("max_drawdown", 0.0))
+    alpha    = float(ctx.get("alpha", 0.0))
+    beta     = float(ctx.get("beta", 1.0))
+    rfr      = float(ctx.get("risk_free_rate", DEFAULT_RISK_FREE_RATE))
+
+    # Compute Sortino from daily returns
+    sortino: float | None = None
+    port_ret = ctx.get("portfolio_returns")
+    if port_ret is not None and hasattr(port_ret, "dropna"):
+        r = port_ret.dropna()
+        if len(r) > 5:
+            excess  = float(r.mean()) * 252 - rfr
+            down    = r[r < 0]
+            if len(down) > 0:
+                ds = float(down.std()) * (252 ** 0.5)
+                if ds > 0:
+                    sortino = excess / ds
+
+    # Score functions
+    def _s_sharpe(v: float) -> int:
+        if v >= 2.0: return 25
+        if v >= 1.0: return 18
+        if v >= 0.5: return 10
+        if v >= 0.0: return 5
+        return 0
+
+    def _s_sortino(v: float | None) -> int:
+        if v is None: return 10          # neutral — data not available
+        if v >= 2.5: return 20
+        if v >= 1.5: return 15
+        if v >= 0.8: return 8
+        if v >= 0.0: return 4
+        return 0
+
+    def _s_drawdown(v: float) -> int:
+        if v >= -0.05: return 20
+        if v >= -0.10: return 15
+        if v >= -0.20: return 10
+        if v >= -0.30: return 5
+        return 0
+
+    def _s_beta(v: float) -> int:
+        d = abs(v - 1.0)
+        if d <= 0.2: return 15
+        if d <= 0.4: return 10
+        if d <= 0.6: return 5
+        return 0
+
+    def _s_alpha(v: float) -> int:
+        if v >= 0.10: return 20
+        if v >= 0.05: return 15
+        if v >= 0.02: return 10
+        if v >= 0.00: return 5
+        return 0
+
+    sc = _s_sharpe(sharpe)
+    so = _s_sortino(sortino)
+    dd = _s_drawdown(max_dd)
+    be = _s_beta(beta)
+    al = _s_alpha(alpha)
+    total = sc + so + dd + be + al
+
+    if total >= 85:
+        grade, grade_color = "A+", "#00ff88"
+    elif total >= 70:
+        grade, grade_color = "A", "#4dff9e"
+    elif total >= 55:
+        grade, grade_color = "B", "#f3a712"
+    elif total >= 40:
+        grade, grade_color = "C", "#ff8c00"
+    else:
+        grade, grade_color = "D", "#ff4444"
+
+    sortino_str = f"{sortino:.2f}" if sortino is not None else "N/A"
+
+    mini = (
+        _mini_score_html("Sharpe",   f"{sharpe:.2f}",   sc, 25)
+        + _mini_score_html("Sortino", sortino_str,        so, 20)
+        + _mini_score_html("Drawdown", f"{max_dd:.1%}",  dd, 20)
+        + _mini_score_html("Beta",    f"{beta:.2f}",      be, 15)
+        + _mini_score_html("Alpha",   f"{alpha:.1%}",     al, 20)
+    )
+
+    st.markdown(
+        f'<div class="bb-health-card">'
+        f'<div class="bb-health-title">Portfolio Health Score</div>'
+        f'<div style="display:flex;align-items:flex-start;gap:2rem;flex-wrap:wrap;">'
+        f'  <div style="text-align:center;min-width:72px;">'
+        f'    <div class="bb-health-score" style="color:{grade_color}">{total}</div>'
+        f'    <div class="bb-health-grade" style="color:{grade_color}">{grade}</div>'
+        f'    <div style="font-size:0.6rem;color:#444;margin-top:0.1rem;">/ 100</div>'
+        f'  </div>'
+        f'  <div style="flex:1;min-width:180px;">'
+        f'    <div class="bb-health-bar-wrap">'
+        f'      <div class="bb-health-bar-fill" style="width:{total}%;background:{grade_color};"></div>'
+        f'    </div>'
+        f'    <div style="display:flex;gap:1.2rem;flex-wrap:wrap;">{mini}</div>'
+        f'  </div>'
+        f'</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
 
 # =========================
 # INVESTMENT HORIZON

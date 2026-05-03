@@ -15,6 +15,7 @@ from app_core import (
     render_page_title,
     render_private_dashboard_logo,
     render_status_bar,
+    render_health_score_card,
 )
 
 _MARKET_WATCH = ("VOO", "QQQM", "QQQ")
@@ -639,6 +640,8 @@ def render_dashboard(ctx):
                     accent_color="#00ff88" if simple_return and simple_return >= 0 else "#ff4444")
         info_metric(c9, "Total P&L", pnl_str, "Unrealized + realized gain/loss in base currency.",
                     accent_color="#00ff88" if total_pnl >= 0 else "#ff4444")
+
+        render_health_score_card(ctx)
 
         _render_drop_alerts(ctx)
 
