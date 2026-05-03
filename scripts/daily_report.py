@@ -427,8 +427,18 @@ def build_summary(positions: pd.DataFrame, prices: dict, currencies: dict,
 # 5. CLAUDE — AI analysis
 # ══════════════════════════════════════════════════════════════════════════════
 
-def build_prompt(df: pd.DataFrame, news: dict, indices: dict) -> str:
+def build_prompt(
+    df: pd.DataFrame,
+    news: dict,
+    indices: dict,
+    metrics: dict | None = None,
+    fear_greed: dict | None = None,
+    economic_calendar: list | None = None,
+) -> str:
     total = df["_total"].iloc[0] if not df.empty else 0
+    metrics = metrics or {}
+    fear_greed = fear_greed or {}
+    economic_calendar = economic_calendar or []
 
     # Positions block
     pos_lines = []
@@ -480,6 +490,32 @@ def build_prompt(df: pd.DataFrame, news: dict, indices: dict) -> str:
             label = "EUR/USD" if "EUR" in ticker else "GBP/USD"
             fx_lines.append(f"  • {label}: {p['price']:.4f} ({p['change_pct']:+.2f}% hoy)")
 
+    # Performance metrics block
+    def _m(key, fmt=".2f", suffix=""):
+        v = metrics.get(key)
+        return f"{v:{fmt}}{suffix}" if v is not None else "N/A"
+
+    metrics_lines = [
+        f"  • Retorno total: {_m('total_return_pct', '.2f', '%')}  |  P&L total: ${metrics.get('total_pnl', 0):+,.2f}  |  Capital invertido: ${metrics.get('total_invested', 0):,.2f}",
+        f"  • YTD: {_m('ytd_return', '.2f', '%')}  |  30d: {_m('return_30d', '.2f', '%')}  |  90d: {_m('return_90d', '.2f', '%')}",
+        f"  • Sharpe (anualizado): {_m('sharpe')}  |  Max Drawdown: {_m('max_drawdown', '.2f', '%')}  |  Beta vs S&P 500: {_m('beta')}",
+        f"  • Benchmark YTD (VOO): {_m('bench_ytd', '.2f', '%')}",
+    ]
+
+    # Fear & Greed
+    fg_score = fear_greed.get("score")
+    fg_rating = fear_greed.get("rating", "N/A")
+    fg_line = f"{fg_score:.0f}/100 — {fg_rating}" if fg_score is not None else "N/A"
+
+    # Economic calendar
+    econ_lines = []
+    for ev in economic_calendar[:8]:
+        impact_tag = "🔴" if ev.get("impact") == "high" else "🟡"
+        econ_lines.append(
+            f"  {impact_tag} {ev.get('date','')} {ev.get('time','')} [{ev.get('country','')}] "
+            f"{ev.get('event','')} — Prev: {ev.get('previous','—')} / Fcst: {ev.get('forecast','—')}"
+        )
+
     return f"""Eres un CFA charterholder con 15 años de experiencia en gestión de portafolios multi-activo institucionales.
 Fecha de análisis: {TODAY.strftime('%d de %B de %Y')} ({TODAY.strftime('%A')}).
 
@@ -495,6 +531,21 @@ MERCADOS HOY
 
   Divisas:
 {chr(10).join(fx_lines) if fx_lines else "  (No disponible)"}
+
+════════════════════════════════════════════
+MÉTRICAS DE RENDIMIENTO DEL PORTAFOLIO
+════════════════════════════════════════════
+{chr(10).join(metrics_lines)}
+
+════════════════════════════════════════════
+SENTIMIENTO DE MERCADO
+════════════════════════════════════════════
+  • CNN Fear & Greed Index: {fg_line}
+
+════════════════════════════════════════════
+CALENDARIO ECONÓMICO — ESTA SEMANA (USD/EUR/GBP, impacto alto/medio)
+════════════════════════════════════════════
+{chr(10).join(econ_lines) if econ_lines else "  (No disponible)"}
 
 ════════════════════════════════════════════
 NOTICIAS RELEVANTES (últimas 24h)
@@ -1698,7 +1749,12 @@ def main():
     news = analyze_news_with_groq(news)
 
     print("[12/12 — part C] Calling Groq for portfolio analysis...")
-    prompt   = build_prompt(df, news, index_prices)
+    prompt   = build_prompt(
+        df, news, index_prices,
+        metrics=analytics.get("metrics", {}),
+        fear_greed=analytics.get("fear_greed", {}),
+        economic_calendar=analytics.get("economic_calendar", []),
+    )
     analysis = run_ai_analysis(prompt)
     print(f"       Analysis: {len(analysis)} characters")
 
