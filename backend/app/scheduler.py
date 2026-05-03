@@ -463,13 +463,14 @@ def _run_weekly_agents() -> None:
     Weekly AI agent run (Sundays 18:00 Bogota):
       1. Macro Agent  — fetches macro indicators, suggests macro_overlay, auto-applies if user has no manual override
       2. Portfolio Doctor — holistic health + VaR + drift diagnosis
+      3. Weekly Telegram report — momentum, AI analysis, full metrics
     Results saved to agent_results table for frontend retrieval.
     """
     from app.db.supabase_client import get_admin_client
     from app.db.quant_results import load_latest_quant_result
     from app.db.agent_results import save_agent_result
     from app.services.agent_pipeline import run_macro_agent, run_portfolio_doctor_agent
-    from app.services.market_data import get_quotes
+    from app.services.market_data import get_quotes, get_historical_multi, get_risk_free_rate
     from app.services.fx_service import get_fx_rates
     from app.services.exchange_classifier import get_native_currency
     from app.compute.portfolio_builder import build_portfolio
@@ -544,6 +545,8 @@ def _run_weekly_agents() -> None:
                 log.error("  ✗ %s… — macro agent failed: %s", user_id[:8], exc)
 
             # ── Portfolio Doctor ───────────────────────────────────────────────
+            doctor_result = None
+            summary = None
             try:
                 # Portfolio value for VaR estimate
                 quotes = get_quotes(tickers)
@@ -579,6 +582,152 @@ def _run_weekly_agents() -> None:
                     log.info("  ✓ %s… — portfolio doctor done (urgency=%s)", user_id[:8], doctor_result.get("urgency", "?"))
             except Exception as exc:
                 log.error("  ✗ %s… — portfolio doctor failed: %s", user_id[:8], exc)
+
+            # ── Weekly Telegram report ─────────────────────────────────────────
+            try:
+                import pandas as pd
+                from app.compute.returns import build_portfolio_returns, compute_twr
+                from app.compute.risk import compute_extended_ratios
+                from app.services.ai_analysis import generate_weekly_analysis
+                from app.services.telegram_service import send_weekly_report
+
+                rfr = float(settings.get("risk_free_rate", get_risk_free_rate()))
+                bm_ticker = settings.get("preferred_benchmark", "VOO")
+                all_tickers_hist = list(set(tickers + [bm_ticker]))
+
+                # 1Y historical data for momentum + risk metrics
+                hist = get_historical_multi(all_tickers_hist, period="1y")
+
+                # Momentum per ticker (1W / 1M / 3M / 6M / 1Y)
+                momentum: dict = {}
+                for t in tickers:
+                    df_h = hist.get(t)
+                    if df_h is None or df_h.empty:
+                        continue
+                    col = "Close" if "Close" in df_h.columns else df_h.columns[0]
+                    prices = df_h[col].dropna()
+                    if prices.empty:
+                        continue
+                    current = float(prices.iloc[-1])
+
+                    def _ret(n_days: int, p=prices, c=current):
+                        return (c / float(p.iloc[-n_days]) - 1) * 100 if len(p) > n_days else None
+
+                    momentum[t] = {
+                        "1w": _ret(5),
+                        "1m": _ret(21),
+                        "3m": _ret(63),
+                        "6m": _ret(126),
+                        "1y": _ret(252),
+                    }
+
+                # Risk metrics
+                total_shares = sum(float(p["shares"]) for p in positions if float(p.get("shares", 0)) > 0)
+                weights_hist = {
+                    p["ticker"]: float(p["shares"]) / total_shares
+                    for p in positions if float(p.get("shares", 0)) > 0
+                } if total_shares > 0 else {}
+                portfolio_returns = build_portfolio_returns(
+                    {t: hist[t] for t in tickers if t in hist},
+                    weights_hist,
+                )
+                bm_hist = hist.get(bm_ticker)
+                if bm_hist is not None and not bm_hist.empty:
+                    bm_col = "Close" if "Close" in bm_hist.columns else bm_hist.columns[0]
+                    bm_returns = bm_hist[bm_col].pct_change().dropna()
+                else:
+                    bm_returns = pd.Series(dtype=float)
+
+                ratios = compute_extended_ratios(portfolio_returns, bm_returns, rfr)
+                ratios["twr"] = compute_twr(portfolio_returns) * 100
+                bm_cum = float((1 + bm_returns).prod() - 1) if not bm_returns.empty else None
+
+                # Week-over-week portfolio change from snapshots
+                week_change_pct = None
+                try:
+                    snaps_res = (
+                        db.table("portfolio_snapshots")
+                        .select("snapshot_date,total_value_base")
+                        .eq("user_id", user_id)
+                        .order("snapshot_date", desc=True)
+                        .limit(8)
+                        .execute()
+                    )
+                    snaps = snaps_res.data or []
+                    if summary and len(snaps) >= 5:
+                        val_7d_ago = float(snaps[min(6, len(snaps) - 1)]["total_value_base"])
+                        if val_7d_ago > 0:
+                            week_change_pct = (float(summary.total_value_base) / val_7d_ago - 1) * 100
+                except Exception:
+                    pass
+
+                # Fear & Greed index
+                fear_greed: dict | None = None
+                try:
+                    import urllib.request as _req
+                    import json as _json
+                    _resp = _req.urlopen(
+                        "https://fear-and-greed-index.p.rapidapi.com/v1/fgi",
+                        timeout=5,
+                    )
+                except Exception:
+                    pass
+                try:
+                    import urllib.request as _ureq
+                    import json as _jmod
+                    _fg_req = _ureq.Request(
+                        "https://api.alternative.me/fng/?limit=1&format=json",
+                        headers={"User-Agent": "Mozilla/5.0"},
+                    )
+                    with _ureq.urlopen(_fg_req, timeout=5) as _r:
+                        _fg_data = _jmod.loads(_r.read())
+                    _fg_entry = (_fg_data.get("data") or [{}])[0]
+                    fear_greed = {
+                        "score": int(_fg_entry.get("value", 0)),
+                        "rating": _fg_entry.get("value_classification", ""),
+                    }
+                except Exception:
+                    pass
+
+                # Build summary object if portfolio doctor failed
+                if summary is None:
+                    quotes = get_quotes(tickers)
+                    exchange_currencies = [get_native_currency(t) for t in tickers]
+                    _fx = get_fx_rates(list(set(exchange_currencies)), base=base_currency)
+                    _txns = db.table("transactions").select("*").eq("user_id", user_id).execute().data or []
+                    summary = build_portfolio(positions, quotes, _fx, base_currency, _txns)
+
+                # Weekly AI analysis
+                weekly_ai = None
+                try:
+                    weekly_ai = generate_weekly_analysis(
+                        summary=summary,
+                        metrics=ratios,
+                        base_currency=base_currency,
+                        momentum=momentum,
+                        fear_greed=fear_greed,
+                        macro_result=macro_result,
+                        doctor_result=doctor_result,
+                        week_change_pct=week_change_pct,
+                    )
+                except Exception as ai_exc:
+                    log.warning("  Weekly AI analysis failed: %s", ai_exc)
+
+                ok = send_weekly_report(
+                    summary=summary,
+                    metrics=ratios,
+                    base_currency=base_currency,
+                    benchmark_ticker=bm_ticker,
+                    benchmark_cum=bm_cum,
+                    momentum=momentum,
+                    fear_greed=fear_greed,
+                    week_change_pct=week_change_pct,
+                    ai_analysis=weekly_ai,
+                )
+                log.info("  %s %s… — weekly Telegram report sent", "✓" if ok else "✗", user_id[:8])
+
+            except Exception as exc:
+                log.error("  ✗ %s… — weekly report failed: %s", user_id[:8], exc)
 
         except Exception as exc:
             log.error("  ✗ %s… — weekly agents failed: %s", user_id[:8], exc)

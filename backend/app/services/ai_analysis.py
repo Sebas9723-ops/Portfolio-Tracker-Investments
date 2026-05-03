@@ -182,3 +182,146 @@ def generate_daily_analysis(summary, metrics: dict, base_currency: str = "USD") 
     """Full pipeline: build prompt → call Groq → return analysis text."""
     prompt = build_analysis_prompt(summary, metrics, base_currency)
     return run_groq_analysis(prompt)
+
+
+# ── Weekly analysis ───────────────────────────────────────────────────────────
+
+def build_weekly_analysis_prompt(
+    summary,
+    metrics: dict,
+    base_currency: str = "USD",
+    momentum: Optional[dict] = None,
+    fear_greed: Optional[dict] = None,
+    macro_result: Optional[dict] = None,
+    doctor_result: Optional[dict] = None,
+    week_change_pct: Optional[float] = None,
+) -> str:
+    """Build a weekly-focused Groq prompt with momentum, macro context, and risk metrics."""
+    today = date.today()
+    total = summary.total_value_base
+    invested = summary.total_invested_base or 0.0
+    pnl = summary.total_unrealized_pnl or 0.0
+
+    sharpe = metrics.get("sharpe") or 0.0
+    sortino = metrics.get("sortino") or 0.0
+    ann_vol = (metrics.get("annualized_vol") or 0.0) * 100
+    max_dd = (metrics.get("max_drawdown") or 0.0) * 100
+    alpha = (metrics.get("alpha") or 0.0) * 100
+    beta = metrics.get("beta") or 0.0
+    twr = metrics.get("twr") or 0.0
+    ann_return = (metrics.get("annualized_return") or 0.0) * 100
+
+    # Positions block
+    pos_lines = []
+    for r in summary.rows:
+        pnl_r = r.unrealized_pnl or 0.0
+        pnl_pct_r = r.unrealized_pnl_pct or 0.0
+        ticker_mom = (momentum or {}).get(r.ticker, {})
+        w1 = ticker_mom.get("1w")
+        m1 = ticker_mom.get("1m")
+        m3 = ticker_mom.get("3m")
+        mom_str = ""
+        if w1 is not None:
+            mom_str += f"1W={w1:+.1f}%"
+        if m1 is not None:
+            mom_str += f" 1M={m1:+.1f}%"
+        if m3 is not None:
+            mom_str += f" 3M={m3:+.1f}%"
+        pos_lines.append(
+            f"  • {r.ticker}: Val={base_currency} {r.value_base:,.0f} | Wt={r.weight:.1f}% | "
+            f"P&L={pnl_pct_r:+.1f}% | {mom_str}"
+        )
+
+    # Market indices
+    indices = _fetch_indices()
+    idx_lines = []
+    for ticker, name in _MARKET_INDICES.items():
+        if ticker in ("EURUSD=X", "GBPUSD=X"):
+            continue
+        if ticker in indices:
+            idx_lines.append(f"  • {name}: {indices[ticker]['price']:.2f} ({indices[ticker]['change_pct']:+.2f}%)")
+
+    # Fear & Greed
+    fg_str = ""
+    if fear_greed and fear_greed.get("score") is not None:
+        fg_str = f"Fear & Greed Index: {fear_greed['score']}/100 — {fear_greed.get('rating', '')}"
+
+    # Macro regime
+    macro_str = ""
+    if macro_result:
+        macro_str = f"Macro regime: {macro_result.get('macro_regime', 'unknown')} | Overlay: {macro_result.get('suggested_overlay', {})}"
+
+    # Doctor urgency
+    doctor_str = ""
+    if doctor_result:
+        doctor_str = f"Portfolio Doctor urgency: {doctor_result.get('urgency', 'none')} — {doctor_result.get('diagnosis', '')}"
+
+    week_str = f"Week change: {week_change_pct:+.2f}%" if week_change_pct is not None else ""
+
+    return f"""You are a CFA charterholder with 15 years of experience in institutional multi-asset portfolio management.
+Weekly report date: {today.strftime('%B %d, %Y')} ({today.strftime('%A')}).
+
+════════════════════════════════════════════
+PORTFOLIO DATA — Total Value: {base_currency} {total:,.2f}
+════════════════════════════════════════════
+Invested capital: {base_currency} {invested:,.2f}
+Total unrealized P&L: {base_currency} {pnl:+,.2f}
+{week_str}
+
+Risk & Return metrics (trailing 1Y):
+  • TWR: {twr:+.2f}% | Ann. Return: {ann_return:+.2f}% | Ann. Vol: {ann_vol:.2f}%
+  • Sharpe: {sharpe:.3f} | Sortino: {sortino:.3f}
+  • Max Drawdown: {max_dd:.2f}%
+  • Alpha vs VOO: {alpha:+.2f}% | Beta: {beta:.3f}
+
+Positions (with momentum):
+{chr(10).join(pos_lines) if pos_lines else "  (No positions)"}
+
+════════════════════════════════════════════
+MACRO & MARKET CONTEXT
+════════════════════════════════════════════
+{chr(10).join(idx_lines) if idx_lines else "  (Not available)"}
+{fg_str}
+{macro_str}
+{doctor_str}
+
+════════════════════════════════════════════
+
+INSTRUCTIONS: Generate a comprehensive weekly institutional portfolio review. Be specific — mention tickers, prices, percentages. Write in professional Bloomberg Intelligence style English. Maximum 600 words to fit in Telegram.
+
+## 📊 WEEKLY EXECUTIVE SUMMARY
+Portfolio performance this week vs S&P 500. Winners and losers of the week.
+
+## 📈 MOMENTUM ANALYSIS
+Which positions have positive/negative momentum across timeframes (1W/1M/3M). Trend acceleration or deceleration.
+
+## 🌍 MACRO & REGIME
+Current macro regime implications for the portfolio. VIX, rates, and FX impact.
+
+## 🎯 STRATEGIC ACTIONS FOR NEXT WEEK
+2-3 concrete tactical actions: ticker, direction, quantitative justification.
+
+## ⚠️ KEY RISKS NEXT 7 DAYS
+Top 2 risks for the coming week with probability and impact assessment.
+
+Rules: maximum 600 words. Every statement anchored to a real data point from the portfolio data above."""
+
+
+def generate_weekly_analysis(
+    summary,
+    metrics: dict,
+    base_currency: str = "USD",
+    momentum: Optional[dict] = None,
+    fear_greed: Optional[dict] = None,
+    macro_result: Optional[dict] = None,
+    doctor_result: Optional[dict] = None,
+    week_change_pct: Optional[float] = None,
+) -> Optional[str]:
+    """Full weekly pipeline: build prompt → call Groq → return analysis text."""
+    prompt = build_weekly_analysis_prompt(
+        summary, metrics, base_currency,
+        momentum=momentum, fear_greed=fear_greed,
+        macro_result=macro_result, doctor_result=doctor_result,
+        week_change_pct=week_change_pct,
+    )
+    return run_groq_analysis(prompt)

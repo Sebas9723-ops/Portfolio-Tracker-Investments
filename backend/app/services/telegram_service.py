@@ -173,3 +173,147 @@ def send_daily_report(
             "parse_mode": "HTML",
         })
     return ok
+
+
+# ── Weekly report ─────────────────────────────────────────────────────────────
+
+def build_weekly_report_messages(
+    summary,
+    metrics: dict,
+    base_currency: str = "USD",
+    benchmark_ticker: str = "VOO",
+    benchmark_cum: Optional[float] = None,
+    momentum: Optional[dict] = None,
+    fear_greed: Optional[dict] = None,
+    week_change_pct: Optional[float] = None,
+) -> list[str]:
+    """
+    Build Telegram HTML messages for the weekly portfolio report.
+    Returns a list of messages (split to respect 4096-char limit).
+    """
+    now_col = datetime.now(_COLOMBIA_TZ)
+    total = summary.total_value_base
+    invested = summary.total_invested_base or 0.0
+    pnl = summary.total_unrealized_pnl or 0.0
+    pnl_pct = summary.total_unrealized_pnl_pct or 0.0
+
+    sharpe = metrics.get("sharpe") or 0.0
+    sortino = metrics.get("sortino") or 0.0
+    ann_vol = (metrics.get("annualized_vol") or 0.0) * 100
+    max_dd = (metrics.get("max_drawdown") or 0.0) * 100
+    alpha = (metrics.get("alpha") or 0.0) * 100
+    beta = metrics.get("beta") or 0.0
+    twr = metrics.get("twr") or 0.0
+    ann_return = (metrics.get("annualized_return") or 0.0) * 100
+
+    week_line = ""
+    if week_change_pct is not None:
+        week_line = f"\n   Week Change:       <code>{_sign(week_change_pct)}{week_change_pct:.2f}%</code>"
+
+    fg_line = ""
+    if fear_greed and fear_greed.get("score") is not None:
+        fg_line = f"\n   Fear & Greed:      <code>{fear_greed['score']}/100 — {fear_greed.get('rating', '')}</code>"
+
+    bm_line = ""
+    if benchmark_cum is not None:
+        bm_pct = benchmark_cum * 100
+        excess = twr - bm_pct
+        bm_line = (
+            f"\n   {benchmark_ticker} (cumul):      <code>{_sign(bm_pct)}{bm_pct:.2f}%</code>"
+            f"\n   Excess vs {benchmark_ticker}:   <code>{_sign(excess)}{excess:.2f}%</code>"
+        )
+
+    header = "\n".join([
+        "<b>⚡ WEEKLY PORTFOLIO REPORT — PORTAFOLIO MANAGEMENT SA</b>",
+        f"📅 {now_col.strftime('%Y-%m-%d')} | Week ending Sunday 18:00 Bogota",
+        "",
+        "<b>📊 PORTFOLIO SUMMARY</b>",
+        f"💼 Total Value:        <code>{base_currency} {total:>14,.2f}</code>",
+        f"   Invested Capital:  <code>{base_currency} {invested:>14,.2f}</code>",
+        f"   Unrealized P&L:    <code>{_sign(pnl)}{pnl:>14,.2f} ({_sign(pnl_pct)}{pnl_pct:.2f}%)</code>",
+        week_line.strip(),
+        "",
+        "<b>📈 RISK &amp; RETURN METRICS (trailing 1Y)</b>",
+        f"   TWR:               <code>{_sign(twr)}{twr:.2f}%</code>",
+        f"   Ann. Return:       <code>{_sign(ann_return)}{ann_return:.2f}%</code>",
+        f"   Ann. Volatility:   <code>{ann_vol:.2f}%</code>",
+        f"   Sharpe:            <code>{sharpe:.4f}</code>",
+        f"   Sortino:           <code>{sortino:.4f}</code>",
+        f"   Max Drawdown:      <code>{max_dd:.2f}%</code>",
+        f"   Alpha vs {benchmark_ticker}:    <code>{_sign(alpha)}{alpha:.2f}%</code>",
+        f"   Beta:              <code>{beta:.4f}</code>",
+        bm_line.strip(),
+        fg_line.strip(),
+    ])
+    messages = [header]
+
+    # Momentum table
+    if momentum and summary.rows:
+        mom_rows = ["<b>📉 MOMENTUM ANALYSIS</b>", "<pre>"]
+        mom_rows.append(f"{'Ticker':<8} {'1W':>7} {'1M':>7} {'3M':>7} {'6M':>7} {'1Y':>7} {'Wt%':>6}")
+        mom_rows.append("─" * 53)
+        for r in sorted(summary.rows, key=lambda x: x.weight, reverse=True):
+            t = r.ticker
+            tm = momentum.get(t, {})
+            def _fmt(v):
+                return f"{v:+.1f}%" if v is not None else "  N/A"
+            mom_rows.append(
+                f"{t:<8} {_fmt(tm.get('1w')):>7} {_fmt(tm.get('1m')):>7} "
+                f"{_fmt(tm.get('3m')):>7} {_fmt(tm.get('6m')):>7} {_fmt(tm.get('1y')):>7} "
+                f"{r.weight:>5.1f}%"
+            )
+        mom_rows.append("</pre>")
+        messages.append("\n".join(mom_rows))
+
+    # Holdings table
+    if summary.rows:
+        header_h = f"{'Ticker':<8} {'Shares':>8} {'Price':>10} {'Value':>12} {'Wt%':>6} {'PnL%':>7}"
+        separator = "─" * len(header_h)
+        table_rows = [header_h, separator]
+        for r in summary.rows:
+            table_rows.append(
+                f"{r.ticker:<8} {r.shares:>8.2f} {r.price_native:>10,.2f} "
+                f"{r.value_base:>12,.0f} {r.weight:>5.1f}% {(r.unrealized_pnl_pct or 0):>+6.1f}%"
+            )
+        messages.append("<b>📋 HOLDINGS</b>\n<pre>" + "\n".join(table_rows) + "</pre>")
+
+    return messages
+
+
+def send_weekly_report(
+    summary,
+    metrics: dict,
+    base_currency: str = "USD",
+    benchmark_ticker: str = "VOO",
+    benchmark_cum: Optional[float] = None,
+    momentum: Optional[dict] = None,
+    fear_greed: Optional[dict] = None,
+    week_change_pct: Optional[float] = None,
+    ai_analysis: Optional[str] = None,
+    bot_token: str = "",
+    chat_id: str = "",
+) -> bool:
+    """Build and send the full weekly portfolio report to Telegram."""
+    settings = get_settings()
+    token = bot_token or settings.TELEGRAM_BOT_TOKEN
+    cid = chat_id or settings.TELEGRAM_CHAT_ID
+    if not token or not cid:
+        return False
+
+    messages = build_weekly_report_messages(
+        summary, metrics, base_currency, benchmark_ticker, benchmark_cum,
+        momentum=momentum, fear_greed=fear_greed, week_change_pct=week_change_pct,
+    )
+
+    if ai_analysis:
+        safe = ai_analysis.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        messages.append(f"<b>🤖 ANÁLISIS AI SEMANAL — Llama 3.3</b>\n\n{safe}")
+
+    ok = True
+    for text in messages:
+        ok = ok and _post(token, "sendMessage", {
+            "chat_id": cid,
+            "text": text,
+            "parse_mode": "HTML",
+        })
+    return ok
