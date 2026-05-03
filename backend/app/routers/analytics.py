@@ -1054,7 +1054,8 @@ def mwr_return(user_id: str = Depends(get_user_id)):
     )
     transactions = tx_res.data or []
 
-    pos_res = db.table("positions").select("ticker,shares").eq("user_id", user_id).execute()
+    # Fetch positions with avg_cost fields for final fallback
+    pos_res = db.table("positions").select("ticker,shares,avg_cost_native,cost_currency,currency").eq("user_id", user_id).execute()
     positions = [p for p in (pos_res.data or []) if float(p.get("shares", 0)) > 0]
     if not positions:
         return {"mwr": None, "n_transactions": 0}
@@ -1065,7 +1066,9 @@ def mwr_return(user_id: str = Depends(get_user_id)):
     quotes = get_quotes(tickers)
     exchange_currencies = [get_native_currency(t) for t in tickers]
     tx_ccys = list({tx.get("currency", base_currency) for tx in transactions if tx.get("currency")})
-    all_ccys = list(set(exchange_currencies + tx_ccys))
+    # Include cost_currency from positions so the final fallback FX is correct
+    cost_ccys = [p.get("cost_currency") or get_native_currency(p["ticker"]) for p in positions]
+    all_ccys = list(set(exchange_currencies + tx_ccys + cost_ccys))
     fx_rates = get_fx_rates(all_ccys, base=base_currency)
 
     current_value = 0.0
@@ -1082,9 +1085,7 @@ def mwr_return(user_id: str = Depends(get_user_id)):
     mwr = _compute_mwr(transactions, current_value, fx_rates, base_currency)
     n_buy_sell = sum(1 for tx in transactions if (tx.get("action") or "").upper() in ("BUY", "SELL"))
 
-    # Fallback: if XIRR fails, sum raw BUY cash flows for total_invested.
-    # This avoids relying on avg_cost_native (which can be null) and is always
-    # computable from transaction history.
+    # Fallback 1: sum raw BUY cash flows from transactions.
     if mwr is None:
         try:
             from datetime import date as _d
@@ -1111,6 +1112,25 @@ def mwr_return(user_id: str = Depends(get_user_id)):
                     mwr = round(((current_value / total_invested) ** (365.0 / days_held) - 1) * 100, 2)
                 else:
                     mwr = round((current_value / total_invested - 1) * 100, 2)
+        except Exception:
+            pass
+
+    # Fallback 2: positions avg_cost_native × shares, converted using cost_currency.
+    # Used when there are no transactions (positions added manually without BUY records).
+    if mwr is None:
+        try:
+            from datetime import date as _d2
+            total_invested = 0.0
+            for p in positions:
+                avg_cost = float(p.get("avg_cost_native") or 0)
+                shares = float(p.get("shares") or 0)
+                # cost_currency is the currency avg_cost_native was entered in
+                ccy = p.get("cost_currency") or get_native_currency(p["ticker"])
+                fx = fx_rates.get(ccy, 1.0)
+                total_invested += shares * avg_cost * fx
+            if total_invested > 0:
+                # Use earliest position creation or a 365-day default for annualisation
+                mwr = round((current_value / total_invested - 1) * 100, 2)
         except Exception:
             pass
 

@@ -264,16 +264,18 @@ export default function DashboardPage() {
   const dayChangePct = totalValue > 0 ? (dayChange / (totalValue - dayChange)) * 100 : 0;
 
   // Chart data — from automatic history (historical prices × shares)
-  // Build history: keep all backend data, then upsert today's live value so
-  // purchases made today are visible and no stale drop appears at the end.
-  // Skip weekends — markets are closed, lightweight-charts uses business-day
-  // mode and a Sat/Sun point would appear displaced to the following Monday.
-  const localToday = new Date().toLocaleDateString("en-CA"); // "YYYY-MM-DD" in local tz
-  const todayDow = new Date().getDay(); // 0 = Sun, 6 = Sat
-  const isTradingDay = todayDow !== 0 && todayDow !== 6;
+  // Always append the last trading day's live value so the chart tail matches
+  // the portfolio header. On weekends, "today" is Saturday/Sunday but the last
+  // trading day is Friday, so we use Friday's date to avoid a displaced bar.
+  const _now = new Date();
+  const _dow = _now.getDay(); // 0=Sun, 6=Sat
+  const _lastTD = new Date(_now);
+  if (_dow === 0) _lastTD.setDate(_lastTD.getDate() - 2); // Sun → Fri
+  if (_dow === 6) _lastTD.setDate(_lastTD.getDate() - 1); // Sat → Fri
+  const liveBarDate = _lastTD.toLocaleDateString("en-CA"); // "YYYY-MM-DD"
   const allHistory = (historyData ?? [])
-    .filter((d) => d.date !== localToday)           // remove any stale today entry
-    .concat(isTradingDay ? [{ date: localToday, value: totalValue }] : []) // live point on weekdays only
+    .filter((d) => d.date !== liveBarDate)  // remove stale backend entry for that date
+    .concat(totalValue > 0 ? [{ date: liveBarDate, value: totalValue }] : [])
     .slice()
     .sort((a, b) => a.date.localeCompare(b.date));
   const chartData = filterHistory(allHistory, chartPeriod);
