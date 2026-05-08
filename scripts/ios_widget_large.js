@@ -116,7 +116,7 @@ function addPositionRow(parent, ticker, value, dayPct, totalPct, positive, hasDa
 
   // Value
   const val = row.addText(fmtValue(value));
-  val.font = Font.monospacedSystemFont(10);
+  val.font = Font.mediumMonospacedSystemFont(10);
   val.textColor = DIM;
   val.lineLimit = 1;
 
@@ -134,7 +134,7 @@ function addPositionRow(parent, ticker, value, dayPct, totalPct, positive, hasDa
   // Total return %
   const totalColor = totalPct == null ? MUTED : (totalPct >= 0 ? GREEN : RED);
   const tot = row.addText(fmtPct(totalPct).padStart(8));
-  tot.font = Font.monospacedSystemFont(10);
+  tot.font = Font.mediumMonospacedSystemFont(10);
   tot.textColor = totalColor;
   tot.textOpacity = 0.75;
   tot.lineLimit = 1;
