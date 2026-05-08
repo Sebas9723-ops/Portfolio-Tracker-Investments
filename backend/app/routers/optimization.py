@@ -223,18 +223,23 @@ def save_ticker_weight_rules(body: TickerWeightRulesUpdate, user_id: str = Depen
 @router.put("/combination-ranges")
 def save_combination_ranges(body: CombinationRangesUpdate, user_id: str = Depends(get_user_id)):
     """Save Motor 2 combination range rules for a specific profile."""
-    db = get_admin_client()
-    res = db.table("user_settings").select("combination_ranges").eq("user_id", user_id).maybe_single().execute()
-    existing = (res.data or {}).get("combination_ranges") or {}
-
+    from fastapi import HTTPException
     if body.profile not in ("conservative", "base", "aggressive"):
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail="Invalid profile")
+        raise HTTPException(status_code=400, detail=f"Invalid profile: {body.profile!r}")
+    try:
+        db = get_admin_client()
+        res = db.table("user_settings").select("combination_ranges").eq("user_id", user_id).maybe_single().execute()
+        raw_existing = (res.data or {}).get("combination_ranges")
+        existing = raw_existing if isinstance(raw_existing, dict) else {}
 
-    merged = {**existing, body.profile: body.ranges}
+        merged = {**existing, body.profile: body.ranges}
 
-    db.table("user_settings").upsert(
-        {"user_id": user_id, "combination_ranges": merged},
-        on_conflict="user_id",
-    ).execute()
-    return {"profile": body.profile, "ranges": body.ranges}
+        db.table("user_settings").upsert(
+            {"user_id": user_id, "combination_ranges": merged},
+            on_conflict="user_id",
+        ).execute()
+        return {"profile": body.profile, "ranges": body.ranges}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Motor 2 save failed: {e}")

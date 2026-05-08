@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchSettings, updateSettings, fetchAlerts, createAlert, deleteAlert } from "@/lib/api/settings";
 import type { Alert } from "@/lib/api/settings";
@@ -9,7 +9,6 @@ import { Trash2, Bell, BellOff } from "lucide-react";
 import type { UserSettings } from "@/lib/types";
 import { fetchDCASchedule, upsertDCASchedule, deleteDCASchedule, runDCANow } from "@/lib/api/dca";
 import type { DCASchedule } from "@/lib/api/dca";
-import { importIBKRCsv } from "@/lib/api/import";
 
 const PROFILES_LABELS: Record<string, string> = { conservative: "Conservative", base: "Base", aggressive: "Aggressive" };
 const PROFILE_COLORS: Record<string, string> = { conservative: "#2563eb", base: "#16a34a", aggressive: "#dc2626" };
@@ -44,10 +43,6 @@ export default function SettingsPage() {
   });
   const [dcaSaved, setDcaSaved] = useState(false);
   const [dcaRunning, setDcaRunning] = useState(false);
-  const [ibkrFile, setIbkrFile] = useState<File | null>(null);
-  const [ibkrResult, setIbkrResult] = useState<{ imported: number; skipped: number; errors: string[]; tickers: string[] } | null>(null);
-  const [ibkrLoading, setIbkrLoading] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: dcaSchedule } = useQuery({ queryKey: ["dca-schedule"], queryFn: fetchDCASchedule, staleTime: 60_000 });
 
@@ -476,57 +471,6 @@ export default function SettingsPage() {
             </>
           )}
         </div>
-      </div>
-
-      {/* ── IBKR Import ── */}
-      <div className="bbg-card">
-        <p className="bbg-header">Import Transactions (IBKR Flex Query)</p>
-        <p className="text-bloomberg-muted text-[10px] mb-3">
-          Upload an Interactive Brokers Flex Query CSV export to import trades automatically.
-          Export from IBKR: Reports → Flex Queries → Trade Confirmation (CSV format).
-        </p>
-        <div className="flex items-center gap-3 flex-wrap">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".csv,.txt"
-            onChange={(e) => setIbkrFile(e.target.files?.[0] || null)}
-            className="text-bloomberg-muted text-[10px] file:bg-bloomberg-border file:text-bloomberg-text file:border-0 file:px-2 file:py-1 file:text-[10px] file:mr-2 file:cursor-pointer"
-          />
-          <button
-            onClick={async () => {
-              if (!ibkrFile) return;
-              setIbkrLoading(true);
-              setIbkrResult(null);
-              try {
-                const result = await importIBKRCsv(ibkrFile);
-                setIbkrResult(result);
-                qc.invalidateQueries({ queryKey: ["portfolio"] });
-                qc.invalidateQueries({ queryKey: ["transactions"] });
-              } catch (e) {
-                setIbkrResult({ imported: 0, skipped: 0, errors: [String(e)], tickers: [] });
-              }
-              setIbkrLoading(false);
-            }}
-            disabled={!ibkrFile || ibkrLoading}
-            className="bg-bloomberg-gold text-bloomberg-bg text-[10px] font-bold px-3 py-1.5 hover:opacity-90 disabled:opacity-50 uppercase tracking-wider"
-          >
-            {ibkrLoading ? "Importing…" : "Import CSV"}
-          </button>
-        </div>
-        {ibkrResult && (
-          <div className={`mt-3 p-2 text-[10px] border ${ibkrResult.imported > 0 ? "border-green-500/30 bg-green-500/5" : "border-red-500/30 bg-red-500/5"}`}>
-            <p className="font-bold text-bloomberg-text">
-              {ibkrResult.imported} trades imported · {ibkrResult.skipped} skipped
-              {ibkrResult.tickers.length > 0 && ` · Tickers: ${ibkrResult.tickers.join(", ")}`}
-            </p>
-            {ibkrResult.errors.length > 0 && (
-              <ul className="mt-1 text-red-400">
-                {ibkrResult.errors.map((e, i) => <li key={i}>⚠ {e}</li>)}
-              </ul>
-            )}
-          </div>
-        )}
       </div>
 
       <div className="flex items-center gap-4">

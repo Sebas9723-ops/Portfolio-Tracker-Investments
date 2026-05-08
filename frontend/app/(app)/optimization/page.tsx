@@ -127,6 +127,7 @@ export default function OptimizationPage() {
   const [newComboMin, setNewComboMin] = useState("40");
   const [newComboMax, setNewComboMax] = useState("60");
   const [m2Saved, setM2Saved] = useState(false);
+  const [m2Error, setM2Error] = useState<string | null>(null);
 
   // Load saved settings to pre-populate Motor 1 & 2
   const { data: savedSettings } = useQuery({
@@ -314,6 +315,7 @@ export default function OptimizationPage() {
     setNewComboMin("40");
     setNewComboMax("60");
     setM2Saved(false);
+    setM2Error(null);
   };
 
   const removeCombo = (id: string) => {
@@ -322,6 +324,7 @@ export default function OptimizationPage() {
       [activeProfile]: (prev[activeProfile] ?? []).filter((r) => r.id !== id),
     }));
     setM2Saved(false);
+    setM2Error(null);
   };
 
   const toggleNewComboTicker = (ticker: string) => {
@@ -332,7 +335,16 @@ export default function OptimizationPage() {
 
   const { mutate: saveM2, isPending: savingM2 } = useMutation({
     mutationFn: () => saveCombinationRanges(activeProfile, combosForProfile),
-    onSuccess: () => setM2Saved(true),
+    onSuccess: () => {
+      setM2Saved(true);
+      setM2Error(null);
+      qc.invalidateQueries({ queryKey: ["settings"] });
+    },
+    onError: (err: unknown) => {
+      const detail = (err as any)?.response?.data?.detail ?? (err instanceof Error ? err.message : String(err));
+      setM2Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+      setM2Saved(false);
+    },
   });
 
   return (
@@ -570,6 +582,7 @@ export default function OptimizationPage() {
             {savingM2 ? "SAVING…" : "SAVE ENGINE 2"}
           </button>
           {m2Saved && <span className="text-green-600 text-[10px]">✓ Saved</span>}
+          {m2Error && <span className="text-red-400 text-[10px]">⚠ {m2Error}</span>}
         </div>
       </div>
 

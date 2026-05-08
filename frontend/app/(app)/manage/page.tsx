@@ -70,6 +70,7 @@ export default function ManagePage() {
   const [xtbLoading, setXtbLoading] = useState(false);
   const xtbFileRef = useRef<HTMLInputElement>(null);
 
+
   // CSV import state
   const [csvImporting, setCsvImporting] = useState(false);
   const [csvResult, setCsvResult] = useState<{ imported: number; skipped: number; errors: { row: number; ticker?: string; error: string }[] } | null>(null);
