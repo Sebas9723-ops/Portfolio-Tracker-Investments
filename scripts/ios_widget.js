@@ -97,7 +97,7 @@ function addMetricRow(parent, label, amount, pct, isPositive, hasData) {
   const row = parent.addStack();
   row.layoutHorizontally();
   row.centerAlignContent();
-  row.setPadding(9, 0, 9, 0);
+  row.setPadding(6, 0, 6, 0);
 
   // Colored dot
   const dot = row.addText("●");
@@ -108,21 +108,21 @@ function addMetricRow(parent, label, amount, pct, isPositive, hasData) {
 
   // Label
   const lbl = row.addText(label);
-  lbl.font = Font.mediumRoundedSystemFont(13);
+  lbl.font = Font.mediumRoundedSystemFont(11);
   lbl.textColor = MUTED;
 
   row.addSpacer(); // push right
 
   // Amount
   const amtEl = row.addText(amount);
-  amtEl.font = Font.mediumMonospacedSystemFont(13);
+  amtEl.font = Font.mediumMonospacedSystemFont(11);
   amtEl.textColor = color;
 
-  row.addSpacer(10);
+  row.addSpacer(6);
 
   // Percentage
   const pctEl = row.addText(pct);
-  pctEl.font = Font.boldMonospacedSystemFont(13);
+  pctEl.font = Font.boldMonospacedSystemFont(11);
   pctEl.textColor = color;
 }
 
@@ -137,7 +137,7 @@ async function buildWidget() {
 
   const w = new ListWidget();
   w.backgroundColor = BG;
-  w.setPadding(14, 16, 12, 16);
+  w.setPadding(12, 14, 10, 14);
 
   // Header: PORTFOLIO + chart icon
   const hRow = w.addStack();
@@ -184,11 +184,11 @@ async function buildWidget() {
 
   // Main value
   const valTxt = w.addText(fmtValue(value));
-  valTxt.font = Font.boldSystemFont(28);
+  valTxt.font = Font.boldSystemFont(22);
   valTxt.textColor = TEXT;
   valTxt.minimumScaleFactor = 0.55;
 
-  w.addSpacer(6);
+  w.addSpacer(4);
   addDivider(w);
 
   addMetricRow(w, "Today",
@@ -202,7 +202,7 @@ async function buildWidget() {
     (pnl ?? 0) >= 0, pnl != null);
 
   addDivider(w);
-  w.addSpacer(5);
+  w.addSpacer(4);
 
   // Timestamp
   const tsRow = w.addStack();
@@ -232,6 +232,6 @@ const widget = await buildWidget();
 if (config.runsInWidget) {
   Script.setWidget(widget);
 } else {
-  widget.presentMedium();
+  widget.presentSmall();
 }
 Script.complete();
