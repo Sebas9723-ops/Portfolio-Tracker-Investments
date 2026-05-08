@@ -100,40 +100,89 @@ function addStatCol(parent, label, amount, pct, positive, hasData) {
   p.textOpacity = 0.85;
 }
 
+// ── Column widths (shared by header + data rows) ─────────────
+const COL_VAL    = 72;
+const COL_DAY    = 64;
+const COL_RET    = 64;
+const COL_GAP    = 6;
+
+function _colStack(parent, width) {
+  const s = parent.addStack();
+  s.layoutHorizontally();
+  s.size = new Size(width, 0);
+  s.addSpacer(); // right-align content
+  return s;
+}
+
+// ── Positions column headers ──────────────────────────────────
+function addPosHeaders(parent) {
+  const row = parent.addStack();
+  row.layoutHorizontally();
+  row.centerAlignContent();
+
+  const hTkr = row.addText("TICKER");
+  hTkr.font = Font.boldMonospacedSystemFont(7);
+  hTkr.textColor = GOLD;
+  hTkr.textOpacity = 0.45;
+
+  row.addSpacer();
+
+  const cVal = _colStack(row, COL_VAL);
+  const hVal = cVal.addText("VALUE");
+  hVal.font = Font.boldMonospacedSystemFont(7);
+  hVal.textColor = GOLD;
+  hVal.textOpacity = 0.45;
+
+  row.addSpacer(COL_GAP);
+
+  const cDay = _colStack(row, COL_DAY);
+  const hDay = cDay.addText("TODAY");
+  hDay.font = Font.boldMonospacedSystemFont(7);
+  hDay.textColor = GOLD;
+  hDay.textOpacity = 0.45;
+
+  row.addSpacer(COL_GAP);
+
+  const cRet = _colStack(row, COL_RET);
+  const hRet = cRet.addText("RETURN");
+  hRet.font = Font.boldMonospacedSystemFont(7);
+  hRet.textColor = GOLD;
+  hRet.textOpacity = 0.45;
+}
+
 // ── Position row ──────────────────────────────────────────────
 function addPositionRow(parent, ticker, value, dayPct, totalPct, positive, hasDay) {
   const row = parent.addStack();
   row.layoutHorizontally();
   row.centerAlignContent();
 
-  // Ticker
-  const tkr = row.addText(ticker.padEnd(5));
+  const tkr = row.addText(ticker);
   tkr.font = Font.boldMonospacedSystemFont(11);
   tkr.textColor = TEXT;
   tkr.lineLimit = 1;
 
   row.addSpacer();
 
-  // Value
-  const val = row.addText(fmtValue(value));
+  const cVal = _colStack(row, COL_VAL);
+  const val = cVal.addText(fmtValue(value));
   val.font = Font.mediumMonospacedSystemFont(10);
   val.textColor = DIM;
   val.lineLimit = 1;
 
-  row.addSpacer(10);
+  row.addSpacer(COL_GAP);
 
-  // Day %
   const dayColor = !hasDay ? MUTED : (positive ? GREEN : RED);
-  const day = row.addText(fmtPct(dayPct).padStart(8));
+  const cDay = _colStack(row, COL_DAY);
+  const day = cDay.addText(fmtPct(dayPct));
   day.font = Font.boldMonospacedSystemFont(10);
   day.textColor = dayColor;
   day.lineLimit = 1;
 
-  row.addSpacer(8);
+  row.addSpacer(COL_GAP);
 
-  // Total return %
   const totalColor = totalPct == null ? MUTED : (totalPct >= 0 ? GREEN : RED);
-  const tot = row.addText(fmtPct(totalPct).padStart(8));
+  const cRet = _colStack(row, COL_RET);
+  const tot = cRet.addText(fmtPct(totalPct));
   tot.font = Font.mediumMonospacedSystemFont(10);
   tot.textColor = totalColor;
   tot.textOpacity = 0.75;
@@ -233,35 +282,7 @@ async function buildWidget() {
   w.addSpacer(8);
 
   // ── Positions header ──
-  const posHeader = w.addStack();
-  posHeader.layoutHorizontally();
-
-  const hTicker = posHeader.addText("TICKER");
-  hTicker.font = Font.boldMonospacedSystemFont(7);
-  hTicker.textColor = GOLD;
-  hTicker.textOpacity = 0.45;
-
-  posHeader.addSpacer();
-
-  const hValue = posHeader.addText("VALUE");
-  hValue.font = Font.boldMonospacedSystemFont(7);
-  hValue.textColor = GOLD;
-  hValue.textOpacity = 0.45;
-
-  posHeader.addSpacer(10);
-
-  const hDay = posHeader.addText("   TODAY");
-  hDay.font = Font.boldMonospacedSystemFont(7);
-  hDay.textColor = GOLD;
-  hDay.textOpacity = 0.45;
-
-  posHeader.addSpacer(8);
-
-  const hTotal = posHeader.addText("  RETURN");
-  hTotal.font = Font.boldMonospacedSystemFont(7);
-  hTotal.textColor = GOLD;
-  hTotal.textOpacity = 0.45;
-
+  addPosHeaders(w);
   w.addSpacer(5);
 
   // ── Position rows ──
