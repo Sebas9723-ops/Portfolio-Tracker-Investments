@@ -21,6 +21,20 @@ const KEY_EXPIRES = "pt_token_exp";
 
 // ── Auth ─────────────────────────────────────────────────────
 
+// Wrapper seguro: usa loadString + JSON.parse para dar error legible
+// si el servidor devuelve HTML (cold start de Render)
+async function loadJSONSafe(req) {
+  const raw = await req.loadString();
+  if (raw.trimStart().startsWith("<")) {
+    throw new Error("Servidor iniciando… reintenta en 30s");
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    throw new Error("Respuesta inválida del servidor");
+  }
+}
+
 async function getToken() {
   const now = Date.now();
   if (Keychain.contains(KEY_TOKEN) && Keychain.contains(KEY_EXPIRES)) {
@@ -34,8 +48,9 @@ async function getToken() {
   req.method = "POST";
   req.headers = { "Content-Type": "application/json" };
   req.body = JSON.stringify({ email: EMAIL, password: PASSWORD });
-  const res = await req.loadJSON();
-  if (!res.access_token) throw new Error("Login failed");
+  req.timeoutInterval = 20;
+  const res = await loadJSONSafe(req);
+  if (!res.access_token) throw new Error("Login fallido");
   const exp = now + 23 * 3600 * 1000; // 23h (token dura 24h)
   Keychain.set(KEY_TOKEN, res.access_token);
   Keychain.set(KEY_EXPIRES, String(exp));
@@ -47,7 +62,8 @@ async function getToken() {
 async function fetchPortfolio(token) {
   const req = new Request(`${API}/api/portfolio/summary`);
   req.headers = { Authorization: `Bearer ${token}` };
-  return req.loadJSON();
+  req.timeoutInterval = 20;
+  return loadJSONSafe(req);
 }
 
 // ── Format helpers ────────────────────────────────────────────
@@ -95,6 +111,9 @@ async function buildWidget() {
     const errTxt = w.addText(error || "No data");
     errTxt.font = Font.systemFont(10);
     errTxt.textColor = new Color("#ff4d4d");
+    // Reintenta en 30s si fue un cold start, 5min si fue otro error
+    const isColdStart = (error || "").includes("iniciando");
+    w.refreshAfterDate = new Date(Date.now() + (isColdStart ? 30_000 : 5 * 60_000));
     return w;
   }
 
