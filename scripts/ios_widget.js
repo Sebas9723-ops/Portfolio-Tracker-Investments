@@ -190,7 +190,7 @@ async function buildWidget() {
   w.addSpacer(6);
 
   // ── Timestamp ──
-  const hhmm = new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+  const hhmm = new Date().toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" });
   const ts = w.addText("↻  " + hhmm);
   ts.font = Font.systemFont(7);
   ts.textColor = MUTED;
