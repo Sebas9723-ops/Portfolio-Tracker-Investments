@@ -52,7 +52,7 @@ async function getToken() {
 }
 
 async function fetchPortfolio(token) {
-  const req = new Request(`${API}/api/portfolio/summary`);
+  const req = new Request(`${API}/api/portfolio`);
   req.headers = { Authorization: `Bearer ${token}` };
   req.timeoutInterval = 20;
   return loadJSONSafe(req);
