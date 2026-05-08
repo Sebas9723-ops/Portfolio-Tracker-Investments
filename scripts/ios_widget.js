@@ -166,7 +166,7 @@ async function buildWidget() {
   valTxt.textColor = TEXT;
   valTxt.minimumScaleFactor = 0.55;
 
-  w.addSpacer();
+  w.addSpacer(8);
 
   // ── 2-column stats ──
   const colRow = w.addStack();
@@ -174,7 +174,7 @@ async function buildWidget() {
   colRow.bottomAlignContent();
 
   addStatCol(
-    colRow, "HOY",
+    colRow, "TODAY",
     fmtDelta(dayChg), fmtPct(dayPct),
     (dayChg ?? 0) >= 0, dayChg != null
   );
@@ -190,7 +190,7 @@ async function buildWidget() {
   w.addSpacer(6);
 
   // ── Timestamp ──
-  const hhmm = new Date().toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" });
+  const hhmm = new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
   const ts = w.addText("↻  " + hhmm);
   ts.font = Font.systemFont(7);
   ts.textColor = MUTED;
