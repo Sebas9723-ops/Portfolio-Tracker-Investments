@@ -1,12 +1,5 @@
 // ─────────────────────────────────────────────────────────────
-// Portfolio Tracker — iOS Widget (Scriptable)
-// Bloomberg dark · institutional layout
-//
-// INSTRUCCIONES:
-//   1. Instala "Scriptable" desde el App Store
-//   2. Abre Scriptable → "+" → pega este script
-//   3. Guarda como "Portfolio"
-//   4. Pantalla inicio → pulsación larga → "+" → Scriptable → Medium
+// Portfolio Tracker — iOS Widget (Scriptable) · Small
 // ─────────────────────────────────────────────────────────────
 
 const EMAIL    = "sebastianaguilar9723@gmail.com";
@@ -22,15 +15,14 @@ const TEXT  = new Color("#e8edf5");
 const MUTED = new Color("#8a9bb5");
 const GREEN = new Color("#22c55e");
 const RED   = new Color("#ef4444");
-const LINE  = new Color("#1e2a3a");
 
-// ── Safe JSON fetch (maneja cold start de Render) ─────────────
+// ── Auth & fetch ──────────────────────────────────────────────
 async function loadJSONSafe(req) {
   const raw = await req.loadString();
   if (raw.trimStart().startsWith("<"))
-    throw new Error("Servidor iniciando… reintenta en 30s");
+    throw new Error("Servidor iniciando…");
   try { return JSON.parse(raw); }
-  catch { throw new Error("Respuesta inválida del servidor"); }
+  catch { throw new Error("Error de respuesta"); }
 }
 
 async function getToken() {
@@ -63,15 +55,8 @@ function fmtValue(v) {
   if (v == null) return "—";
   const abs = Math.abs(v);
   if (abs >= 1_000_000) return "$" + (abs / 1_000_000).toFixed(2) + "M";
+  if (abs >= 10_000)    return "$" + (abs / 1_000).toFixed(1) + "k";
   return "$" + abs.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function fmtDelta(v) {
-  if (v == null) return "—";
-  const abs = Math.abs(v);
-  const s = v >= 0 ? "+" : "-";
-  if (abs >= 1000) return s + "$" + (abs / 1000).toFixed(2) + "k";
-  return s + "$" + abs.toFixed(2);
 }
 
 function fmtPct(v) {
@@ -79,51 +64,29 @@ function fmtPct(v) {
   return (v >= 0 ? "+" : "") + v.toFixed(2) + "%";
 }
 
-// ── Thin divider line ─────────────────────────────────────────
-function addDivider(parent) {
-  const ctx = new DrawContext();
-  ctx.size = new Size(300, 1);
-  ctx.opaque = false;
-  ctx.setFillColor(LINE);
-  ctx.fillRect(new Rect(0, 0, 300, 1));
-  const img = parent.addImage(ctx.getImage());
-  img.imageSize = new Size(300, 1);
-}
-
-// ── Metric row ────────────────────────────────────────────────
-function addMetricRow(parent, label, amount, pct, isPositive, hasData) {
+// ── Stat row ──────────────────────────────────────────────────
+function addStatRow(parent, label, pct, isPositive, hasData) {
   const color = hasData ? (isPositive ? GREEN : RED) : MUTED;
 
   const row = parent.addStack();
   row.layoutHorizontally();
   row.centerAlignContent();
-  row.setPadding(6, 0, 6, 0);
+  row.setPadding(4, 0, 4, 0);
 
-  // Colored dot
-  const dot = row.addText("●");
-  dot.font = Font.systemFont(7);
+  const dot = row.addText(isPositive && hasData ? "▲" : hasData ? "▼" : "●");
+  dot.font = Font.boldSystemFont(8);
   dot.textColor = color;
+  row.addSpacer(6);
 
-  row.addSpacer(7);
-
-  // Label
   const lbl = row.addText(label);
   lbl.font = Font.mediumRoundedSystemFont(11);
   lbl.textColor = MUTED;
 
-  row.addSpacer(); // push right
+  row.addSpacer();
 
-  // Amount
-  const amtEl = row.addText(amount);
-  amtEl.font = Font.mediumMonospacedSystemFont(11);
-  amtEl.textColor = color;
-
-  row.addSpacer(6);
-
-  // Percentage
-  const pctEl = row.addText(pct);
-  pctEl.font = Font.boldMonospacedSystemFont(11);
-  pctEl.textColor = color;
+  const val = row.addText(pct);
+  val.font = Font.boldMonospacedSystemFont(12);
+  val.textColor = color;
 }
 
 // ── Widget ────────────────────────────────────────────────────
@@ -137,33 +100,33 @@ async function buildWidget() {
 
   const w = new ListWidget();
   w.backgroundColor = BG;
-  w.setPadding(12, 14, 10, 14);
+  w.setPadding(13, 14, 11, 14);
 
-  // Header: PORTFOLIO + chart icon
+  // ── Header ──
   const hRow = w.addStack();
   hRow.layoutHorizontally();
   hRow.centerAlignContent();
 
-  const titleTxt = hRow.addText("PORTFOLIO");
-  titleTxt.font = Font.boldMonospacedSystemFont(9);
-  titleTxt.textColor = GOLD;
-  titleTxt.textOpacity = 0.9;
+  const title = hRow.addText("PORTFOLIO");
+  title.font = Font.boldMonospacedSystemFont(8);
+  title.textColor = GOLD;
+  title.textOpacity = 0.85;
 
   hRow.addSpacer();
 
   const sym = SFSymbol.named("chart.line.uptrend.xyaxis");
   sym.applyMediumWeight();
-  const symImg = hRow.addImage(sym.image);
-  symImg.imageSize = new Size(13, 13);
-  symImg.tintColor = GOLD;
-  symImg.imageOpacity = 0.55;
+  const icon = hRow.addImage(sym.image);
+  icon.imageSize = new Size(12, 12);
+  icon.tintColor = GOLD;
+  icon.imageOpacity = 0.5;
 
-  w.addSpacer(4);
+  w.addSpacer(5);
 
-  // Error state
+  // ── Error state ──
   if (error || !data) {
     const errTxt = w.addText(error || "No data");
-    errTxt.font = Font.systemFont(11);
+    errTxt.font = Font.systemFont(10);
     errTxt.textColor = RED;
     errTxt.minimumScaleFactor = 0.7;
     const cold = (error || "").includes("iniciando");
@@ -171,57 +134,38 @@ async function buildWidget() {
     return w;
   }
 
-  const value   = data.total_value_base ?? 0;
-  const dayChg  = data.total_day_change_base ?? null;
+  // ── Data ──
+  const value    = data.total_value_base ?? 0;
+  const dayChg   = data.total_day_change_base ?? null;
   const invested = data.total_invested_base ?? 0;
-  const pnl     = invested > 0 ? value - invested : (data.total_unrealized_pnl ?? null);
-  const pnlPct  = invested > 0
+  const pnl      = invested > 0 ? value - invested : (data.total_unrealized_pnl ?? null);
+  const pnlPct   = invested > 0
     ? ((value - invested) / invested * 100)
     : (data.total_unrealized_pnl_pct ?? null);
-  const dayPct  = (dayChg != null && value > 0)
+  const dayPct   = (dayChg != null && value > 0)
     ? (dayChg / (value - dayChg) * 100)
     : null;
 
-  // Main value
+  // ── Main value ──
   const valTxt = w.addText(fmtValue(value));
-  valTxt.font = Font.boldSystemFont(22);
+  valTxt.font = Font.boldSystemFont(24);
   valTxt.textColor = TEXT;
-  valTxt.minimumScaleFactor = 0.55;
+  valTxt.minimumScaleFactor = 0.6;
 
-  w.addSpacer(4);
-  addDivider(w);
+  w.addSpacer();
 
-  addMetricRow(w, "Today",
-    fmtDelta(dayChg), fmtPct(dayPct),
-    (dayChg ?? 0) >= 0, dayChg != null);
+  // ── Stat rows ──
+  addStatRow(w, "HOY",   fmtPct(dayPct),  (dayChg ?? 0) >= 0, dayChg != null);
+  addStatRow(w, "TOTAL", fmtPct(pnlPct),  (pnl ?? 0) >= 0,    pnl != null);
 
-  addDivider(w);
+  w.addSpacer(5);
 
-  addMetricRow(w, "Return",
-    fmtDelta(pnl), fmtPct(pnlPct),
-    (pnl ?? 0) >= 0, pnl != null);
-
-  addDivider(w);
-  w.addSpacer(4);
-
-  // Timestamp
-  const tsRow = w.addStack();
-  tsRow.layoutHorizontally();
-  tsRow.centerAlignContent();
-
-  const clk = SFSymbol.named("clock");
-  clk.applyUltraLightWeight();
-  const clkImg = tsRow.addImage(clk.image);
-  clkImg.imageSize = new Size(9, 9);
-  clkImg.tintColor = MUTED;
-  clkImg.imageOpacity = 0.5;
-  tsRow.addSpacer(4);
-
+  // ── Timestamp ──
   const hhmm = new Date().toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" });
-  const tsTxt = tsRow.addText(`Updated ${hhmm}`);
-  tsTxt.font = Font.systemFont(8);
-  tsTxt.textColor = MUTED;
-  tsTxt.textOpacity = 0.55;
+  const ts = w.addText(`↻  ${hhmm}`);
+  ts.font = Font.systemFont(7);
+  ts.textColor = MUTED;
+  ts.textOpacity = 0.45;
 
   w.refreshAfterDate = new Date(Date.now() + 15 * 60 * 1000);
   return w;
