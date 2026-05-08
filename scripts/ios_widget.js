@@ -12,7 +12,7 @@ const KEY_EXPIRES = "pt_token_exp";
 const BG    = new Color("#0b0f14");
 const GOLD  = new Color("#f3a712");
 const TEXT  = new Color("#e8edf5");
-const MUTED = new Color("#8a9bb5");
+const MUTED = new Color("#4e6070");
 const GREEN = new Color("#22c55e");
 const RED   = new Color("#ef4444");
 
@@ -59,34 +59,48 @@ function fmtValue(v) {
   return "$" + abs.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function fmtDelta(v) {
+  if (v == null) return "—";
+  const abs = Math.abs(v);
+  const s = v >= 0 ? "+" : "−";
+  if (abs >= 10_000) return s + "$" + (abs / 1_000).toFixed(1) + "k";
+  if (abs >= 1_000)  return s + "$" + (abs / 1_000).toFixed(2) + "k";
+  return s + "$" + abs.toFixed(2);
+}
+
 function fmtPct(v) {
   if (v == null) return "—";
   return (v >= 0 ? "+" : "") + v.toFixed(2) + "%";
 }
 
-// ── Stat row ──────────────────────────────────────────────────
-function addStatRow(parent, label, pct, isPositive, hasData) {
-  const color = hasData ? (isPositive ? GREEN : RED) : MUTED;
+// ── Stat column ───────────────────────────────────────────────
+function addStatCol(parent, label, amount, pct, positive, hasData) {
+  const color = hasData ? (positive ? GREEN : RED) : new Color("#4e6070");
 
-  const row = parent.addStack();
-  row.layoutHorizontally();
-  row.centerAlignContent();
-  row.setPadding(4, 0, 4, 0);
+  const col = parent.addStack();
+  col.layoutVertically();
 
-  const dot = row.addText(isPositive && hasData ? "▲" : hasData ? "▼" : "●");
-  dot.font = Font.boldSystemFont(8);
-  dot.textColor = color;
-  row.addSpacer(6);
+  // Label
+  const lbl = col.addText(label);
+  lbl.font = Font.boldMonospacedSystemFont(8);
+  lbl.textColor = GOLD;
+  lbl.textOpacity = 0.55;
 
-  const lbl = row.addText(label);
-  lbl.font = Font.mediumRoundedSystemFont(11);
-  lbl.textColor = MUTED;
+  col.addSpacer(4);
 
-  row.addSpacer();
+  // Amount
+  const amt = col.addText(amount);
+  amt.font = Font.boldMonospacedSystemFont(13);
+  amt.textColor = color;
+  amt.minimumScaleFactor = 0.75;
 
-  const val = row.addText(pct);
-  val.font = Font.boldMonospacedSystemFont(12);
-  val.textColor = color;
+  col.addSpacer(2);
+
+  // Percentage
+  const p = col.addText(pct);
+  p.font = Font.mediumMonospacedSystemFont(10);
+  p.textColor = color;
+  p.textOpacity = 0.8;
 }
 
 // ── Widget ────────────────────────────────────────────────────
@@ -110,18 +124,18 @@ async function buildWidget() {
   const title = hRow.addText("PORTFOLIO");
   title.font = Font.boldMonospacedSystemFont(8);
   title.textColor = GOLD;
-  title.textOpacity = 0.85;
+  title.textOpacity = 0.7;
 
   hRow.addSpacer();
 
   const sym = SFSymbol.named("chart.line.uptrend.xyaxis");
   sym.applyMediumWeight();
   const icon = hRow.addImage(sym.image);
-  icon.imageSize = new Size(12, 12);
+  icon.imageSize = new Size(11, 11);
   icon.tintColor = GOLD;
-  icon.imageOpacity = 0.5;
+  icon.imageOpacity = 0.45;
 
-  w.addSpacer(5);
+  w.addSpacer(6);
 
   // ── Error state ──
   if (error || !data) {
@@ -134,7 +148,7 @@ async function buildWidget() {
     return w;
   }
 
-  // ── Data ──
+  // ── Compute values ──
   const value    = data.total_value_base ?? 0;
   const dayChg   = data.total_day_change_base ?? null;
   const invested = data.total_invested_base ?? 0;
@@ -148,24 +162,39 @@ async function buildWidget() {
 
   // ── Main value ──
   const valTxt = w.addText(fmtValue(value));
-  valTxt.font = Font.boldSystemFont(24);
+  valTxt.font = Font.boldSystemFont(26);
   valTxt.textColor = TEXT;
-  valTxt.minimumScaleFactor = 0.6;
+  valTxt.minimumScaleFactor = 0.55;
 
   w.addSpacer();
 
-  // ── Stat rows ──
-  addStatRow(w, "HOY",   fmtPct(dayPct),  (dayChg ?? 0) >= 0, dayChg != null);
-  addStatRow(w, "TOTAL", fmtPct(pnlPct),  (pnl ?? 0) >= 0,    pnl != null);
+  // ── 2-column stats ──
+  const colRow = w.addStack();
+  colRow.layoutHorizontally();
+  colRow.bottomAlignContent();
 
-  w.addSpacer(5);
+  addStatCol(
+    colRow, "HOY",
+    fmtDelta(dayChg), fmtPct(dayPct),
+    (dayChg ?? 0) >= 0, dayChg != null
+  );
+
+  colRow.addSpacer();
+
+  addStatCol(
+    colRow, "TOTAL",
+    fmtDelta(pnl), fmtPct(pnlPct),
+    (pnl ?? 0) >= 0, pnl != null
+  );
+
+  w.addSpacer(6);
 
   // ── Timestamp ──
   const hhmm = new Date().toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" });
-  const ts = w.addText(`↻  ${hhmm}`);
+  const ts = w.addText("↻  " + hhmm);
   ts.font = Font.systemFont(7);
   ts.textColor = MUTED;
-  ts.textOpacity = 0.45;
+  ts.textOpacity = 0.6;
 
   w.refreshAfterDate = new Date(Date.now() + 15 * 60 * 1000);
   return w;
