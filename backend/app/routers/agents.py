@@ -374,36 +374,35 @@ def _run_weekly_report_bg(user_id: str) -> None:
 
 @router.post("/test-email")
 def test_email_now(user_id: str = Depends(get_user_id)) -> dict[str, Any]:
-    """Send a quick test email immediately to verify SMTP is working."""
+    """Send a quick test email immediately to verify email delivery is working."""
     import os
     from app.db.supabase_client import get_admin_client
-    from app.services.email_service import send_email
+    from app.services.email_service import send_email, get_email_provider
 
     db = get_admin_client()
     settings = (db.table("user_settings").select("drift_alert_email").eq("user_id", user_id).maybe_single().execute().data or {})
     report_email = settings.get("drift_alert_email", "")
 
+    provider = get_email_provider()
+    sg_key = bool(os.getenv("SENDGRID_API_KEY"))
     smtp_host = os.getenv("EMAIL_HOST", "")
-    smtp_user = os.getenv("EMAIL_USER", "")
-    smtp_pass = os.getenv("EMAIL_PASSWORD", "")
 
     if not report_email:
         return {"ok": False, "error": "No drift_alert_email configured in user settings"}
-    if not smtp_host or not smtp_user or not smtp_pass:
+    if provider == "none":
         return {
             "ok": False,
-            "error": "SMTP not configured",
+            "error": "No email provider configured. Set SENDGRID_API_KEY in Render.",
+            "SENDGRID_API_KEY": sg_key,
             "EMAIL_HOST": bool(smtp_host),
-            "EMAIL_USER": bool(smtp_user),
-            "EMAIL_PASSWORD": bool(smtp_pass),
         }
 
     ok = send_email(
         to=report_email,
         subject="Test email — Portfolio Tracker",
-        body_html="<p style='font-family:monospace'>SMTP is working. You will receive weekly reports at this address.</p>",
+        body_html="<p style='font-family:monospace'>Email delivery is working via <b>" + provider + "</b>. Weekly reports will arrive at this address.</p>",
     )
-    return {"ok": ok, "to": report_email, "smtp_host": smtp_host, "smtp_user": smtp_user}
+    return {"ok": ok, "to": report_email, "provider": provider}
 
 
 @router.post("/send-weekly-report")

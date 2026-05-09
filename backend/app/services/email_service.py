@@ -1,38 +1,82 @@
 """
-Simple SMTP email service for drift alerts.
-Reads SMTP config from environment variables:
+Email service — uses SendGrid HTTP API (primary) or SMTP fallback.
+
+Required env var (SendGrid):
+  SENDGRID_API_KEY   — API key from sendgrid.com/settings/api_keys
+  EMAIL_FROM         — verified sender address (single sender or domain)
+
+Optional SMTP fallback (not used on Render — outbound SMTP is blocked):
   EMAIL_HOST, EMAIL_PORT, EMAIL_USER, EMAIL_PASSWORD, EMAIL_FROM
-Falls back to Sendgrid if EMAIL_PROVIDER=sendgrid is set.
 """
 from __future__ import annotations
 import logging
 import os
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
 log = logging.getLogger(__name__)
 
 
-def _smtp_config() -> tuple[str, int, str, str, str]:
-    """Read SMTP settings fresh from env each call (safe for Render cold starts)."""
+# ---------------------------------------------------------------------------
+# Low-level send — tries SendGrid first, then SMTP
+# ---------------------------------------------------------------------------
+
+def send_email(to: str, subject: str, body_html: str) -> bool:
+    """Send an HTML email. Returns True on success, False on failure."""
+    sg_key = os.getenv("SENDGRID_API_KEY", "")
+    if sg_key:
+        return _send_via_sendgrid(to, subject, body_html, sg_key)
+
+    # SMTP fallback (works locally, usually blocked on Render)
+    return _send_via_smtp(to, subject, body_html)
+
+
+def _send_via_sendgrid(to: str, subject: str, body_html: str, api_key: str) -> bool:
+    import urllib.request as _req
+    import json as _json
+    from_email = os.getenv("EMAIL_FROM", os.getenv("EMAIL_USER", ""))
+    if not from_email:
+        log.error("SendGrid: EMAIL_FROM not set")
+        return False
+    payload = _json.dumps({
+        "personalizations": [{"to": [{"email": to}]}],
+        "from": {"email": from_email},
+        "subject": subject,
+        "content": [{"type": "text/html", "value": body_html}],
+    }).encode()
+    request = _req.Request(
+        "https://api.sendgrid.com/v3/mail/send",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with _req.urlopen(request, timeout=20) as resp:
+            status = resp.status
+        if status in (200, 202):
+            log.info("SendGrid: email sent to %s (%s)", to, subject)
+            return True
+        log.error("SendGrid: unexpected status %s", status)
+        return False
+    except Exception as exc:
+        log.error("SendGrid: failed to send to %s: %s", to, exc)
+        return False
+
+
+def _send_via_smtp(to: str, subject: str, body_html: str) -> bool:
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
     host     = os.getenv("EMAIL_HOST", "")
     port     = int(os.getenv("EMAIL_PORT", "587"))
     user     = os.getenv("EMAIL_USER", "")
     password = os.getenv("EMAIL_PASSWORD", "")
     from_    = os.getenv("EMAIL_FROM", user)
-    return host, port, user, password, from_
 
-
-def send_email(to: str, subject: str, body_html: str) -> bool:
-    """
-    Send an HTML email via SMTP.
-    Returns True on success, False on failure.
-    Silently skips if SMTP credentials are not configured.
-    """
-    host, port, user, password, from_ = _smtp_config()
     if not host or not user or not password:
-        log.warning("Email not configured (HOST=%r USER=%r) — skipping send to %s", host, user, to)
+        log.warning("SMTP not configured (HOST=%r USER=%r) — skipping send to %s", host, user, to)
         return False
 
     try:
@@ -54,12 +98,28 @@ def send_email(to: str, subject: str, body_html: str) -> bool:
                 server.ehlo()
                 server.login(user, password)
                 server.sendmail(from_, [to], msg.as_string())
-        log.info("Email sent to %s: %s", to, subject)
+        log.info("SMTP: email sent to %s: %s", to, subject)
         return True
     except Exception as exc:
-        log.error("Failed to send email to %s: %s", to, exc)
+        log.error("SMTP: failed to send to %s: %s", to, exc)
         return False
 
+
+# ---------------------------------------------------------------------------
+# Also update test-email endpoint response to show which provider is used
+# ---------------------------------------------------------------------------
+
+def get_email_provider() -> str:
+    if os.getenv("SENDGRID_API_KEY"):
+        return "sendgrid"
+    if os.getenv("EMAIL_HOST"):
+        return "smtp"
+    return "none"
+
+
+# ---------------------------------------------------------------------------
+# Weekly report email
+# ---------------------------------------------------------------------------
 
 def send_weekly_report_email(
     to: str,
@@ -179,7 +239,7 @@ def send_weekly_report_email(
 
     body = f"""
     <html><body style='background:#0b0f14;color:#e2e8f0;font-family:IBM Plex Mono,monospace;padding:24px;max-width:700px;margin:0 auto'>
-      <h1 style='color:#f3a712;font-size:16px;margin-bottom:4px'>⚡ Weekly Portfolio Report</h1>
+      <h1 style='color:#f3a712;font-size:16px;margin-bottom:4px'>&#9889; Weekly Portfolio Report</h1>
       <p style='color:#6b7280;font-size:11px;margin-top:0'>{now.strftime('%Y-%m-%d')} | Portfolio Management SA</p>
 
       <h3 style='color:#f3a712;margin-top:20px'>Portfolio Summary</h3>
@@ -229,7 +289,7 @@ def send_weekly_report_email(
       </p>
     </body></html>
     """
-    return send_email(to, f"⚡ Weekly Portfolio Report — {now.strftime('%Y-%m-%d')}", body)
+    return send_email(to, f"Weekly Portfolio Report — {now.strftime('%Y-%m-%d')}", body)
 
 
 def send_drift_alert(
@@ -273,4 +333,4 @@ def send_drift_alert(
       </p>
     </body></html>
     """
-    return send_email(to, "⚠️ Portfolio Drift Alert — Action Required", body)
+    return send_email(to, "Portfolio Drift Alert — Action Required", body)
