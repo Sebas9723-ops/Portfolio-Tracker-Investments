@@ -325,3 +325,114 @@ def generate_weekly_analysis(
         week_change_pct=week_change_pct,
     )
     return run_groq_analysis(prompt)
+
+
+# ── Week-ahead news & events ──────────────────────────────────────────────────
+
+def fetch_week_ahead_news(tickers: list[str]) -> dict:
+    """
+    Fetch upcoming week events:
+      - Top financial headlines from Yahoo Finance RSS (no API key needed)
+      - Upcoming earnings for portfolio tickers via yfinance
+    Returns {"headlines": [...], "earnings": [...]}
+    """
+    headlines: list[str] = []
+    earnings: list[str] = []
+
+    # Headlines from Yahoo Finance RSS
+    feeds = [
+        "https://finance.yahoo.com/rss/topfinstories",
+        "https://finance.yahoo.com/rss/headline?s=^GSPC",
+    ]
+    try:
+        import urllib.request as _req
+        import xml.etree.ElementTree as _et
+        for feed_url in feeds:
+            try:
+                r = _req.Request(feed_url, headers={"User-Agent": "Mozilla/5.0"})
+                with _req.urlopen(r, timeout=8) as resp:
+                    xml = resp.read()
+                root = _et.fromstring(xml)
+                items = root.findall(".//item")[:5]
+                for item in items:
+                    title = (item.findtext("title") or "").strip()
+                    if title and title not in headlines:
+                        headlines.append(title)
+                if len(headlines) >= 8:
+                    break
+            except Exception:
+                pass
+    except Exception as exc:
+        log.warning("fetch_week_ahead_news: RSS fetch failed: %s", exc)
+
+    # Upcoming earnings via yfinance
+    try:
+        import yfinance as yf
+        from datetime import date, timedelta
+        next_week_end = date.today() + timedelta(days=14)
+        for t in tickers[:12]:
+            try:
+                info = yf.Ticker(t).calendar
+                if info is None:
+                    continue
+                # calendar can be a dict or DataFrame
+                if hasattr(info, "columns"):
+                    # DataFrame
+                    if "Earnings Date" in info.columns:
+                        ed = info["Earnings Date"].iloc[0]
+                        if hasattr(ed, "date"):
+                            ed = ed.date()
+                        if isinstance(ed, date) and date.today() <= ed <= next_week_end:
+                            earnings.append(f"{t} earnings: {ed.strftime('%b %d')}")
+                elif isinstance(info, dict):
+                    ed = info.get("Earnings Date")
+                    if ed:
+                        if hasattr(ed, "date"):
+                            ed = ed.date()
+                        if isinstance(ed, date) and date.today() <= ed <= next_week_end:
+                            earnings.append(f"{t} earnings: {ed.strftime('%b %d')}")
+            except Exception:
+                pass
+    except Exception as exc:
+        log.warning("fetch_week_ahead_news: yfinance earnings failed: %s", exc)
+
+    return {"headlines": headlines[:8], "earnings": earnings}
+
+
+def generate_week_ahead_summary(
+    tickers: list[str],
+    headlines: list[str],
+    earnings: list[str],
+) -> Optional[str]:
+    """
+    Ask Groq to synthesize headlines + upcoming earnings into
+    a concise 'week ahead' section for the PDF report.
+    """
+    from datetime import date, timedelta
+    next_monday = date.today() + timedelta(days=(7 - date.today().weekday()))
+    week_str = next_monday.strftime("%B %d")
+
+    headlines_txt = "\n".join(f"- {h}" for h in headlines) if headlines else "No headlines available."
+    earnings_txt  = "\n".join(f"- {e}" for e in earnings) if earnings else "No upcoming earnings for portfolio tickers."
+
+    prompt = f"""You are a senior sell-side strategist writing the "Week Ahead" section of a weekly portfolio PDF report.
+
+Portfolio tickers: {', '.join(tickers)}
+Week of: {week_str}
+
+CURRENT HEADLINES:
+{headlines_txt}
+
+UPCOMING EARNINGS / EVENTS FOR PORTFOLIO TICKERS:
+{earnings_txt}
+
+INSTRUCTIONS:
+Write a concise, institutional-quality "Week Ahead" section with exactly 3 parts:
+1. KEY MACRO EVENTS — 2-3 bullet points on macro events, central bank decisions, or data releases next week that could move markets
+2. EARNINGS TO WATCH — bullet points only for portfolio tickers with upcoming earnings (if none, say "No earnings for portfolio tickers this week")
+3. RISKS & OPPORTUNITIES — 2 bullet points: one risk, one opportunity relevant to this portfolio
+
+Format each bullet as: • [BOLD LABEL]: one concise sentence.
+Maximum 200 words total. Professional English. No fluff."""
+
+    return run_groq_analysis(prompt)

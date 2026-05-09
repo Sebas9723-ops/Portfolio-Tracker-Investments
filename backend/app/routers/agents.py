@@ -361,6 +361,18 @@ def _run_weekly_report_bg(user_id: str) -> None:
             _log.warning("send-weekly-report bg: AI analysis failed: %s", ai_exc)
 
         # Generate PDF
+        # Week-ahead news & events
+        _log.info("send-weekly-report bg: fetching week-ahead news")
+        week_ahead: str | None = None
+        try:
+            from app.services.ai_analysis import fetch_week_ahead_news, generate_week_ahead_summary
+            news_data  = fetch_week_ahead_news(tickers)
+            week_ahead = generate_week_ahead_summary(
+                tickers, news_data["headlines"], news_data["earnings"]
+            )
+        except Exception as news_exc:
+            _log.warning("send-weekly-report bg: week-ahead news failed: %s", news_exc)
+
         _log.info("send-weekly-report bg: generating PDF")
         pdf_bytes: bytes | None = None
         try:
@@ -371,6 +383,7 @@ def _run_weekly_report_bg(user_id: str) -> None:
                 benchmark_ticker=bm_ticker, benchmark_cum=bm_cum,
                 momentum=momentum, fear_greed=fear_greed,
                 week_change_pct=week_change_pct, ai_analysis=weekly_ai,
+                week_ahead=week_ahead,
             )
             _log.info("send-weekly-report bg: PDF generated (%d bytes)", len(pdf_bytes))
         except Exception as pdf_exc:

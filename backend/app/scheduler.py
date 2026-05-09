@@ -713,6 +713,15 @@ def _run_weekly_agents() -> None:
                 except Exception as ai_exc:
                     log.warning("  Weekly AI analysis failed: %s", ai_exc)
 
+                # Week-ahead news & events
+                week_ahead = None
+                try:
+                    from app.services.ai_analysis import fetch_week_ahead_news, generate_week_ahead_summary
+                    news_data  = fetch_week_ahead_news(tickers)
+                    week_ahead = generate_week_ahead_summary(tickers, news_data["headlines"], news_data["earnings"])
+                except Exception as news_exc:
+                    log.warning("  Week-ahead news failed: %s", news_exc)
+
                 # Send PDF to Telegram
                 try:
                     from app.services.pdf_report import generate_portfolio_pdf
@@ -723,6 +732,7 @@ def _run_weekly_agents() -> None:
                         benchmark_ticker=bm_ticker, benchmark_cum=bm_cum,
                         momentum=momentum, fear_greed=fear_greed,
                         week_change_pct=week_change_pct, ai_analysis=weekly_ai,
+                        week_ahead=week_ahead,
                     )
                     filename = f"portfolio_report_{_dt.now().strftime('%Y%m%d')}.pdf"
                     ok = send_document(pdf_bytes, filename=filename, caption=f"Weekly Portfolio Report — {_dt.now().strftime('%Y-%m-%d')}")
@@ -848,28 +858,28 @@ def start_scheduler() -> BackgroundScheduler:
     scheduler = BackgroundScheduler(timezone="America/Bogota")
     scheduler.add_job(
         _snapshot_all_users,
-        trigger=CronTrigger(hour=17, minute=30, timezone="America/Bogota"),
+        trigger=CronTrigger(day_of_week="mon-fri", hour=17, minute=30, timezone="America/Bogota"),
         id="daily_snapshot",
         replace_existing=True,
         misfire_grace_time=600,
     )
     scheduler.add_job(
         _optimize_all_users,
-        trigger=CronTrigger(hour=16, minute=5, timezone="America/New_York"),
+        trigger=CronTrigger(day_of_week="mon-fri", hour=16, minute=5, timezone="America/New_York"),
         id="daily_quant_optimization",
         replace_existing=True,
-        misfire_grace_time=1800,  # allow up to 30-min late fire
+        misfire_grace_time=1800,
     )
     scheduler.add_job(
         _send_telegram_report_all_users,
-        trigger=CronTrigger(hour=17, minute=35, timezone="America/Bogota"),
+        trigger=CronTrigger(day_of_week="mon-fri", hour=17, minute=35, timezone="America/Bogota"),
         id="daily_telegram_report",
         replace_existing=True,
         misfire_grace_time=600,
     )
     scheduler.add_job(
         _check_drift_alerts_all_users,
-        trigger=CronTrigger(hour=17, minute=0, timezone="America/Bogota"),
+        trigger=CronTrigger(day_of_week="mon-fri", hour=17, minute=0, timezone="America/Bogota"),
         id="daily_drift_alerts",
         replace_existing=True,
         misfire_grace_time=600,

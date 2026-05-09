@@ -133,6 +133,7 @@ def generate_portfolio_pdf(
     fear_greed: Optional[dict] = None,
     week_change_pct: Optional[float] = None,
     ai_analysis: Optional[str] = None,
+    week_ahead: Optional[str] = None,
 ) -> bytes:
 
     now      = datetime.now(pytz.timezone("America/Bogota"))
@@ -395,6 +396,49 @@ def generate_portfolio_pdf(
             p.t(hx, hy, lbl + ":", sz=7, color=MUT2)
             p.t(hx + 105, hy, val, "Helvetica-Bold", 7, _vc(sv) if sv is not None else BLUE)
         cur_y -= box_h + 10
+
+    # ── Week Ahead ────────────────────────────────────────────────────────────
+    if week_ahead:
+        cur_y = p.section(ML, cur_y, UW, "WEEK AHEAD — KEY EVENTS & NEWS")
+
+        FOOT = 38
+        LH   = 10
+        MCH  = 95
+
+        lines: list[str] = []
+        for para in week_ahead.split("\n"):
+            para = para.strip()
+            if not para:
+                if lines and lines[-1] != "":
+                    lines.append("")
+                continue
+            wrapped = textwrap.wrap(para, MCH)
+            lines.extend(wrapped or [""])
+
+        # leave at least 120pt for AI analysis below
+        max_lines = max(1, int((cur_y - FOOT - 130) / LH))
+        lines  = lines[:max_lines]
+        box_h  = len(lines) * LH + 16
+
+        p.box(ML, cur_y - box_h, UW, box_h, fill=CARD, r=4)
+        p.box(ML, cur_y - box_h, 3, box_h, fill=BLUE)   # blue left bar for news
+
+        ty = cur_y - 14
+        for line in lines:
+            if ty < cur_y - box_h + 4:
+                break
+            is_h = line.startswith("KEY ") or line.startswith("EARNINGS") or line.startswith("RISKS")
+            bullet = line.startswith("•") or line.startswith("-")
+            clean = line.strip("-• ").strip()
+            if clean:
+                color = GOLD2 if is_h else (MUT2 if bullet else TEXT)
+                prefix = "• " if bullet and not is_h else ""
+                p.t(ML + 10, ty, prefix + clean,
+                    "Helvetica-Bold" if is_h else "Helvetica",
+                    7.5 if is_h else 7, color)
+            ty -= LH
+
+        cur_y -= box_h + 8
 
     # ── AI Analysis ───────────────────────────────────────────────────────────
     if ai_analysis:
