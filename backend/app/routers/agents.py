@@ -252,131 +252,135 @@ def contribution_research(
     return result or {}
 
 
-@router.post("/send-weekly-report")
-def send_weekly_report_now(user_id: str = Depends(get_user_id)) -> dict[str, Any]:
-    """Manually trigger the weekly portfolio report email + Telegram for the current user."""
+def _run_weekly_report_bg(user_id: str) -> None:
+    """Heavy work — runs in a background thread so the HTTP response is immediate."""
     import pandas as pd
-    from app.db.supabase_client import get_admin_client
-    from app.db.quant_results import load_latest_quant_result
-    from app.services.market_data import get_quotes, get_historical_multi, get_risk_free_rate
-    from app.services.fx_service import get_fx_rates
-    from app.services.exchange_classifier import get_native_currency
-    from app.compute.portfolio_builder import build_portfolio
-    from app.compute.returns import build_portfolio_returns, compute_twr
-    from app.compute.risk import compute_extended_ratios
-    from app.services.ai_analysis import generate_weekly_analysis
-    from app.services.telegram_service import send_weekly_report
-    from app.services.email_service import send_weekly_report_email
-
-    db = get_admin_client()
-    settings_res = db.table("user_settings").select("*").eq("user_id", user_id).maybe_single().execute()
-    settings = settings_res.data or {}
-    base_currency = settings.get("base_currency", "USD")
-    rfr = float(settings.get("risk_free_rate") or get_risk_free_rate())
-    bm_ticker = settings.get("preferred_benchmark", "VOO")
-    report_email = settings.get("drift_alert_email", "")
-
-    positions = db.table("positions").select("*").eq("user_id", user_id).execute().data or []
-    tickers = [p["ticker"] for p in positions if float(p.get("shares", 0)) > 0]
-    if not tickers:
-        return {"ok": False, "error": "No positions found"}
-
-    transactions = db.table("transactions").select("*").eq("user_id", user_id).execute().data or []
-    quotes = get_quotes(tickers)
-    exchange_currencies = [get_native_currency(t) for t in tickers]
-    pos_currencies = [p.get("currency") or get_native_currency(p["ticker"]) for p in positions]
-    fx_rates = get_fx_rates(list(set(exchange_currencies + pos_currencies)), base=base_currency)
-    summary = build_portfolio(positions, quotes, fx_rates, base_currency, transactions)
-
-    all_tickers_hist = list(set(tickers + [bm_ticker]))
-    hist = get_historical_multi(all_tickers_hist, period="1y")
-
-    total_shares = sum(float(p["shares"]) for p in positions if float(p.get("shares", 0)) > 0)
-    weights_hist = {p["ticker"]: float(p["shares"]) / total_shares for p in positions if float(p.get("shares", 0)) > 0} if total_shares > 0 else {}
-    portfolio_returns = build_portfolio_returns({t: hist[t] for t in tickers if t in hist}, weights_hist)
-
-    bm_hist = hist.get(bm_ticker)
-    if bm_hist is not None and not bm_hist.empty:
-        bm_col = "Close" if "Close" in bm_hist.columns else bm_hist.columns[0]
-        bm_returns = bm_hist[bm_col].pct_change().dropna()
-    else:
-        bm_returns = pd.Series(dtype=float)
-
-    ratios = compute_extended_ratios(portfolio_returns, bm_returns, rfr)
-    ratios["twr"] = compute_twr(portfolio_returns) * 100
-    bm_cum = float((1 + bm_returns).prod() - 1) if not bm_returns.empty else None
-
-    momentum: dict = {}
-    for t in tickers:
-        df_h = hist.get(t)
-        if df_h is None or df_h.empty:
-            continue
-        col = "Close" if "Close" in df_h.columns else df_h.columns[0]
-        prices = df_h[col].dropna()
-        if prices.empty:
-            continue
-        current = float(prices.iloc[-1])
-        def _ret(n, p=prices, c=current):
-            return (c / float(p.iloc[-n]) - 1) * 100 if len(p) > n else None
-        momentum[t] = {"1w": _ret(5), "1m": _ret(21), "3m": _ret(63), "6m": _ret(126), "1y": _ret(252)}
-
-    # Week-over-week change
-    week_change_pct = None
+    import logging
+    _log = logging.getLogger(__name__)
     try:
-        snaps = db.table("portfolio_snapshots").select("snapshot_date,total_value_base").eq("user_id", user_id).order("snapshot_date", desc=True).limit(8).execute().data or []
-        if len(snaps) >= 5:
-            val_7d_ago = float(snaps[min(6, len(snaps) - 1)]["total_value_base"])
-            if val_7d_ago > 0:
-                week_change_pct = (float(summary.total_value_base) / val_7d_ago - 1) * 100
-    except Exception:
-        pass
+        from app.db.supabase_client import get_admin_client
+        from app.services.market_data import get_quotes, get_historical_multi, get_risk_free_rate
+        from app.services.fx_service import get_fx_rates
+        from app.services.exchange_classifier import get_native_currency
+        from app.compute.portfolio_builder import build_portfolio
+        from app.compute.returns import build_portfolio_returns, compute_twr
+        from app.compute.risk import compute_extended_ratios
+        from app.services.ai_analysis import generate_weekly_analysis
+        from app.services.telegram_service import send_weekly_report
+        from app.services.email_service import send_weekly_report_email
 
-    # Fear & Greed
-    fear_greed = None
-    try:
-        import urllib.request as _ureq, json as _jmod
-        _req = _ureq.Request("https://api.alternative.me/fng/?limit=1&format=json", headers={"User-Agent": "Mozilla/5.0"})
-        with _ureq.urlopen(_req, timeout=5) as _r:
-            _fg_entry = (_jmod.loads(_r.read()).get("data") or [{}])[0]
-        fear_greed = {"score": int(_fg_entry.get("value", 0)), "rating": _fg_entry.get("value_classification", "")}
-    except Exception:
-        pass
+        db = get_admin_client()
+        settings = (db.table("user_settings").select("*").eq("user_id", user_id).maybe_single().execute().data or {})
+        base_currency = settings.get("base_currency", "USD")
+        rfr = float(settings.get("risk_free_rate") or get_risk_free_rate())
+        bm_ticker = settings.get("preferred_benchmark", "VOO")
+        report_email = settings.get("drift_alert_email", "")
 
-    # Weekly AI analysis
-    weekly_ai = None
-    try:
-        weekly_ai = generate_weekly_analysis(
+        positions = db.table("positions").select("*").eq("user_id", user_id).execute().data or []
+        tickers = [p["ticker"] for p in positions if float(p.get("shares", 0)) > 0]
+        if not tickers:
+            _log.warning("send-weekly-report bg: no positions for %s", user_id[:8])
+            return
+
+        transactions = db.table("transactions").select("*").eq("user_id", user_id).execute().data or []
+        quotes = get_quotes(tickers)
+        exchange_currencies = [get_native_currency(t) for t in tickers]
+        pos_currencies = [p.get("currency") or get_native_currency(p["ticker"]) for p in positions]
+        fx_rates = get_fx_rates(list(set(exchange_currencies + pos_currencies)), base=base_currency)
+        summary = build_portfolio(positions, quotes, fx_rates, base_currency, transactions)
+
+        hist = get_historical_multi(list(set(tickers + [bm_ticker])), period="1y")
+        total_shares = sum(float(p["shares"]) for p in positions if float(p.get("shares", 0)) > 0)
+        weights_hist = {p["ticker"]: float(p["shares"]) / total_shares for p in positions if float(p.get("shares", 0)) > 0} if total_shares > 0 else {}
+        portfolio_returns = build_portfolio_returns({t: hist[t] for t in tickers if t in hist}, weights_hist)
+
+        bm_hist = hist.get(bm_ticker)
+        if bm_hist is not None and not bm_hist.empty:
+            bm_col = "Close" if "Close" in bm_hist.columns else bm_hist.columns[0]
+            bm_returns = bm_hist[bm_col].pct_change().dropna()
+        else:
+            bm_returns = pd.Series(dtype=float)
+
+        ratios = compute_extended_ratios(portfolio_returns, bm_returns, rfr)
+        ratios["twr"] = compute_twr(portfolio_returns) * 100
+        bm_cum = float((1 + bm_returns).prod() - 1) if not bm_returns.empty else None
+
+        momentum: dict = {}
+        for t in tickers:
+            df_h = hist.get(t)
+            if df_h is None or df_h.empty:
+                continue
+            col = "Close" if "Close" in df_h.columns else df_h.columns[0]
+            prices = df_h[col].dropna()
+            if prices.empty:
+                continue
+            current = float(prices.iloc[-1])
+            def _ret(n, p=prices, c=current):
+                return (c / float(p.iloc[-n]) - 1) * 100 if len(p) > n else None
+            momentum[t] = {"1w": _ret(5), "1m": _ret(21), "3m": _ret(63), "6m": _ret(126), "1y": _ret(252)}
+
+        week_change_pct = None
+        try:
+            snaps = db.table("portfolio_snapshots").select("snapshot_date,total_value_base").eq("user_id", user_id).order("snapshot_date", desc=True).limit(8).execute().data or []
+            if len(snaps) >= 5:
+                val_7d_ago = float(snaps[min(6, len(snaps) - 1)]["total_value_base"])
+                if val_7d_ago > 0:
+                    week_change_pct = (float(summary.total_value_base) / val_7d_ago - 1) * 100
+        except Exception:
+            pass
+
+        fear_greed = None
+        try:
+            import urllib.request as _ureq, json as _jmod
+            _req = _ureq.Request("https://api.alternative.me/fng/?limit=1&format=json", headers={"User-Agent": "Mozilla/5.0"})
+            with _ureq.urlopen(_req, timeout=5) as _r:
+                _fg_entry = (_jmod.loads(_r.read()).get("data") or [{}])[0]
+            fear_greed = {"score": int(_fg_entry.get("value", 0)), "rating": _fg_entry.get("value_classification", "")}
+        except Exception:
+            pass
+
+        weekly_ai = None
+        try:
+            weekly_ai = generate_weekly_analysis(
+                summary=summary, metrics=ratios, base_currency=base_currency,
+                momentum=momentum, fear_greed=fear_greed,
+                macro_result=None, doctor_result=None, week_change_pct=week_change_pct,
+            )
+        except Exception:
+            pass
+
+        # Telegram (optional — skip if token not configured)
+        send_weekly_report(
             summary=summary, metrics=ratios, base_currency=base_currency,
-            momentum=momentum, fear_greed=fear_greed,
-            macro_result=None, doctor_result=None, week_change_pct=week_change_pct,
-        )
-    except Exception:
-        pass
-
-    results: dict[str, Any] = {}
-
-    # Telegram
-    ok_tg = send_weekly_report(
-        summary=summary, metrics=ratios, base_currency=base_currency,
-        benchmark_ticker=bm_ticker, benchmark_cum=bm_cum,
-        momentum=momentum, fear_greed=fear_greed,
-        week_change_pct=week_change_pct, ai_analysis=weekly_ai,
-    )
-    results["telegram"] = "sent" if ok_tg else "failed (check TELEGRAM_BOT_TOKEN)"
-
-    # Email
-    if report_email:
-        ok_email = send_weekly_report_email(
-            to=report_email, summary=summary, metrics=ratios, base_currency=base_currency,
             benchmark_ticker=bm_ticker, benchmark_cum=bm_cum,
             momentum=momentum, fear_greed=fear_greed,
             week_change_pct=week_change_pct, ai_analysis=weekly_ai,
         )
-        results["email"] = f"sent to {report_email}" if ok_email else f"failed to {report_email}"
-    else:
-        results["email"] = "skipped — no drift_alert_email configured in settings"
 
-    return {"ok": ok_tg or bool(report_email), "results": results}
+        # Email
+        if report_email:
+            ok = send_weekly_report_email(
+                to=report_email, summary=summary, metrics=ratios, base_currency=base_currency,
+                benchmark_ticker=bm_ticker, benchmark_cum=bm_cum,
+                momentum=momentum, fear_greed=fear_greed,
+                week_change_pct=week_change_pct, ai_analysis=weekly_ai,
+            )
+            _log.info("Weekly report email %s to %s", "sent" if ok else "FAILED", report_email)
+        else:
+            _log.warning("Weekly report: no drift_alert_email for user %s", user_id[:8])
+
+    except Exception as exc:
+        import logging as _l
+        _l.getLogger(__name__).error("send-weekly-report bg error: %s", exc)
+
+
+@router.post("/send-weekly-report")
+def send_weekly_report_now(user_id: str = Depends(get_user_id)) -> dict[str, Any]:
+    """Fire the weekly report in a background thread and return immediately."""
+    import threading
+    t = threading.Thread(target=_run_weekly_report_bg, args=(user_id,), daemon=True)
+    t.start()
+    return {"ok": True, "results": {"status": "queued — email will arrive in ~2 min"}}
 
 
 @router.post("/analyze")

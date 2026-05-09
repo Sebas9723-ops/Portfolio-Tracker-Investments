@@ -103,7 +103,7 @@ export type ContributionResearchResult = Record<string, TickerResearchSignal>;
 
 export const sendWeeklyReportNow = () =>
   apiClient
-    .post<{ ok: boolean; results: Record<string, string> }>("/api/agents/send-weekly-report", {}, { timeout: 120_000 })
+    .post<{ ok: boolean; results: Record<string, string> }>("/api/agents/send-weekly-report", {}, { timeout: 10_000 })
     .then((r) => r.data);
 
 export const runContributionResearch = (
