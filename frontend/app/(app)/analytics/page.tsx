@@ -391,9 +391,9 @@ export default function AnalyticsPage() {
                   onClick={sendReport}
                   disabled={reportSending}
                   className="text-[10px] text-green-400 border border-green-400/40 px-2.5 py-1 rounded-lg hover:bg-green-400/10 transition-colors disabled:opacity-50"
-                  title="Send weekly report email (runs in background ~2 min)"
+                  title="Generate PDF report and send to Telegram (runs in background ~2 min)"
                 >
-                  {reportSending ? "Queuing…" : "📧 Send report"}
+                  {reportSending ? "Queuing…" : "📄 Send PDF report"}
                 </button>
                 <button
                   onClick={sendTestEmail}

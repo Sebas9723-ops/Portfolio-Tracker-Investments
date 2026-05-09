@@ -269,6 +269,7 @@ def _run_weekly_report_bg(user_id: str) -> None:
         from app.compute.risk import compute_extended_ratios
         from app.services.ai_analysis import generate_weekly_analysis
         from app.services.email_service import send_weekly_report_email
+        from app.services.telegram_service import send_document, send_weekly_report
 
         db = get_admin_client()
         settings = (db.table("user_settings").select("*").eq("user_id", user_id).maybe_single().execute().data or {})
@@ -359,14 +360,49 @@ def _run_weekly_report_bg(user_id: str) -> None:
         except Exception as ai_exc:
             _log.warning("send-weekly-report bg: AI analysis failed: %s", ai_exc)
 
-        _log.info("send-weekly-report bg: sending email to %s", report_email)
-        ok = send_weekly_report_email(
-            to=report_email, summary=summary, metrics=ratios, base_currency=base_currency,
-            benchmark_ticker=bm_ticker, benchmark_cum=bm_cum,
-            momentum=momentum, fear_greed=fear_greed,
-            week_change_pct=week_change_pct, ai_analysis=weekly_ai,
-        )
-        _log.info("send-weekly-report bg: email %s to %s", "SENT" if ok else "FAILED", report_email)
+        # Generate PDF
+        _log.info("send-weekly-report bg: generating PDF")
+        pdf_bytes: bytes | None = None
+        try:
+            from app.services.pdf_report import generate_portfolio_pdf
+            from datetime import datetime
+            pdf_bytes = generate_portfolio_pdf(
+                summary=summary, metrics=ratios, base_currency=base_currency,
+                benchmark_ticker=bm_ticker, benchmark_cum=bm_cum,
+                momentum=momentum, fear_greed=fear_greed,
+                week_change_pct=week_change_pct, ai_analysis=weekly_ai,
+            )
+            _log.info("send-weekly-report bg: PDF generated (%d bytes)", len(pdf_bytes))
+        except Exception as pdf_exc:
+            _log.warning("send-weekly-report bg: PDF generation failed: %s", pdf_exc)
+
+        # Send PDF to Telegram
+        from datetime import datetime
+        if pdf_bytes:
+            filename = f"portfolio_report_{datetime.now().strftime('%Y%m%d')}.pdf"
+            caption = f"Weekly Portfolio Report — {datetime.now().strftime('%Y-%m-%d')}"
+            ok_tg = send_document(pdf_bytes, filename=filename, caption=caption)
+            _log.info("send-weekly-report bg: Telegram PDF %s", "SENT" if ok_tg else "FAILED")
+        else:
+            # Fallback: send text messages
+            ok_tg = send_weekly_report(
+                summary=summary, metrics=ratios, base_currency=base_currency,
+                benchmark_ticker=bm_ticker, benchmark_cum=bm_cum,
+                momentum=momentum, fear_greed=fear_greed,
+                week_change_pct=week_change_pct, ai_analysis=weekly_ai,
+            )
+            _log.info("send-weekly-report bg: Telegram text %s", "SENT" if ok_tg else "FAILED")
+
+        # Email (if configured)
+        if report_email:
+            _log.info("send-weekly-report bg: sending email to %s", report_email)
+            ok_email = send_weekly_report_email(
+                to=report_email, summary=summary, metrics=ratios, base_currency=base_currency,
+                benchmark_ticker=bm_ticker, benchmark_cum=bm_cum,
+                momentum=momentum, fear_greed=fear_greed,
+                week_change_pct=week_change_pct, ai_analysis=weekly_ai,
+            )
+            _log.info("send-weekly-report bg: email %s to %s", "SENT" if ok_email else "FAILED", report_email)
 
     except Exception as exc:
         _log.error("send-weekly-report bg ERROR: %s\n%s", exc, traceback.format_exc())

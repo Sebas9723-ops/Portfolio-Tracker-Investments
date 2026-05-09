@@ -39,6 +39,61 @@ def _post(bot_token: str, method: str, payload: dict) -> bool:
         return False
 
 
+def send_document(
+    file_bytes: bytes,
+    filename: str,
+    caption: str = "",
+    bot_token: str = "",
+    chat_id: str = "",
+) -> bool:
+    """Send a file (PDF, etc.) as a Telegram document via multipart/form-data."""
+    import logging
+    settings = get_settings()
+    token = bot_token or settings.TELEGRAM_BOT_TOKEN
+    cid = chat_id or settings.TELEGRAM_CHAT_ID
+    if not token or not cid:
+        logging.getLogger(__name__).warning("Telegram not configured — skipping send_document")
+        return False
+
+    boundary = "----TelegramBoundary7f3a9b"
+    body_parts: list[bytes] = []
+
+    def _field(name: str, value: str) -> bytes:
+        return (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
+            f"{value}\r\n"
+        ).encode()
+
+    body_parts.append(_field("chat_id", cid))
+    if caption:
+        body_parts.append(_field("caption", caption))
+    body_parts.append(
+        (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="document"; filename="{filename}"\r\n'
+            f"Content-Type: application/pdf\r\n\r\n"
+        ).encode() + file_bytes + b"\r\n"
+    )
+    body_parts.append(f"--{boundary}--\r\n".encode())
+    body = b"".join(body_parts)
+
+    url = f"https://api.telegram.org/bot{token}/sendDocument"
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        method="POST",
+    )
+    try:
+        urllib.request.urlopen(req, timeout=30)
+        logging.getLogger(__name__).info("Telegram document sent: %s", filename)
+        return True
+    except urllib.error.URLError as exc:
+        logging.getLogger(__name__).warning("Telegram send_document failed: %s", exc)
+        return False
+
+
 def send_message(text: str, bot_token: str = "", chat_id: str = "") -> bool:
     """Send an HTML-formatted text message. Falls back to settings if creds not provided."""
     settings = get_settings()
