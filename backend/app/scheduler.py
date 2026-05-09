@@ -726,6 +726,27 @@ def _run_weekly_agents() -> None:
                 )
                 log.info("  %s %s… — weekly Telegram report sent", "✓" if ok else "✗", user_id[:8])
 
+                # ── Weekly email report ────────────────────────────────────────
+                report_email = settings.get("drift_alert_email", "")
+                if report_email:
+                    try:
+                        from app.services.email_service import send_weekly_report_email
+                        ok_email = send_weekly_report_email(
+                            to=report_email,
+                            summary=summary,
+                            metrics=ratios,
+                            base_currency=base_currency,
+                            benchmark_ticker=bm_ticker,
+                            benchmark_cum=bm_cum,
+                            momentum=momentum,
+                            fear_greed=fear_greed,
+                            week_change_pct=week_change_pct,
+                            ai_analysis=weekly_ai,
+                        )
+                        log.info("  %s %s… — weekly email report sent to %s", "✓" if ok_email else "✗", user_id[:8], report_email)
+                    except Exception as email_exc:
+                        log.error("  ✗ %s… — weekly email failed: %s", user_id[:8], email_exc)
+
             except Exception as exc:
                 log.error("  ✗ %s… — weekly report failed: %s", user_id[:8], exc)
 
