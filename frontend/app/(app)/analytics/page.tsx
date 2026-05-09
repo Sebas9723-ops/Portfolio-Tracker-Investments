@@ -3,7 +3,7 @@ import { useState, useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAnalytics, fetchRollingMetrics, fetchExtendedAnalytics, fetchVolRegime, fetchQuantAdvanced, fetchEquityCurve, fetchVsBenchmark, fetchRecommendations, fetchTaxLoss, fetchHealthScore, fetchAttribution, fetchPortfolioNews, runKellySizing, runMonteCarlo, fetchMwr, fetchBenchmarkOverlay, fetchFixedIncome } from "@/lib/api/analytics";
 import { fetchGeographicExposure, fetchEtfOverlap } from "@/lib/api/portfolio";
-import { fetchLastAgentResults, runAgentsNow, refreshResearchTargets } from "@/lib/api/agents";
+import { fetchLastAgentResults, runAgentsNow, refreshResearchTargets, sendWeeklyReportNow } from "@/lib/api/agents";
 import type { MacroAgentResult, DoctorAgentResult } from "@/lib/api/agents";
 import type {
   FactorRisk, TrackingErrorBudget, QuantRegime, NaiveBenchmarkRow, WalkForward,
@@ -145,6 +145,8 @@ export default function AnalyticsPage() {
   // Agent results state
   const [agentsRunning, setAgentsRunning] = useState(false);
   const [targetsRunning, setTargetsRunning] = useState(false);
+  const [reportSending, setReportSending] = useState(false);
+  const [reportResult, setReportResult] = useState<Record<string, string> | null>(null);
   const [liveAgentResult, setLiveAgentResult] = useState<{ macro: MacroAgentResult | null; doctor: DoctorAgentResult | null } | null>(null);
   const [agentErrors, setAgentErrors] = useState<string[]>([]);
   const [targetRefreshStatus, setTargetRefreshStatus] = useState<string | null>(null);
@@ -203,6 +205,19 @@ export default function AnalyticsPage() {
       setTargetRefreshStatus(`Failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setTargetsRunning(false);
+    }
+  }, []);
+
+  const sendReport = useCallback(async () => {
+    setReportSending(true);
+    setReportResult(null);
+    try {
+      const r = await sendWeeklyReportNow();
+      setReportResult(r.results);
+    } catch (e: unknown) {
+      setReportResult({ error: e instanceof Error ? e.message : "Failed" });
+    } finally {
+      setReportSending(false);
     }
   }, []);
 
@@ -360,6 +375,19 @@ export default function AnalyticsPage() {
                 >
                   {agentsRunning ? "Analyzing…" : "🤖 Run now"}
                 </button>
+                <button
+                  onClick={sendReport}
+                  disabled={reportSending}
+                  className="text-[10px] text-green-400 border border-green-400/40 px-2.5 py-1 rounded-lg hover:bg-green-400/10 transition-colors disabled:opacity-50"
+                  title="Send weekly report to Telegram + email now"
+                >
+                  {reportSending ? "Sending…" : "📧 Send report"}
+                </button>
+                {reportResult && (
+                  <span className="text-[9px] text-bloomberg-muted">
+                    {Object.entries(reportResult).map(([k, v]) => `${k}: ${v}`).join(" · ")}
+                  </span>
+                )}
               </div>
             </div>
             {targetRefreshStatus && (
