@@ -108,7 +108,7 @@ export const sendWeeklyReportNow = () =>
 
 export const testEmailNow = () =>
   apiClient
-    .post<{ ok: boolean; to?: string; smtp_host?: string; smtp_user?: string; error?: string }>("/api/agents/test-email", {}, { timeout: 10_000 })
+    .post<{ ok: boolean; to?: string; smtp_host?: string; smtp_user?: string; error?: string }>("/api/agents/test-email", {}, { timeout: 35_000 })
     .then((r) => r.data);
 
 export const runContributionResearch = (

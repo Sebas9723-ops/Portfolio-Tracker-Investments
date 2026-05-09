@@ -13,11 +13,15 @@ from email.mime.text import MIMEText
 
 log = logging.getLogger(__name__)
 
-_HOST     = os.getenv("EMAIL_HOST", "")
-_PORT     = int(os.getenv("EMAIL_PORT", "587"))
-_USER     = os.getenv("EMAIL_USER", "")
-_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
-_FROM     = os.getenv("EMAIL_FROM", _USER)
+
+def _smtp_config() -> tuple[str, int, str, str, str]:
+    """Read SMTP settings fresh from env each call (safe for Render cold starts)."""
+    host     = os.getenv("EMAIL_HOST", "")
+    port     = int(os.getenv("EMAIL_PORT", "587"))
+    user     = os.getenv("EMAIL_USER", "")
+    password = os.getenv("EMAIL_PASSWORD", "")
+    from_    = os.getenv("EMAIL_FROM", user)
+    return host, port, user, password, from_
 
 
 def send_email(to: str, subject: str, body_html: str) -> bool:
@@ -26,22 +30,30 @@ def send_email(to: str, subject: str, body_html: str) -> bool:
     Returns True on success, False on failure.
     Silently skips if SMTP credentials are not configured.
     """
-    if not _HOST or not _USER or not _PASSWORD:
-        log.warning("Email not configured — skipping send to %s", to)
+    host, port, user, password, from_ = _smtp_config()
+    if not host or not user or not password:
+        log.warning("Email not configured (HOST=%r USER=%r) — skipping send to %s", host, user, to)
         return False
 
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"]    = _FROM
+        msg["From"]    = from_
         msg["To"]      = to
         msg.attach(MIMEText(body_html, "html"))
 
-        with smtplib.SMTP(_HOST, _PORT) as server:
-            server.ehlo()
-            server.starttls()
-            server.login(_USER, _PASSWORD)
-            server.sendmail(_FROM, [to], msg.as_string())
+        log.info("SMTP connecting to %s:%s as %s", host, port, user)
+        if port == 465:
+            with smtplib.SMTP_SSL(host, port, timeout=25) as server:
+                server.login(user, password)
+                server.sendmail(from_, [to], msg.as_string())
+        else:
+            with smtplib.SMTP(host, port, timeout=25) as server:
+                server.ehlo()
+                server.starttls()
+                server.ehlo()
+                server.login(user, password)
+                server.sendmail(from_, [to], msg.as_string())
         log.info("Email sent to %s: %s", to, subject)
         return True
     except Exception as exc:
