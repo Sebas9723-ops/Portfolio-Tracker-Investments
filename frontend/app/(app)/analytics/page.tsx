@@ -378,38 +378,29 @@ export default function AnalyticsPage() {
                   className="text-[10px] text-bloomberg-accent border border-bloomberg-accent/40 px-2.5 py-1 rounded-lg hover:bg-bloomberg-accent/10 transition-colors disabled:opacity-50"
                   title="Re-run ML pipeline for all profiles and update contribution plan targets"
                 >
-                  {targetsRunning ? "Recalculating…" : "🎯 Refresh Targets"}
+                  {targetsRunning ? "Recalculating…" : "Refresh Targets"}
                 </button>
                 <button
                   onClick={runAgents}
                   disabled={agentsRunning || targetsRunning}
                   className="text-[10px] text-bloomberg-gold border border-bloomberg-gold/40 px-2.5 py-1 rounded-lg hover:bg-bloomberg-gold/10 transition-colors disabled:opacity-50"
                 >
-                  {agentsRunning ? "Analyzing…" : "🤖 Run now"}
+                  {agentsRunning ? "Analyzing…" : "Run now"}
                 </button>
                 <button
                   onClick={sendReport}
                   disabled={reportSending}
                   className="text-[10px] text-green-400 border border-green-400/40 px-2.5 py-1 rounded-lg hover:bg-green-400/10 transition-colors disabled:opacity-50"
-                  title="Generate PDF report and send to Telegram (runs in background ~2 min)"
+                  title="Generate PDF report and send to Telegram"
                 >
-                  {reportSending ? "Queuing…" : "📄 Send PDF report"}
-                </button>
-                <button
-                  onClick={sendTestEmail}
-                  className="text-[10px] text-blue-400 border border-blue-400/40 px-2.5 py-1 rounded-lg hover:bg-blue-400/10 transition-colors"
-                  title="Send a quick test email to verify SMTP is working"
-                >
-                  🔧 Test email
+                  {reportSending ? "Queuing…" : "Send PDF report"}
                 </button>
                 {reportResult && (
                   <span className="text-[9px] text-bloomberg-muted">
-                    {Object.entries(reportResult).map(([k, v]) => `${k}: ${v}`).join(" · ")}
-                  </span>
-                )}
-                {testEmailResult && (
-                  <span className={`text-[9px] ${testEmailResult.startsWith("✓") ? "text-green-400" : "text-red-400"}`}>
-                    {testEmailResult}
+                    {Object.entries(reportResult).map(([k, v]) => {
+                      const display = typeof v === "string" ? v.replace("email will arrive in ~2 min", "PDF queued — arrives in ~2 min") : v;
+                      return `${k}: ${display}`;
+                    }).join(" · ")}
                   </span>
                 )}
               </div>
