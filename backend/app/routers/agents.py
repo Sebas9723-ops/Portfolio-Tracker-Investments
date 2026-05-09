@@ -256,7 +256,9 @@ def _run_weekly_report_bg(user_id: str) -> None:
     """Heavy work — runs in a background thread so the HTTP response is immediate."""
     import pandas as pd
     import logging
+    import traceback
     _log = logging.getLogger(__name__)
+    _log.info("send-weekly-report bg: starting for user %s", user_id[:8])
     try:
         from app.db.supabase_client import get_admin_client
         from app.services.market_data import get_quotes, get_historical_multi, get_risk_free_rate
@@ -266,7 +268,6 @@ def _run_weekly_report_bg(user_id: str) -> None:
         from app.compute.returns import build_portfolio_returns, compute_twr
         from app.compute.risk import compute_extended_ratios
         from app.services.ai_analysis import generate_weekly_analysis
-        from app.services.telegram_service import send_weekly_report
         from app.services.email_service import send_weekly_report_email
 
         db = get_admin_client()
@@ -276,12 +277,19 @@ def _run_weekly_report_bg(user_id: str) -> None:
         bm_ticker = settings.get("preferred_benchmark", "VOO")
         report_email = settings.get("drift_alert_email", "")
 
+        _log.info("send-weekly-report bg: email=%s base=%s", report_email or "(none)", base_currency)
+
+        if not report_email:
+            _log.warning("send-weekly-report bg: no drift_alert_email set for user %s", user_id[:8])
+            return
+
         positions = db.table("positions").select("*").eq("user_id", user_id).execute().data or []
         tickers = [p["ticker"] for p in positions if float(p.get("shares", 0)) > 0]
         if not tickers:
             _log.warning("send-weekly-report bg: no positions for %s", user_id[:8])
             return
 
+        _log.info("send-weekly-report bg: %d tickers — fetching data", len(tickers))
         transactions = db.table("transactions").select("*").eq("user_id", user_id).execute().data or []
         quotes = get_quotes(tickers)
         exchange_currencies = [get_native_currency(t) for t in tickers]
@@ -289,6 +297,7 @@ def _run_weekly_report_bg(user_id: str) -> None:
         fx_rates = get_fx_rates(list(set(exchange_currencies + pos_currencies)), base=base_currency)
         summary = build_portfolio(positions, quotes, fx_rates, base_currency, transactions)
 
+        _log.info("send-weekly-report bg: fetching 1Y historical data")
         hist = get_historical_multi(list(set(tickers + [bm_ticker])), period="1y")
         total_shares = sum(float(p["shares"]) for p in positions if float(p.get("shares", 0)) > 0)
         weights_hist = {p["ticker"]: float(p["shares"]) / total_shares for p in positions if float(p.get("shares", 0)) > 0} if total_shares > 0 else {}
@@ -339,6 +348,7 @@ def _run_weekly_report_bg(user_id: str) -> None:
         except Exception:
             pass
 
+        _log.info("send-weekly-report bg: generating AI analysis")
         weekly_ai = None
         try:
             weekly_ai = generate_weekly_analysis(
@@ -346,32 +356,54 @@ def _run_weekly_report_bg(user_id: str) -> None:
                 momentum=momentum, fear_greed=fear_greed,
                 macro_result=None, doctor_result=None, week_change_pct=week_change_pct,
             )
-        except Exception:
-            pass
+        except Exception as ai_exc:
+            _log.warning("send-weekly-report bg: AI analysis failed: %s", ai_exc)
 
-        # Telegram (optional — skip if token not configured)
-        send_weekly_report(
-            summary=summary, metrics=ratios, base_currency=base_currency,
+        _log.info("send-weekly-report bg: sending email to %s", report_email)
+        ok = send_weekly_report_email(
+            to=report_email, summary=summary, metrics=ratios, base_currency=base_currency,
             benchmark_ticker=bm_ticker, benchmark_cum=bm_cum,
             momentum=momentum, fear_greed=fear_greed,
             week_change_pct=week_change_pct, ai_analysis=weekly_ai,
         )
-
-        # Email
-        if report_email:
-            ok = send_weekly_report_email(
-                to=report_email, summary=summary, metrics=ratios, base_currency=base_currency,
-                benchmark_ticker=bm_ticker, benchmark_cum=bm_cum,
-                momentum=momentum, fear_greed=fear_greed,
-                week_change_pct=week_change_pct, ai_analysis=weekly_ai,
-            )
-            _log.info("Weekly report email %s to %s", "sent" if ok else "FAILED", report_email)
-        else:
-            _log.warning("Weekly report: no drift_alert_email for user %s", user_id[:8])
+        _log.info("send-weekly-report bg: email %s to %s", "SENT" if ok else "FAILED", report_email)
 
     except Exception as exc:
-        import logging as _l
-        _l.getLogger(__name__).error("send-weekly-report bg error: %s", exc)
+        _log.error("send-weekly-report bg ERROR: %s\n%s", exc, traceback.format_exc())
+
+
+@router.post("/test-email")
+def test_email_now(user_id: str = Depends(get_user_id)) -> dict[str, Any]:
+    """Send a quick test email immediately to verify SMTP is working."""
+    import os
+    from app.db.supabase_client import get_admin_client
+    from app.services.email_service import send_email
+
+    db = get_admin_client()
+    settings = (db.table("user_settings").select("drift_alert_email").eq("user_id", user_id).maybe_single().execute().data or {})
+    report_email = settings.get("drift_alert_email", "")
+
+    smtp_host = os.getenv("EMAIL_HOST", "")
+    smtp_user = os.getenv("EMAIL_USER", "")
+    smtp_pass = os.getenv("EMAIL_PASSWORD", "")
+
+    if not report_email:
+        return {"ok": False, "error": "No drift_alert_email configured in user settings"}
+    if not smtp_host or not smtp_user or not smtp_pass:
+        return {
+            "ok": False,
+            "error": "SMTP not configured",
+            "EMAIL_HOST": bool(smtp_host),
+            "EMAIL_USER": bool(smtp_user),
+            "EMAIL_PASSWORD": bool(smtp_pass),
+        }
+
+    ok = send_email(
+        to=report_email,
+        subject="Test email — Portfolio Tracker",
+        body_html="<p style='font-family:monospace'>SMTP is working. You will receive weekly reports at this address.</p>",
+    )
+    return {"ok": ok, "to": report_email, "smtp_host": smtp_host, "smtp_user": smtp_user}
 
 
 @router.post("/send-weekly-report")

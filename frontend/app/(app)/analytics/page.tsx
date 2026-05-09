@@ -3,7 +3,7 @@ import { useState, useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAnalytics, fetchRollingMetrics, fetchExtendedAnalytics, fetchVolRegime, fetchQuantAdvanced, fetchEquityCurve, fetchVsBenchmark, fetchRecommendations, fetchTaxLoss, fetchHealthScore, fetchAttribution, fetchPortfolioNews, runKellySizing, runMonteCarlo, fetchMwr, fetchBenchmarkOverlay, fetchFixedIncome } from "@/lib/api/analytics";
 import { fetchGeographicExposure, fetchEtfOverlap } from "@/lib/api/portfolio";
-import { fetchLastAgentResults, runAgentsNow, refreshResearchTargets, sendWeeklyReportNow } from "@/lib/api/agents";
+import { fetchLastAgentResults, runAgentsNow, refreshResearchTargets, sendWeeklyReportNow, testEmailNow } from "@/lib/api/agents";
 import type { MacroAgentResult, DoctorAgentResult } from "@/lib/api/agents";
 import type {
   FactorRisk, TrackingErrorBudget, QuantRegime, NaiveBenchmarkRow, WalkForward,
@@ -147,6 +147,7 @@ export default function AnalyticsPage() {
   const [targetsRunning, setTargetsRunning] = useState(false);
   const [reportSending, setReportSending] = useState(false);
   const [reportResult, setReportResult] = useState<Record<string, string> | null>(null);
+  const [testEmailResult, setTestEmailResult] = useState<string | null>(null);
   const [liveAgentResult, setLiveAgentResult] = useState<{ macro: MacroAgentResult | null; doctor: DoctorAgentResult | null } | null>(null);
   const [agentErrors, setAgentErrors] = useState<string[]>([]);
   const [targetRefreshStatus, setTargetRefreshStatus] = useState<string | null>(null);
@@ -218,6 +219,17 @@ export default function AnalyticsPage() {
       setReportResult({ error: e instanceof Error ? e.message : "Failed" });
     } finally {
       setReportSending(false);
+    }
+  }, []);
+
+  const sendTestEmail = useCallback(async () => {
+    setTestEmailResult("sending…");
+    try {
+      const r = await testEmailNow();
+      if (r.ok) setTestEmailResult(`✓ Test sent to ${r.to} via ${r.smtp_host}`);
+      else setTestEmailResult(`✗ ${r.error || "Failed"}`);
+    } catch (e: unknown) {
+      setTestEmailResult(`✗ ${e instanceof Error ? e.message : "Failed"}`);
     }
   }, []);
 
@@ -379,13 +391,25 @@ export default function AnalyticsPage() {
                   onClick={sendReport}
                   disabled={reportSending}
                   className="text-[10px] text-green-400 border border-green-400/40 px-2.5 py-1 rounded-lg hover:bg-green-400/10 transition-colors disabled:opacity-50"
-                  title="Send weekly report to Telegram + email now"
+                  title="Send weekly report email (runs in background ~2 min)"
                 >
-                  {reportSending ? "Sending…" : "📧 Send report"}
+                  {reportSending ? "Queuing…" : "📧 Send report"}
+                </button>
+                <button
+                  onClick={sendTestEmail}
+                  className="text-[10px] text-blue-400 border border-blue-400/40 px-2.5 py-1 rounded-lg hover:bg-blue-400/10 transition-colors"
+                  title="Send a quick test email to verify SMTP is working"
+                >
+                  🔧 Test email
                 </button>
                 {reportResult && (
                   <span className="text-[9px] text-bloomberg-muted">
                     {Object.entries(reportResult).map(([k, v]) => `${k}: ${v}`).join(" · ")}
+                  </span>
+                )}
+                {testEmailResult && (
+                  <span className={`text-[9px] ${testEmailResult.startsWith("✓") ? "text-green-400" : "text-red-400"}`}>
+                    {testEmailResult}
                   </span>
                 )}
               </div>

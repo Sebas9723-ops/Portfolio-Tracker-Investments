@@ -106,6 +106,11 @@ export const sendWeeklyReportNow = () =>
     .post<{ ok: boolean; results: Record<string, string> }>("/api/agents/send-weekly-report", {}, { timeout: 10_000 })
     .then((r) => r.data);
 
+export const testEmailNow = () =>
+  apiClient
+    .post<{ ok: boolean; to?: string; smtp_host?: string; smtp_user?: string; error?: string }>("/api/agents/test-email", {}, { timeout: 10_000 })
+    .then((r) => r.data);
+
 export const runContributionResearch = (
   allocations: { ticker: string; pct_of_capital?: number; [key: string]: unknown }[],
   profile: string,
