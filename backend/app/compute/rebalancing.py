@@ -19,12 +19,15 @@ def build_rebalancing_table(
     contribution: float = 0.0,
     tc_model: str = "broker",
     threshold: float = 0.05,
+    external_thesis_tickers: set[str] | None = None,
 ) -> list[RebalancingRow]:
     """
     portfolio_rows: list of PortfolioRow dicts
     target_weights: {ticker: weight_fraction}
     contribution: cash to deploy (positive) or withdraw (negative)
+    external_thesis_tickers: tickers to show as-is with no trade suggestion
     """
+    et = external_thesis_tickers or set()
     total_with_contrib = total_value + contribution
     rows = []
 
@@ -34,6 +37,22 @@ def build_rebalancing_table(
         seen_tickers.add(ticker)
         current_value = row.get("value_base", 0.0)
         current_w = current_value / total_value if total_value > 0 else 0
+
+        if ticker in et:
+            rows.append(RebalancingRow(
+                ticker=ticker,
+                name=row.get("name", ticker),
+                current_weight=round(current_w * 100, 2),
+                target_weight=round(current_w * 100, 2),
+                drift=0.0,
+                value_base=round(current_value, 2),
+                trade_value=0.0,
+                trade_direction="EXTERNAL_THESIS",
+                estimated_tc=0.0,
+                is_external_thesis=True,
+            ))
+            continue
+
         target_w = target_weights.get(ticker, current_w)
         drift = current_w - target_w
 
@@ -61,7 +80,7 @@ def build_rebalancing_table(
 
     # Include 0-share tickers that appear in target_weights but not in portfolio
     for ticker, target_w in target_weights.items():
-        if ticker in seen_tickers or target_w <= 0:
+        if ticker in seen_tickers or target_w <= 0 or ticker in et:
             continue
         trade_value = target_w * total_with_contrib
         tc = estimate_tc(trade_value, tc_model)
@@ -77,7 +96,7 @@ def build_rebalancing_table(
             estimated_tc=round(tc, 2),
         ))
 
-    return sorted(rows, key=lambda r: abs(r.drift), reverse=True)
+    return sorted(rows, key=lambda r: (r.is_external_thesis, -abs(r.drift)))
 
 
 def estimate_tc(trade_value: float, tc_model: str = "broker") -> float:

@@ -76,8 +76,9 @@ class RebalancingRow(BaseModel):
     drift: float
     value_base: float
     trade_value: float
-    trade_direction: str  # BUY / SELL / HOLD
+    trade_direction: str  # BUY / SELL / HOLD / EXTERNAL_THESIS
     estimated_tc: float
+    is_external_thesis: bool = False
 
 
 class VaRResult(BaseModel):

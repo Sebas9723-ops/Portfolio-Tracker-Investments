@@ -19,6 +19,13 @@ export const saveCombinationRanges = (profile: string, ranges: CombinationRange[
     .put("/api/optimization/combination-ranges", { profile, ranges })
     .then((r) => r.data);
 
+// External thesis tickers — excluded from optimization & rebalancing targets
+export const fetchExternalThesis = () =>
+  apiClient.get<{ tickers: string[] }>("/api/optimization/external-thesis").then((r) => r.data);
+
+export const saveExternalThesis = (tickers: string[]) =>
+  apiClient.put<{ tickers: string[] }>("/api/optimization/external-thesis", { tickers }).then((r) => r.data);
+
 export const fetchWatchlist = () =>
   apiClient.get("/api/watchlist").then((r) => r.data);
 

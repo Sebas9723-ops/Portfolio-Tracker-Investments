@@ -210,6 +210,7 @@ export interface RebalancingRow {
   trade_value: number;
   trade_direction: string;
   estimated_tc: number;
+  is_external_thesis: boolean;
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────

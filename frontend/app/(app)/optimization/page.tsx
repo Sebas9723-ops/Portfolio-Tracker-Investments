@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchFrontier, fetchBlackLitterman } from "@/lib/api/analytics";
 import { fetchProfileOptimal } from "@/lib/api/profile";
-import { fetchSettings, saveTickerWeightRules, saveCombinationRanges, updateSettings } from "@/lib/api/settings";
+import { fetchSettings, saveTickerWeightRules, saveCombinationRanges, updateSettings, fetchExternalThesis, saveExternalThesis } from "@/lib/api/settings";
 import { usePortfolio } from "@/lib/hooks/usePortfolio";
 import { useProfileStore } from "@/lib/store/profileStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
@@ -129,6 +129,11 @@ export default function OptimizationPage() {
   const [m2Saved, setM2Saved] = useState(false);
   const [m2Error, setM2Error] = useState<string | null>(null);
 
+  // ── External Thesis state ─────────────────────────────────────────────────
+  const [etTickers, setEtTickers] = useState<Set<string>>(new Set());
+  const [etSaved, setEtSaved] = useState(false);
+  const [etError, setEtError] = useState<string | null>(null);
+
   // Load saved settings to pre-populate Motor 1 & 2
   const { data: savedSettings } = useQuery({
     queryKey: ["settings"],
@@ -163,6 +168,22 @@ export default function OptimizationPage() {
     queryKey: ["profile-optimal"],
     queryFn: () => fetchProfileOptimal(period),
     staleTime: 5 * 60 * 1000,
+  });
+
+  // Load external thesis tickers from backend
+  const { data: etData } = useQuery({
+    queryKey: ["external-thesis"],
+    queryFn: fetchExternalThesis,
+    staleTime: 60 * 1000,
+  });
+  useEffect(() => {
+    if (etData?.tickers) setEtTickers(new Set(etData.tickers));
+  }, [etData]);
+
+  const { mutate: saveET, isPending: savingET } = useMutation({
+    mutationFn: () => saveExternalThesis(Array.from(etTickers)),
+    onSuccess: () => { setEtSaved(true); setEtError(null); qc.invalidateQueries({ queryKey: ["frontier"] }); setTimeout(() => setEtSaved(false), 3000); },
+    onError: (e: Error) => setEtError(e.message),
   });
 
   // Black-Litterman state — pre-populated from localStorage if available
@@ -437,6 +458,66 @@ export default function OptimizationPage() {
           </button>
           {m1Saved && <span className="text-green-600 text-[10px]">✓ Saved</span>}
           {m1Error && <span className="text-red-400 text-[10px]">✗ {m1Error}</span>}
+        </div>
+      </div>
+
+      {/* ── External Thesis ───────────────────────────────────────────────── */}
+      <div className="bbg-card">
+        <p className="bbg-header" style={{ color: "#a78bfa" }}>External Thesis</p>
+        <p className="text-bloomberg-muted text-[10px] mb-3">
+          Tickers marked here are held for external reasons and are excluded from optimization
+          and rebalancing targets. They will appear in the rebalancing table as{" "}
+          <span className="text-purple-400 font-mono">EXTERNAL THESIS</span> with no trade
+          suggestion.
+        </p>
+
+        {allTickers.length === 0 ? (
+          <p className="text-bloomberg-muted text-[10px]">No positions loaded.</p>
+        ) : (
+          <div className="flex flex-wrap gap-2 mb-4">
+            {allTickers.map((ticker) => {
+              const active = etTickers.has(ticker);
+              return (
+                <button
+                  key={ticker}
+                  onClick={() => {
+                    setEtTickers((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(ticker)) next.delete(ticker); else next.add(ticker);
+                      return next;
+                    });
+                    setEtSaved(false);
+                  }}
+                  className={`px-3 py-1 text-[11px] font-mono border transition-colors ${
+                    active
+                      ? "bg-purple-900/50 border-purple-500 text-purple-300"
+                      : "bg-bloomberg-bg border-bloomberg-border text-bloomberg-muted hover:border-purple-500/50"
+                  }`}
+                >
+                  {ticker}{active ? " ★" : ""}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {etTickers.size > 0 && (
+          <p className="text-[10px] text-purple-400 mb-3">
+            Excluded from optimization: {Array.from(etTickers).sort().join(", ")}
+          </p>
+        )}
+
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => saveET()}
+            disabled={savingET || allTickers.length === 0}
+            className="flex items-center gap-1 bg-purple-700 text-white text-xs font-bold px-5 py-1.5 hover:opacity-90 disabled:opacity-50"
+          >
+            <Save size={11} />
+            {savingET ? "SAVING…" : "SAVE EXTERNAL THESIS"}
+          </button>
+          {etSaved && <span className="text-green-400 text-[10px]">✓ Saved — frontier will refresh</span>}
+          {etError && <span className="text-red-400 text-[10px]">✗ {etError}</span>}
         </div>
       </div>
 

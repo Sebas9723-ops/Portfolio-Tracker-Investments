@@ -246,16 +246,29 @@ export default function RebalancingPage() {
                 </thead>
                 <tbody>
                   {(data ?? []).map((r) => (
-                    <tr key={r.ticker}>
-                      <td className="text-bloomberg-gold font-medium">{r.ticker}</td>
+                    <tr key={r.ticker} className={r.is_external_thesis ? "opacity-50" : ""}>
+                      <td className="text-bloomberg-gold font-medium">
+                        {r.ticker}
+                        {r.is_external_thesis && (
+                          <span className="ml-1 text-[8px] text-purple-400 font-normal">★</span>
+                        )}
+                      </td>
                       <td className="text-bloomberg-muted">{r.name}</td>
                       <td className="text-right">{fmtPct(r.current_weight)}</td>
-                      <td className="text-right">{fmtPct(r.target_weight)}</td>
-                      <td className={`text-right font-medium ${r.drift > 0 ? "text-red-400" : r.drift < 0 ? "text-green-400" : "text-bloomberg-muted"}`}>
-                        {r.drift > 0 ? "+" : ""}{fmtPct(r.drift)}
+                      <td className="text-right">
+                        {r.is_external_thesis ? <span className="text-purple-400 text-[9px]">held</span> : fmtPct(r.target_weight)}
+                      </td>
+                      <td className={`text-right font-medium ${r.is_external_thesis ? "text-bloomberg-muted" : r.drift > 0 ? "text-red-400" : r.drift < 0 ? "text-green-400" : "text-bloomberg-muted"}`}>
+                        {r.is_external_thesis ? "—" : `${r.drift > 0 ? "+" : ""}${fmtPct(r.drift)}`}
                       </td>
                       <td>
-                        <DriftBadge drift={r.drift} threshold={threshold} />
+                        {r.is_external_thesis ? (
+                          <span className="px-1.5 py-0.5 text-[9px] font-bold bg-purple-900/40 text-purple-400 border border-purple-800">
+                            EXT THESIS
+                          </span>
+                        ) : (
+                          <DriftBadge drift={r.drift} threshold={threshold} />
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -1165,7 +1178,7 @@ export default function RebalancingPage() {
                 </tr>
               </thead>
               <tbody>
-                {(data ?? []).filter((r) => r.trade_direction !== "HOLD").map((r) => (
+                {(data ?? []).filter((r) => r.trade_direction !== "HOLD" && r.trade_direction !== "EXTERNAL_THESIS").map((r) => (
                   <tr key={r.ticker}>
                     <td className="text-bloomberg-gold font-medium">{r.ticker}</td>
                     <td className="text-bloomberg-muted">{r.name}</td>
@@ -1180,6 +1193,13 @@ export default function RebalancingPage() {
                   <tr>
                     <td colSpan={5} className="text-bloomberg-muted text-[10px] pt-2">
                       {data!.filter((r) => r.trade_direction === "HOLD").map((r) => r.ticker).join(", ")} — HOLD (within threshold)
+                    </td>
+                  </tr>
+                )}
+                {(data ?? []).filter((r) => r.is_external_thesis).length > 0 && (
+                  <tr>
+                    <td colSpan={5} className="text-purple-400/60 text-[9px] pt-2">
+                      ★ External thesis (not rebalanced): {data!.filter((r) => r.is_external_thesis).map((r) => r.ticker).join(", ")}
                     </td>
                   </tr>
                 )}

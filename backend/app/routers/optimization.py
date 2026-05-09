@@ -41,6 +41,19 @@ class OptimizationRequest(BaseModel):
         return v
 
 
+def _load_external_thesis_tickers(user_id: str, db) -> set[str]:
+    """Return tickers the user has marked as external thesis (excluded from optimization)."""
+    res = (
+        db.table("user_settings")
+        .select("external_thesis_tickers")
+        .eq("user_id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    raw = (res.data or {}).get("external_thesis_tickers") or []
+    return set(raw) if isinstance(raw, list) else set()
+
+
 def _load_profile_constraints(
     user_id: str, db, profile: str
 ) -> tuple[dict[str, tuple[float, float]], list[dict]]:
@@ -93,8 +106,9 @@ def frontier(body: OptimizationRequest, user_id: str = Depends(get_user_id)):
     db = get_admin_client()
     pos_res = db.table("positions").select("ticker,shares").eq("user_id", user_id).execute()
     positions = pos_res.data or []
-    tickers = [p["ticker"] for p in positions]
-    shares = {p["ticker"]: float(p["shares"]) for p in positions}
+    et_tickers = _load_external_thesis_tickers(user_id, db)
+    tickers = [p["ticker"] for p in positions if p["ticker"] not in et_tickers]
+    shares = {p["ticker"]: float(p["shares"]) for p in positions if p["ticker"] not in et_tickers}
     total = sum(shares.values())
     current_weights = {t: shares[t] / total for t in tickers} if total > 0 else {}
 
@@ -126,7 +140,8 @@ class BLRequest(BaseModel):
 def bl_optimization(body: BLRequest, user_id: str = Depends(get_user_id)):
     db = get_admin_client()
     pos_res = db.table("positions").select("ticker,shares").eq("user_id", user_id).execute()
-    tickers = [p["ticker"] for p in (pos_res.data or [])]
+    et_tickers = _load_external_thesis_tickers(user_id, db)
+    tickers = [p["ticker"] for p in (pos_res.data or []) if p["ticker"] not in et_tickers]
 
     hist = get_historical_multi(tickers, period=body.period)
     closes: dict[str, pd.Series] = {}
@@ -152,7 +167,8 @@ def bl_optimization(body: BLRequest, user_id: str = Depends(get_user_id)):
 def max_sharpe(body: OptimizationRequest, user_id: str = Depends(get_user_id)):
     db = get_admin_client()
     pos_res = db.table("positions").select("ticker,shares").eq("user_id", user_id).execute()
-    tickers = [p["ticker"] for p in (pos_res.data or [])]
+    et_tickers = _load_external_thesis_tickers(user_id, db)
+    tickers = [p["ticker"] for p in (pos_res.data or []) if p["ticker"] not in et_tickers]
 
     returns_df = _build_returns_df(tickers, body.period)
     rfr = _load_user_rfr(user_id, db)
@@ -165,13 +181,44 @@ def max_sharpe(body: OptimizationRequest, user_id: str = Depends(get_user_id)):
 def max_return_endpoint(body: OptimizationRequest, user_id: str = Depends(get_user_id)):
     db = get_admin_client()
     pos_res = db.table("positions").select("ticker,shares").eq("user_id", user_id).execute()
-    tickers = [p["ticker"] for p in (pos_res.data or [])]
+    et_tickers = _load_external_thesis_tickers(user_id, db)
+    tickers = [p["ticker"] for p in (pos_res.data or []) if p["ticker"] not in et_tickers]
 
     returns_df = _build_returns_df(tickers, body.period)
     rfr = _load_user_rfr(user_id, db)
     per_ticker_bounds, combination_constraints = _load_profile_constraints(user_id, db, body.profile)
     weights = optimize_max_return(returns_df, rfr, body.max_single_asset, per_ticker_bounds or None, combination_constraints or None)
     return {"weights": weights}
+
+
+# ── External Thesis endpoints ─────────────────────────────────────────────────
+
+class ExternalThesisUpdate(BaseModel):
+    tickers: list[str]
+
+
+@router.get("/external-thesis")
+def get_external_thesis(user_id: str = Depends(get_user_id)):
+    """Return the list of tickers marked as external thesis."""
+    db = get_admin_client()
+    tickers = sorted(_load_external_thesis_tickers(user_id, db))
+    return {"tickers": tickers}
+
+
+@router.put("/external-thesis")
+def save_external_thesis(body: ExternalThesisUpdate, user_id: str = Depends(get_user_id)):
+    """Persist the full list of external thesis tickers."""
+    from fastapi import HTTPException
+    try:
+        db = get_admin_client()
+        clean = sorted({t.strip().upper() for t in body.tickers if t.strip()})
+        db.table("user_settings").upsert(
+            {"user_id": user_id, "external_thesis_tickers": clean},
+            on_conflict="user_id",
+        ).execute()
+        return {"tickers": clean}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"External thesis save failed: {e}")
 
 
 # ── Dedicated endpoints to save Motor 1 & Motor 2 constraints ────────────────

@@ -2,12 +2,14 @@ from fastapi import APIRouter, Depends, Query
 import numpy as np
 import pandas as pd
 from app.auth.dependencies import get_user_id
+from app.db.supabase_client import get_admin_client
 from app.services.market_data import get_risk_free_rate, get_historical_multi
 from app.compute.rebalancing import build_rebalancing_table, compute_target_weights_from_drift
 from app.compute.profile import compute_profile_weights, compute_profile_metrics, _CVAR_LIMIT_DEFAULT
 from app.models.analytics import RebalancingRow
 from app.services.portfolio_service import load_portfolio_data
 from app.db.quant_results import load_latest_quant_result, load_user_bl_views
+from app.routers.optimization import _load_external_thesis_tickers
 
 router = APIRouter(prefix="/api/rebalancing", tags=["rebalancing"])
 
@@ -82,9 +84,15 @@ def suggestions(
     tc_model: str = Query(default="broker"),
     user_id: str = Depends(get_user_id),
 ):
+    db = get_admin_client()
+    et_tickers = _load_external_thesis_tickers(user_id, db)
+
     summary, tickers, settings = load_portfolio_data(user_id)
     if not tickers:
         return []
+
+    # Exclude external thesis tickers from optimization, but keep them in the portfolio rows
+    opt_tickers = [t for t in tickers if t not in et_tickers]
 
     threshold = float(settings.get("rebalancing_threshold", 0.05))
     investor_profile = settings.get("investor_profile", "balanced")
@@ -128,7 +136,7 @@ def suggestions(
             # Priority 1: use cached optimal weights if they cover the portfolio
             raw_w = cached_qr.get("optimal_weights") or {}
             if isinstance(raw_w, dict):
-                filtered = {t: float(w) for t, w in raw_w.items() if t in tickers}
+                filtered = {t: float(w) for t, w in raw_w.items() if t in opt_tickers}
                 wsum = sum(filtered.values())
                 if wsum > 0.5:
                     target_weights = {t: w / wsum for t, w in filtered.items()}
@@ -152,7 +160,7 @@ def suggestions(
     # ── Priority 2: profile-driven weights with BL + CVaR ────────────────────
     if target_weights is None and profile_key:
         try:
-            hist = get_historical_multi(tickers, period="2y")
+            hist = get_historical_multi(opt_tickers, period="2y")
             closes: dict[str, pd.Series] = {}
             for t, df in hist.items():
                 if not df.empty:
@@ -186,7 +194,8 @@ def suggestions(
 
     # ── Priority 3: drift-based equal-weight fallback ─────────────────────────
     if target_weights is None:
-        target_weights = compute_target_weights_from_drift(rows_dicts, threshold)
+        opt_rows = [r for r in rows_dicts if r["ticker"] not in et_tickers]
+        target_weights = compute_target_weights_from_drift(opt_rows, threshold)
 
     return build_rebalancing_table(
         portfolio_rows=rows_dicts,
@@ -195,6 +204,7 @@ def suggestions(
         contribution=contribution,
         tc_model=tc_model,
         threshold=threshold,
+        external_thesis_tickers=et_tickers,
     )
 
 
@@ -208,11 +218,15 @@ def required_for_max_sharpe(
     Computes the minimum cash contribution needed to reach Max Sharpe weights
     without selling any existing positions.
     """
+    db = get_admin_client()
+    et_tickers = _load_external_thesis_tickers(user_id, db)
+
     summary, tickers, settings = load_portfolio_data(user_id)
     if not tickers:
         return {"required_contribution": 0, "max_sharpe_weights": {}, "buy_plan": {}}
 
-    hist = get_historical_multi(tickers, period=period)
+    opt_tickers_ms = [t for t in tickers if t not in et_tickers]
+    hist = get_historical_multi(opt_tickers_ms, period=period)
     closes: dict[str, pd.Series] = {}
     for t, df in hist.items():
         if not df.empty:
@@ -221,6 +235,10 @@ def required_for_max_sharpe(
 
     returns_df = pd.DataFrame(closes).dropna(how="all").ffill().pct_change().dropna()
     rfr = get_risk_free_rate()
+
+    # Keep non-ET current values for buy plan calculation
+    current_values = {r.ticker: r.value_base for r in summary.rows if r.ticker not in et_tickers}
+    total_value_opt = sum(current_values.values())
 
     investor_profile = settings.get("investor_profile", "base")
     profile_key = investor_profile if investor_profile in ("conservative", "base", "aggressive") else "base"
@@ -264,18 +282,15 @@ def required_for_max_sharpe(
     if not ms_weights:
         return {"required_contribution": 0, "max_sharpe_weights": {}, "buy_plan": {}}
 
-    current_values = {r.ticker: r.value_base for r in summary.rows}
-    total_value = summary.total_value_base
-
     required = 0.0
     for ticker, w in ms_weights.items():
         if w > 0:
             v = current_values.get(ticker, 0.0)
             implied_total = v / w
-            required = max(required, implied_total - total_value)
+            required = max(required, implied_total - total_value_opt)
 
     required = max(0.0, round(required, 2))
-    total_new = total_value + required
+    total_new = total_value_opt + required
 
     buy_plan = {}
     for ticker, w in ms_weights.items():
@@ -286,7 +301,7 @@ def required_for_max_sharpe(
             "buy_value": round(buy_value, 2),
             "buy_pct": round(buy_value / required * 100, 2) if required > 0 else 0.0,
             "target_weight": round(w * 100, 2),
-            "current_weight": round(current_v / total_value * 100, 2) if total_value > 0 else 0.0,
+            "current_weight": round(current_v / total_value_opt * 100, 2) if total_value_opt > 0 else 0.0,
         }
 
     profile_metrics = compute_profile_metrics(returns_df, ms_weights, rfr)
@@ -295,10 +310,11 @@ def required_for_max_sharpe(
         "required_contribution": required,
         "max_sharpe_weights": {t: round(w * 100, 2) for t, w in ms_weights.items()},
         "buy_plan": buy_plan,
-        "total_value": total_value,
+        "total_value": total_value_opt,
         "total_after": round(total_new, 2),
         "profile": profile_key,
         "profile_metrics": profile_metrics,
+        "external_thesis_tickers": sorted(et_tickers),
     }
 
 
