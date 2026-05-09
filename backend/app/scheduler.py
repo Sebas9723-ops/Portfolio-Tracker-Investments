@@ -713,17 +713,27 @@ def _run_weekly_agents() -> None:
                 except Exception as ai_exc:
                     log.warning("  Weekly AI analysis failed: %s", ai_exc)
 
-                ok = send_weekly_report(
-                    summary=summary,
-                    metrics=ratios,
-                    base_currency=base_currency,
-                    benchmark_ticker=bm_ticker,
-                    benchmark_cum=bm_cum,
-                    momentum=momentum,
-                    fear_greed=fear_greed,
-                    week_change_pct=week_change_pct,
-                    ai_analysis=weekly_ai,
-                )
+                # Send PDF to Telegram
+                try:
+                    from app.services.pdf_report import generate_portfolio_pdf
+                    from app.services.telegram_service import send_document
+                    from datetime import datetime as _dt
+                    pdf_bytes = generate_portfolio_pdf(
+                        summary=summary, metrics=ratios, base_currency=base_currency,
+                        benchmark_ticker=bm_ticker, benchmark_cum=bm_cum,
+                        momentum=momentum, fear_greed=fear_greed,
+                        week_change_pct=week_change_pct, ai_analysis=weekly_ai,
+                    )
+                    filename = f"portfolio_report_{_dt.now().strftime('%Y%m%d')}.pdf"
+                    ok = send_document(pdf_bytes, filename=filename, caption=f"Weekly Portfolio Report — {_dt.now().strftime('%Y-%m-%d')}")
+                except Exception as pdf_exc:
+                    log.warning("  PDF generation failed, falling back to text: %s", pdf_exc)
+                    ok = send_weekly_report(
+                        summary=summary, metrics=ratios, base_currency=base_currency,
+                        benchmark_ticker=bm_ticker, benchmark_cum=bm_cum,
+                        momentum=momentum, fear_greed=fear_greed,
+                        week_change_pct=week_change_pct, ai_analysis=weekly_ai,
+                    )
                 log.info("  %s %s… — weekly Telegram report sent", "✓" if ok else "✗", user_id[:8])
 
                 # ── Weekly email report ────────────────────────────────────────
