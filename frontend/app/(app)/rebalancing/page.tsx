@@ -213,8 +213,8 @@ export default function RebalancingPage() {
                     {motor2Ranges.map((r) => (
                       <tr key={r.id}>
                         <td className="text-bloomberg-gold font-medium">{r.tickers.join(" + ")}</td>
-                        <td className="text-right text-bloomberg-muted">{r.min != null ? fmtPct(r.min) : "—"}</td>
-                        <td className="text-right text-bloomberg-muted">{r.max != null ? fmtPct(r.max) : "—"}</td>
+                        <td className="text-right text-bloomberg-muted">{r.min != null ? fmtPct(r.min * 100) : "—"}</td>
+                        <td className="text-right text-bloomberg-muted">{r.max != null ? fmtPct(r.max * 100) : "—"}</td>
                       </tr>
                     ))}
                   </tbody>
