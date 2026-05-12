@@ -11,9 +11,10 @@ from typing import Optional
 log = logging.getLogger(__name__)
 
 # Default thresholds
-DAILY_DROP_THRESHOLD = -0.03      # -3% in a single day
-DRAWDOWN_THRESHOLD = -0.10        # -10% max drawdown
-POSITION_LOSS_THRESHOLD = -0.10   # -10% unrealized loss on a single position
+# max_drawdown from compute_extended_ratios is already in % form (e.g. -21.19 = -21.19%)
+DAILY_DROP_THRESHOLD = -0.03      # -3% in a single day (still decimal — comes from raw return)
+DRAWDOWN_THRESHOLD = -10.0        # -10% max drawdown (% form, matches metrics dict)
+POSITION_LOSS_THRESHOLD = -0.10   # -10% unrealized loss on a single position (decimal, raw pnl_pct)
 WEIGHT_DRIFT_THRESHOLD = 0.08     # 8% drift from target weight
 
 
@@ -47,7 +48,7 @@ def check_alerts(summary, metrics: dict, snapshots: list[dict]) -> list[dict]:
         alerts.append({
             "type": "drawdown",
             "severity": "critical" if max_dd < DRAWDOWN_THRESHOLD * 1.5 else "warning",
-            "message": f"Max drawdown en {max_dd:.2%} — por debajo del umbral de {DRAWDOWN_THRESHOLD:.0%}.",
+            "message": f"Max drawdown en {max_dd:.2f}% — por debajo del umbral de {DRAWDOWN_THRESHOLD:.0f}%.",
         })
 
     # 3. Individual position losses

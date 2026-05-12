@@ -134,12 +134,14 @@ def build_snapshot_messages(
 
     sharpe = metrics.get("sharpe") or 0.0
     sortino = metrics.get("sortino") or 0.0
-    ann_vol = (metrics.get("annualized_vol") or 0.0) * 100
-    max_dd = (metrics.get("max_drawdown") or 0.0) * 100
-    alpha = (metrics.get("alpha") or 0.0) * 100
+    # annualized_vol, max_drawdown, alpha, annualized_return already come in % form
+    # (e.g. 27.73 means 27.73%) — do NOT multiply by 100 again
+    ann_vol = metrics.get("annualized_vol") or 0.0
+    max_dd = metrics.get("max_drawdown") or 0.0
+    alpha = metrics.get("alpha") or 0.0
     beta = metrics.get("beta") or 0.0
     info_ratio = metrics.get("information_ratio") or 0.0
-    ann_return = (metrics.get("annualized_return") or 0.0) * 100
+    ann_return = metrics.get("annualized_return") or 0.0
     twr = metrics.get("twr") or 0.0
 
     summary_lines = [
@@ -254,12 +256,13 @@ def build_weekly_report_messages(
 
     sharpe = metrics.get("sharpe") or 0.0
     sortino = metrics.get("sortino") or 0.0
-    ann_vol = (metrics.get("annualized_vol") or 0.0) * 100
-    max_dd = (metrics.get("max_drawdown") or 0.0) * 100
-    alpha = (metrics.get("alpha") or 0.0) * 100
+    # already in % form — do NOT multiply by 100 again
+    ann_vol = metrics.get("annualized_vol") or 0.0
+    max_dd = metrics.get("max_drawdown") or 0.0
+    alpha = metrics.get("alpha") or 0.0
     beta = metrics.get("beta") or 0.0
     twr = metrics.get("twr") or 0.0
-    ann_return = (metrics.get("annualized_return") or 0.0) * 100
+    ann_return = metrics.get("annualized_return") or 0.0
 
     week_line = ""
     if week_change_pct is not None:

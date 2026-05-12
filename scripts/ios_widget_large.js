@@ -260,7 +260,7 @@ async function buildWidget() {
   valTxt.textColor = TEXT;
   valTxt.minimumScaleFactor = 0.55;
 
-  w.addSpacer(6);
+  w.addSpacer(4);
 
   // ── Summary stats ──
   const summaryRow = w.addStack();
@@ -277,19 +277,19 @@ async function buildWidget() {
     fmtDelta(pnl), fmtPct(pnlPct),
     (pnl ?? 0) >= 0, pnl != null);
 
-  w.addSpacer(10);
+  w.addSpacer(7);
   addDivider(w);
-  w.addSpacer(8);
+  w.addSpacer(6);
 
   // ── Positions header ──
   addPosHeaders(w);
-  w.addSpacer(5);
+  w.addSpacer(4);
 
   // ── Position rows ──
   const rows = (data.rows || [])
     .filter(r => r.value_base > 0)
     .sort((a, b) => b.value_base - a.value_base)
-    .slice(0, 7);
+    .slice(0, 11);
 
   for (const pos of rows) {
     addPositionRow(
@@ -301,7 +301,7 @@ async function buildWidget() {
       (pos.change_pct_1d ?? 0) >= 0,
       pos.change_pct_1d != null
     );
-    w.addSpacer(5);
+    w.addSpacer(3);
   }
 
   w.addSpacer();

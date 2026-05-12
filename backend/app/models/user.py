@@ -12,7 +12,7 @@ class UserSettings(BaseModel):
     risk_free_rate: float = 0.045
     rolling_window: int = 63
     tc_model: str = "broker"
-    investor_profile: str = "balanced"
+    investor_profile: str = "base"
     target_return: float = 0.08
     ticker_weight_rules: dict = {}  # {profile: {ticker: {"floor": float, "cap": float}}}
     combination_ranges: dict = {}   # {profile: [{"id": str, "tickers": [str], "min": float, "max": float}]}

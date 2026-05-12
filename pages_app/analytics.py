@@ -9,6 +9,7 @@ import streamlit as st
 from utils_aggrid import show_aggrid
 
 from app_core import (
+    DEFAULT_RISK_FREE_RATE,
     build_blended_benchmark_returns,
     build_multi_benchmark_comparison,
     compute_brinson_attribution,
@@ -82,11 +83,14 @@ def _compute_relative_metrics(ctx):
     if bench_var > 0:
         beta = float(aligned.cov().loc["Portfolio", "VOO"] / bench_var)
 
-    p_mean = float(aligned["Portfolio"].mean() * 252)
-    b_mean = float(aligned["VOO"].mean() * 252)
+    n = len(aligned)
+    p_mean = float((1 + aligned["Portfolio"]).prod() ** (252 / n) - 1) if n > 0 else 0.0
+    b_mean = float((1 + aligned["VOO"]).prod() ** (252 / n) - 1) if n > 0 else 0.0
 
+    rfr = DEFAULT_RISK_FREE_RATE
     if beta is not None:
-        alpha = float(p_mean - beta * b_mean)
+        # Jensen's alpha: Rp - [Rf + beta*(Rb - Rf)]
+        alpha = float(p_mean - (rfr + beta * (b_mean - rfr)))
 
     excess = aligned["Portfolio"] - aligned["VOO"]
     tracking_error = float(excess.std() * 252**0.5) if not excess.empty else None

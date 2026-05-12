@@ -3958,12 +3958,13 @@ def compute_extended_ratios(
 
     ann_return = float((1 + r).prod() ** (252 / len(r)) - 1)
 
-    # Sortino
-    downside = r[r < 0]
-    if not downside.empty:
-        ds_std = float(downside.std() * np.sqrt(252))
-        if ds_std > 0:
-            result["sortino"] = (ann_return - risk_free_rate) / ds_std
+    # Sortino — downside semi-deviation (Sortino & Price 1994)
+    # target = daily risk-free rate; penalises only returns below it
+    rfr_daily = risk_free_rate / 252
+    min_excess = np.minimum(r.values - rfr_daily, 0.0)
+    ds_std = float(np.sqrt((min_excess ** 2).mean()) * np.sqrt(252))
+    if ds_std > 0:
+        result["sortino"] = (ann_return - risk_free_rate) / ds_std
 
     # Calmar
     if max_drawdown < 0:
@@ -4497,11 +4498,17 @@ def compute_black_litterman(
             omega_diag[i] = float((1 - conf) / conf * (p_row @ (tau * sigma) @ p_row.T)[0, 0])
 
         omega = np.diag(omega_diag)
-        tau_sigma_inv = np.linalg.pinv(tau * sigma)
-        P_T_omega_inv = P.T @ np.linalg.pinv(omega)
-        M_inv = tau_sigma_inv + P_T_omega_inv @ P
-        M = np.linalg.pinv(M_inv)
-        mu_bl = M @ (tau_sigma_inv @ pi + P_T_omega_inv @ Q)
+        # Use linalg.solve (numerically stable) with pinv fallback on singular matrices
+        try:
+            tau_sigma_inv = np.linalg.inv(tau * sigma)
+            P_T_omega_inv = P.T @ np.linalg.inv(omega)
+            M = tau_sigma_inv + P_T_omega_inv @ P
+            mu_bl = np.linalg.solve(M, tau_sigma_inv @ pi + P_T_omega_inv @ Q)
+        except np.linalg.LinAlgError:
+            tau_sigma_inv = np.linalg.pinv(tau * sigma)
+            P_T_omega_inv = P.T @ np.linalg.pinv(omega)
+            M_inv = tau_sigma_inv + P_T_omega_inv @ P
+            mu_bl = np.linalg.pinv(M_inv) @ (tau_sigma_inv @ pi + P_T_omega_inv @ Q)
         posterior = mu_bl + risk_free_rate
 
         return {

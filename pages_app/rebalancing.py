@@ -15,9 +15,16 @@ def _annualized_voo_return(ctx):
     return None
 
 
+def _get_excluded_tickers():
+    """Tickers marked as 'excluded (tesis externa)' in the optimization page."""
+    rules = st.session_state.get("ticker_weight_rules", {})
+    return {t for t, r in rules.items() if r.get("mode") == "excluded"}
+
+
 def _get_max_sharpe_target_map(ctx, df):
     tickers = df["Ticker"].tolist()
     policy_map = ctx.get("policy_target_map", {})
+    excluded = _get_excluded_tickers()
 
     if ctx.get("max_sharpe_row") is None or not ctx.get("usable"):
         return dict(policy_map), "Policy Target"
@@ -25,22 +32,44 @@ def _get_max_sharpe_target_map(ctx, df):
     usable = list(ctx["usable"])
     arr = np.array(ctx["max_sharpe_row"]["Weights"], dtype=float)
 
-    raw = {ticker: 0.0 for ticker in tickers}
+    # Extract ONLY core (non-excluded) weights from the optimizer output.
+    # Excluded tickers may appear in the optimizer's output (with any weight) but
+    # we must not let them participate in the core normalisation.
+    raw = {}
     if len(arr) == len(usable):
         for ticker, weight in zip(usable, arr):
-            raw[ticker] = float(weight)
+            if ticker not in excluded:
+                raw[ticker] = float(weight)
 
-    total = sum(raw.values())
-    if total > 0:
-        raw = {k: v / total for k, v in raw.items()}
-        return raw, "Max Sharpe Frontier"
+    # Normalize only core weights so they sum to 1.0 among themselves
+    core_total = sum(raw.values())
+    if core_total <= 0:
+        return dict(policy_map), "Policy Target"
+    raw = {k: v / core_total for k, v in raw.items()}
 
-    return dict(policy_map), "Policy Target"
+    # Initialise every ticker to 0 so the map is always complete
+    for ticker in tickers:
+        if ticker not in raw:
+            raw[ticker] = 0.0
+
+    # For excluded tickers set target = current weight (drift = 0, no signal).
+    # This is done AFTER core normalisation so excluded values never dilute core weights.
+    if excluded and not df.empty and "Ticker" in df.columns and "Weight %" in df.columns:
+        current_pct = df.set_index("Ticker")["Weight %"]
+        for t in excluded:
+            if t in current_pct.index:
+                raw[t] = float(current_pct[t]) / 100.0
+
+    label = "Max Sharpe Frontier"
+    if excluded:
+        label += f" (excl. {', '.join(sorted(excluded))})"
+    return raw, label
 
 
 def _build_compare_chart(df, policy_map, max_sharpe_map):
     """Horizontal divergence chart — right = underweight (buy, green), left = overweight (amber)."""
     tickers, drifts, colors, tooltips = [], [], [], []
+    excluded = _get_excluded_tickers()
 
     for _, row in df.iterrows():
         t = str(row["Ticker"])
@@ -50,15 +79,26 @@ def _build_compare_chart(df, policy_map, max_sharpe_map):
 
         tickers.append(t)
         drifts.append(drift)
-        colors.append("#00ff88" if drift > 0 else "#f5a623")
 
-        tooltips.append(
-            f"<b>{t}</b><br>"
-            f"Current weight: {current:.2f}%<br>"
-            f"Target weight: {target:.2f}%<br>"
-            f"Drift: {drift:+.2f}%<br>"
-            f"Action: {'Buy ↑' if drift > 0 else 'Reduce ↓'}"
-        )
+        if t in excluded:
+            colors.append("#666666")  # grey — external thesis, not touched
+        else:
+            colors.append("#00ff88" if drift > 0 else "#f5a623")
+
+        if t in excluded:
+            tooltips.append(
+                f"<b>{t}</b> ★ Tesis externa<br>"
+                f"Current weight: {current:.2f}%<br>"
+                f"Excluded from rebalancing"
+            )
+        else:
+            tooltips.append(
+                f"<b>{t}</b><br>"
+                f"Current weight: {current:.2f}%<br>"
+                f"Target weight: {target:.2f}%<br>"
+                f"Drift: {drift:+.2f}%<br>"
+                f"Action: {'Buy ↑' if drift > 0 else 'Reduce ↓'}"
+            )
 
     fig = go.Figure(go.Bar(
         x=drifts,
@@ -95,9 +135,13 @@ def _build_compare_chart(df, policy_map, max_sharpe_map):
     return fig
 
 
-def _build_monitor_table(df, policy_map, max_sharpe_map, base_currency):
+def _build_monitor_table(df, policy_map, max_sharpe_map, base_currency, holdings_total_override=None):
     work = df.copy()
-    holdings_total = float(work["Value"].sum()) if not work.empty else 0.0
+    holdings_total = (
+        holdings_total_override
+        if holdings_total_override is not None
+        else (float(work["Value"].sum()) if not work.empty else 0.0)
+    )
 
     work["Policy Target %"] = work["Ticker"].map(lambda t: float(policy_map.get(t, 0.0)) * 100.0)
     work["Max Sharpe Weight %"] = work["Ticker"].map(lambda t: float(max_sharpe_map.get(t, 0.0)) * 100.0)
@@ -110,10 +154,15 @@ def _build_monitor_table(df, policy_map, max_sharpe_map, base_currency):
     else:
         work[f"Trade To Max Sharpe ({base_currency})"] = 0.0
 
+    excluded = _get_excluded_tickers()
     work["Action"] = np.where(
-        work["Gap vs Max Sharpe %"] > 0,
-        "Reduce",
-        np.where(work["Gap vs Max Sharpe %"] < 0, "Add", "Hold"),
+        work["Ticker"].isin(excluded),
+        "★ Tesis externa",
+        np.where(
+            work["Gap vs Max Sharpe %"] > 0,
+            "Reduce",
+            np.where(work["Gap vs Max Sharpe %"] < 0, "Add", "Hold"),
+        ),
     )
 
     out = work[
@@ -344,7 +393,22 @@ def render_rebalancing_page(ctx):
         return
 
     policy_map = ctx.get("policy_target_map", {})
-    max_sharpe_map, source_label = _get_max_sharpe_target_map(ctx, ctx["df"])
+    excluded = _get_excluded_tickers()
+
+    # Recompute Weight % for core positions using core-only total as denominator.
+    # External-tesis positions are excluded from the optimisation engine so they
+    # must not dilute the weights seen by Engine 1, Engine 2, and Black-Litterman.
+    rebal_df = ctx["df"].copy()
+    core_mask = ~rebal_df["Ticker"].isin(excluded)
+    core_total = float(rebal_df.loc[core_mask, "Value"].sum())
+    if core_total > 0:
+        rebal_df.loc[core_mask, "Weight %"] = (
+            rebal_df.loc[core_mask, "Value"] / core_total * 100
+        ).round(2)
+    # core_df: only core positions, core-normalised weights — used by contribution engine
+    core_df = rebal_df[core_mask].copy()
+
+    max_sharpe_map, source_label = _get_max_sharpe_target_map(ctx, rebal_df)
     voo_return = _annualized_voo_return(ctx)
 
     # Compute portfolio stats from returns (not from ctx keys removed during refactor)
@@ -369,18 +433,20 @@ def render_rebalancing_page(ctx):
         "Current vs Max Sharpe",
         f"Current allocation compared against recommendation source: {source_label}.",
     )
-    _rebal_df = ctx["df"].copy()
     _tickers = []
     _divergences = []
     _colors = []
-    for _, _row in _rebal_df.iterrows():
+    for _, _row in rebal_df.iterrows():
         _t = str(_row["Ticker"])
         _current = float(_row["Weight %"])
         _target = float(max_sharpe_map.get(_t, 0.0)) * 100.0
         _drift = _target - _current
         _tickers.append(_t)
         _divergences.append(round(_drift, 4))
-        _colors.append("#00ff88" if _drift > 0 else "#f5a623")
+        if _t in excluded:
+            _colors.append("#666666")  # grey — external tesis, excluded from rebalancing
+        else:
+            _colors.append("#00ff88" if _drift > 0 else "#f5a623")
 
     rebal_option = {
         "backgroundColor": "#0a0a0a",
@@ -430,7 +496,10 @@ def render_rebalancing_page(ctx):
         "Current weight, policy target, max Sharpe target, and estimated value required to move each position toward max Sharpe.",
     )
     show_aggrid(
-        _build_monitor_table(ctx["df"], policy_map, max_sharpe_map, ctx["base_currency"]),
+        _build_monitor_table(
+            rebal_df, policy_map, max_sharpe_map, ctx["base_currency"],
+            holdings_total_override=core_total if core_total > 0 else None,
+        ),
         height=340,
         key="aggrid_rebalancing_monitor",
     )
@@ -482,7 +551,7 @@ def render_rebalancing_page(ctx):
 
         if contribution_base > 0:
             plan_df = _build_contribution_plan(
-                ctx["df"], max_sharpe_map, contribution_base, base_currency
+                core_df, max_sharpe_map, contribution_base, base_currency
             )
 
             if not plan_df.empty:
@@ -541,7 +610,7 @@ def render_rebalancing_page(ctx):
                 st.plotly_chart(fig_contrib, use_container_width=True, key="contribution_chart")
 
     required_contribution, required_df, msg = _estimate_required_contribution_without_selling(
-        ctx["df"],
+        core_df,
         max_sharpe_map,
         ctx["base_currency"],
     )

@@ -67,11 +67,12 @@ def build_analysis_prompt(summary, metrics: dict, base_currency: str = "USD") ->
     day_pct = (day_change / (total - day_change) * 100) if (total - day_change) > 0 else 0.0
 
     sharpe = metrics.get("sharpe") or 0.0
-    ann_vol = (metrics.get("annualized_vol") or 0.0) * 100
-    max_dd = (metrics.get("max_drawdown") or 0.0) * 100
-    alpha = (metrics.get("alpha") or 0.0) * 100
+    # already in % form — do NOT multiply by 100 again
+    ann_vol = metrics.get("annualized_vol") or 0.0
+    max_dd = metrics.get("max_drawdown") or 0.0
+    alpha = metrics.get("alpha") or 0.0
     beta = metrics.get("beta") or 0.0
-    ann_return = (metrics.get("annualized_return") or 0.0) * 100
+    ann_return = metrics.get("annualized_return") or 0.0
     twr = metrics.get("twr") or 0.0
 
     # Positions block
@@ -204,12 +205,13 @@ def build_weekly_analysis_prompt(
 
     sharpe = metrics.get("sharpe") or 0.0
     sortino = metrics.get("sortino") or 0.0
-    ann_vol = (metrics.get("annualized_vol") or 0.0) * 100
-    max_dd = (metrics.get("max_drawdown") or 0.0) * 100
-    alpha = (metrics.get("alpha") or 0.0) * 100
+    # already in % form — do NOT multiply by 100 again
+    ann_vol = metrics.get("annualized_vol") or 0.0
+    max_dd = metrics.get("max_drawdown") or 0.0
+    alpha = metrics.get("alpha") or 0.0
     beta = metrics.get("beta") or 0.0
     twr = metrics.get("twr") or 0.0
-    ann_return = (metrics.get("annualized_return") or 0.0) * 100
+    ann_return = metrics.get("annualized_return") or 0.0
 
     # Positions block
     pos_lines = []

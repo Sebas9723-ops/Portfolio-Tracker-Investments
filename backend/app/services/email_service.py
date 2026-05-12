@@ -153,12 +153,13 @@ def send_weekly_report_email(
 
     sharpe     = metrics.get("sharpe") or 0.0
     sortino    = metrics.get("sortino") or 0.0
-    ann_vol    = (metrics.get("annualized_vol") or 0.0) * 100
-    max_dd     = (metrics.get("max_drawdown") or 0.0) * 100
-    alpha      = (metrics.get("alpha") or 0.0) * 100
+    # already in % form — do NOT multiply by 100 again
+    ann_vol    = metrics.get("annualized_vol") or 0.0
+    max_dd     = metrics.get("max_drawdown") or 0.0
+    alpha      = metrics.get("alpha") or 0.0
     beta       = metrics.get("beta") or 0.0
     twr        = metrics.get("twr") or 0.0
-    ann_return = (metrics.get("annualized_return") or 0.0) * 100
+    ann_return = metrics.get("annualized_return") or 0.0
 
     # --- Benchmark row ---
     bm_html = ""

@@ -251,15 +251,29 @@ def render_optimization_page(ctx):
     tickers_in_portfolio = asset_returns.columns.tolist()
     ticker_rules = st.session_state.get("ticker_weight_rules", {})
 
+    # Precompute current normalized weights for "excluded" mode
+    _df_indexed = df.set_index("Ticker")
+    _weight_sum = max(_df_indexed.loc[tickers_in_portfolio, "Weight"].sum(), 1e-12)
+    _current_norm_weights = {
+        t: float(_df_indexed.loc[t, "Weight"]) / _weight_sum
+        for t in tickers_in_portfolio
+        if t in _df_indexed.index
+    }
+
     with st.sidebar.expander("Weight Rules per Ticker", expanded=bool(ticker_rules)):
-        st.caption("Fix a ticker's weight. The rest optimise freely by Max Sharpe.")
+        st.caption(
+            "Fix a ticker's weight or mark it as **Excluded (tesis externa)** "
+            "to keep it at its current allocation and skip it in rebalancing."
+        )
         new_rules = {}
         for ticker in tickers_in_portfolio:
             existing = ticker_rules.get(ticker, {})
+            existing_mode = existing.get("mode", "free")
+            mode_index = {"free": 0, "fixed": 1, "excluded": 2}.get(existing_mode, 0)
             mode = st.selectbox(
                 ticker,
-                ["Free (Max Sharpe)", "Fixed weight"],
-                index=1 if existing.get("mode") == "fixed" else 0,
+                ["Free (Max Sharpe)", "Fixed weight", "Excluded (tesis externa)"],
+                index=mode_index,
                 key=f"rule_mode_{ticker}",
             )
             if mode == "Fixed weight":
@@ -271,15 +285,28 @@ def render_optimization_page(ctx):
                     key=f"rule_w_{ticker}",
                 )
                 new_rules[ticker] = {"mode": "fixed", "weight": w}
+            elif mode == "Excluded (tesis externa)":
+                new_rules[ticker] = {"mode": "excluded"}
             else:
                 new_rules[ticker] = {"mode": "free"}
 
         fixed_rules = {t: r for t, r in new_rules.items() if r["mode"] == "fixed"}
+        excluded_rules = [t for t, r in new_rules.items() if r["mode"] == "excluded"]
         fixed_sum = sum(r["weight"] for r in fixed_rules.values())
-        if fixed_sum > 1.0:
-            st.error(f"Fixed weights sum to {fixed_sum:.0%} — must be ≤ 100%.")
-        elif fixed_rules:
-            st.info(f"Fixed: {fixed_sum:.0%} · Free to optimise: {1 - fixed_sum:.0%}")
+        excluded_sum = sum(_current_norm_weights.get(t, 0.0) for t in excluded_rules)
+        total_locked = fixed_sum + excluded_sum
+
+        if total_locked > 1.0:
+            st.error(f"Fixed + Excluded weights sum to {total_locked:.0%} — must be ≤ 100%.")
+        else:
+            parts = []
+            if fixed_rules:
+                parts.append(f"Fixed: {fixed_sum:.0%}")
+            if excluded_rules:
+                parts.append(f"Excluded: {excluded_sum:.0%} ({', '.join(excluded_rules)})")
+            if parts:
+                parts.append(f"Free to optimise: {1 - total_locked:.0%}")
+                st.info(" · ".join(parts))
 
         if st.button("Apply Rules", key="apply_ticker_rules"):
             st.session_state["ticker_weight_rules"] = new_rules
@@ -310,6 +337,10 @@ def render_optimization_page(ctx):
         rule = ticker_rules.get(ticker, {})
         if rule.get("mode") == "fixed":
             w = float(rule.get("weight", 0.0))
+            per_ticker_bounds_dict[ticker] = (w, w)
+        elif rule.get("mode") == "excluded":
+            # Lock at current portfolio weight — optimizer will not move it
+            w = _current_norm_weights.get(ticker, 0.0)
             per_ticker_bounds_dict[ticker] = (w, w)
 
     # Convert to hashable tuple for caching

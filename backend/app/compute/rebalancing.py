@@ -54,7 +54,8 @@ def build_rebalancing_table(
             continue
 
         target_w = target_weights.get(ticker, current_w)
-        drift = current_w - target_w
+        # drift = target - current: positive → underweight (BUY), negative → overweight (SELL)
+        drift = target_w - current_w
 
         target_value = target_w * total_with_contrib
         trade_value = target_value - current_value
@@ -89,7 +90,7 @@ def build_rebalancing_table(
             name=ticker,
             current_weight=0.0,
             target_weight=round(target_w * 100, 2),
-            drift=round(-target_w * 100, 2),
+            drift=round(target_w * 100, 2),   # positive = underweight (BUY)
             value_base=0.0,
             trade_value=round(trade_value, 2),
             trade_direction="BUY",

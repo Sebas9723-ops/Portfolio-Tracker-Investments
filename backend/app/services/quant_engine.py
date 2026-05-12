@@ -620,8 +620,9 @@ class QuantEngine:
             # adds ~3-5% annual alpha. Applied after BL to avoid double-counting.
             if profile == "aggressive" and ml_regime in ("bull_strong", "bull_weak"):
                 try:
-                    mom_12 = returns.rolling(252).sum().iloc[-1]
-                    mom_1  = returns.rolling(21).sum().iloc[-1]
+                    # Compound momentum (Jegadeesh & Titman): (1+r1)*(1+r2)*...-1
+                    mom_12 = ((1 + returns).rolling(252).apply(np.prod, raw=True) - 1).iloc[-1]
+                    mom_1  = ((1 + returns).rolling(21).apply(np.prod, raw=True) - 1).iloc[-1]
                     mom_12_1 = (mom_12 - mom_1).reindex(tickers).fillna(0.0)
                     mom_std = float(mom_12_1.std())
                     if mom_std > 0:

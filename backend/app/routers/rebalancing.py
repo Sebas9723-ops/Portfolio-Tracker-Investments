@@ -95,7 +95,10 @@ def suggestions(
     opt_tickers = [t for t in tickers if t not in et_tickers]
 
     threshold = float(settings.get("rebalancing_threshold", 0.05))
-    investor_profile = settings.get("investor_profile", "balanced")
+    investor_profile = settings.get("investor_profile", "base")
+    # Normalize legacy "balanced" to "base"
+    if investor_profile == "balanced":
+        investor_profile = "base"
     target_return = float(settings.get("target_return", 0.08))
     rfr = float(settings.get("risk_free_rate", 0.045))
     max_single = float(settings.get("max_single_asset", 0.40))
@@ -107,7 +110,7 @@ def suggestions(
     # ── Motor 1 & 2 constraints ───────────────────────────────────────────────
     ticker_weight_rules = settings.get("ticker_weight_rules") or {}
     combination_ranges = settings.get("combination_ranges") or {}
-    profile_key = investor_profile if investor_profile in ("conservative", "base", "aggressive") else None
+    profile_key = investor_profile if investor_profile in ("conservative", "base", "aggressive") else "base"
 
     per_ticker_bounds = None
     combination_constraints = None

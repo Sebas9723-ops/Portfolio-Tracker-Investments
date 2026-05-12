@@ -7,6 +7,16 @@ import pandas as pd
 from scipy.optimize import minimize
 from typing import Optional
 
+try:
+    from sklearn.covariance import LedoitWolf as _LedoitWolf
+    def _shrunk_cov(returns_df: pd.DataFrame) -> np.ndarray:
+        """Ledoit-Wolf shrinkage estimator, annualised."""
+        r = returns_df.dropna()
+        return _LedoitWolf(assume_centered=False).fit(r.values).covariance_ * 252
+except ImportError:
+    def _shrunk_cov(returns_df: pd.DataFrame) -> np.ndarray:  # type: ignore[misc]
+        return returns_df.cov().values * 252
+
 from app.models.analytics import FrontierPoint, OptimizationResult
 
 
@@ -33,7 +43,7 @@ def simulate_efficient_frontier(
     tickers = list(returns_df.columns)
     n = len(tickers)
     mu = returns_df.mean() * 252
-    cov = returns_df.cov() * 252
+    cov = pd.DataFrame(_shrunk_cov(returns_df), index=returns_df.columns, columns=returns_df.columns)
 
     # Build per-ticker bounds for simulation
     lower_bounds = np.array([
@@ -199,7 +209,7 @@ def black_litterman(
 
     tickers = list(returns_df.columns)
     n = len(tickers)
-    cov = returns_df.cov().values * 252  # annualized covariance
+    cov = _shrunk_cov(returns_df)  # Ledoit-Wolf shrinkage, annualised
 
     # Prior: market equilibrium with equal weights
     w_eq = np.ones(n) / n
@@ -297,7 +307,7 @@ def optimize_max_sharpe(
     tickers = list(returns_df.columns)
     n = len(tickers)
     mu = returns_df.mean().values * 252
-    cov = returns_df.cov().values * 252
+    cov = _shrunk_cov(returns_df)
 
     def neg_sharpe(w):
         r = w @ mu

@@ -80,13 +80,12 @@ def compute_rolling_metrics(
     result = []
     for i in range(window, len(returns)):
         window_ret = returns.iloc[i - window:i]
-        mu = window_ret.mean()
         sigma = window_ret.std()
-        ann_ret = mu * 252
+        ann_ret = float((1 + window_ret).prod() ** (252 / len(window_ret)) - 1)
         ann_vol = sigma * np.sqrt(252)
         sharpe = (ann_ret - risk_free_rate) / ann_vol if ann_vol > 0 else 0
-        below = window_ret[window_ret < rfr_daily]
-        downside = float(below.std()) * np.sqrt(252) if len(below) > 1 else 0.0
+        min_exc = np.minimum(window_ret.values - rfr_daily, 0.0)
+        downside = float(np.sqrt((min_exc ** 2).mean()) * np.sqrt(252)) if len(window_ret) > 1 else 0.0
         sortino = (ann_ret - risk_free_rate) / downside if downside > 0 else 0
         cum = (1 + window_ret).cumprod()
         dd = float((cum / cum.cummax() - 1).min())
@@ -116,20 +115,24 @@ def compute_extended_ratios(
     if p.empty:
         return {}
 
-    mu_p = p.mean() * 252
-    mu_b = b.mean() * 252
+    # Geometric annualisation — more accurate than mean*252 for volatile series
+    mu_p = float((1 + p).prod() ** (252 / len(p)) - 1) if len(p) > 0 else 0.0
+    mu_b = float((1 + b).prod() ** (252 / len(b)) - 1) if len(b) > 0 else 0.0
     sigma_p = p.std() * np.sqrt(252)
     rfr_daily = risk_free_rate / 252
 
     # Beta, Alpha (CAPM)
+    # alpha = Rp - [Rf + beta*(Rb - Rf)]  (Jensen's alpha)
     cov = np.cov(p.values, b.values)
     beta = cov[0, 1] / cov[1, 1] if cov[1, 1] > 0 else 0
-    alpha = mu_p - beta * mu_b
+    alpha = mu_p - (risk_free_rate + beta * (mu_b - risk_free_rate))
 
     # Sharpe, Sortino
     sharpe = (mu_p - risk_free_rate) / sigma_p if sigma_p > 0 else 0
-    below_rfr = p[p < rfr_daily]
-    downside = float(below_rfr.std()) * np.sqrt(252) if len(below_rfr) > 1 else 0.0
+    # Sortino downside semi-deviation: sqrt(mean(min(r - target, 0)^2)) * sqrt(252)
+    # (Sortino & Price 1994) — only penalises returns that fall below the target
+    min_excess = np.minimum(p.values - rfr_daily, 0.0)
+    downside = float(np.sqrt((min_excess ** 2).mean()) * np.sqrt(252)) if len(p) > 1 else 0.0
     sortino = (mu_p - risk_free_rate) / downside if downside > 0 else 0
 
     # Max drawdown
