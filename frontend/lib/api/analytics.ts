@@ -80,7 +80,7 @@ export const fetchVolRegime = (period = "2y", window = 21) =>
     }>("/api/analytics/vol-regime", { params: { period, window } })
     .then((r) => r.data);
 
-export const fetchRequiredForMaxSharpe = (params?: { period?: string; max_single_asset?: number }) =>
+export const fetchRequiredForMaxSharpe = (params?: { period?: string; max_single_asset?: number; profile?: string }) =>
   apiClient
     .get<{
       required_contribution: number;
@@ -90,7 +90,7 @@ export const fetchRequiredForMaxSharpe = (params?: { period?: string; max_single
       total_after: number;
       profile: string;
       profile_metrics?: { ann_return: number; ann_vol: number; sharpe: number; max_drawdown: number };
-    }>("/api/rebalancing/required-for-max-sharpe", { params })
+    }>("/api/rebalancing/required-for-max-sharpe", { params, timeout: 90_000 })
     .then((r) => r.data);
 
 export const fetchPortfolioBreakdown = () =>

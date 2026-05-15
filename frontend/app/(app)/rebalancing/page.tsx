@@ -120,10 +120,11 @@ export default function RebalancingPage() {
   });
 
   const msMaxSingle = settings?.max_single_asset ?? 0.40;
-  const { data: msData, isLoading: msLoading, refetch: refetchMs } = useQuery({
-    queryKey: ["rebalancing-max-sharpe", msPeriod, msMaxSingle],
-    queryFn: () => fetchRequiredForMaxSharpe({ period: msPeriod, max_single_asset: msMaxSingle }),
+  const { data: msData, isLoading: msLoading, isError: msIsError, error: msError, refetch: refetchMs } = useQuery({
+    queryKey: ["rebalancing-max-sharpe", msPeriod, msMaxSingle, profile],
+    queryFn: () => fetchRequiredForMaxSharpe({ period: msPeriod, max_single_asset: msMaxSingle, profile }),
     enabled: false,
+    retry: 1,
   });
 
   const totalTC = data?.reduce((s, r) => s + r.estimated_tc, 0) ?? 0;
@@ -1239,6 +1240,20 @@ export default function RebalancingPage() {
             {msLoading ? "COMPUTING…" : "COMPUTE"}
           </button>
         </div>
+
+        {msLoading && (
+          <div className="text-bloomberg-muted text-xs py-3 animate-pulse">
+            Computing profile weights… this may take up to 60s
+          </div>
+        )}
+
+        {msIsError && (
+          <div className="text-red-400 text-xs py-2 border border-red-900/40 px-3">
+            {(msError as Error)?.message?.includes("timeout")
+              ? "Request timed out. Try a shorter history period (e.g. 1y or 2y)."
+              : `Error: ${(msError as Error)?.message ?? "Computation failed. Try again."}`}
+          </div>
+        )}
 
         {msData && (
           <>

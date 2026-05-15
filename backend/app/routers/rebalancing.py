@@ -215,6 +215,7 @@ def suggestions(
 def required_for_max_sharpe(
     period: str = Query(default="2y"),
     max_single_asset: float = Query(default=0.40),
+    profile: str = Query(default=""),
     user_id: str = Depends(get_user_id),
 ):
     """
@@ -243,7 +244,8 @@ def required_for_max_sharpe(
     current_values = {r.ticker: r.value_base for r in summary.rows if r.ticker not in et_tickers}
     total_value_opt = sum(current_values.values())
 
-    investor_profile = settings.get("investor_profile", "base")
+    # Profile from query param takes precedence (reflects UI selection, not just saved settings)
+    investor_profile = profile if profile in ("conservative", "base", "aggressive") else settings.get("investor_profile", "base")
     profile_key = investor_profile if investor_profile in ("conservative", "base", "aggressive") else "base"
     ticker_weight_rules = settings.get("ticker_weight_rules") or {}
     combination_ranges_data = settings.get("combination_ranges") or {}
@@ -276,11 +278,15 @@ def required_for_max_sharpe(
     except Exception:
         pass
 
-    ms_weights = compute_profile_weights(
-        returns_df, profile_key, rfr, target_return_val, max_single_asset,
-        per_ticker_bounds, combination_constraints,
-        mu_override=mu_bl, cvar_limit=cvar_limit,
-    )
+    try:
+        ms_weights = compute_profile_weights(
+            returns_df, profile_key, rfr, target_return_val, max_single_asset,
+            per_ticker_bounds, combination_constraints,
+            mu_override=mu_bl, cvar_limit=cvar_limit,
+        )
+    except Exception as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=f"Optimization failed: {e}")
 
     if not ms_weights:
         return {"required_contribution": 0, "max_sharpe_weights": {}, "buy_plan": {}}
